@@ -1,0 +1,33 @@
+[package]
+name = "kokoro-reader"
+version = "0.1.0"
+description = "A Tauri App"
+authors = ["you"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "kokoro_reader_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+# The Kokoro TTS model is not bundled: it is downloaded into the app data dir on
+# first run (see `download_model` in src/lib.rs) and served back to the webview
+# worker via the `kokoro://` URI scheme. reqwest streams the files; rustls avoids
+# a system OpenSSL dependency on the Linux/Windows release builds.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+futures-util = "0.3"
+# Manifest parsing (model-manifest.json) and per-file SHA-256 integrity checks.
+serde_json = "1"
+sha2 = "0.10"
+tauri-plugin-opener = "2.5.4"
+
