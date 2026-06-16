@@ -5,6 +5,8 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, Manager};
 
+pub mod onnx_patch;
+
 // ---------------------------------------------------------------------------
 // Kokoro TTS model: downloaded into the app data dir on first run, then served
 // to the webview worker through the `kokoro://` URI scheme (see `run`). The
@@ -163,16 +165,52 @@ async fn verify_model(app: AppHandle) -> Result<VerifyResult, String> {
     .map_err(|e| e.to_string())?
 }
 
+// Generate onnx/model_dml.onnx (DirectML-patched) from the downloaded fp32
+// onnx/model.onnx so kokoro_worker.exe's GPU path has its model. Idempotent:
+// returns 0 if the file already exists. The (large) ONNX is decoded/encoded, so
+// callers run this on a blocking thread.
+fn ensure_dml_model(dir: &Path, model_id: &str) -> Result<usize, String> {
+    let dst = model_file_path(dir, model_id, "onnx/model_dml.onnx");
+    if std::fs::metadata(&dst).map(|m| m.len() > 0).unwrap_or(false) {
+        return Ok(0);
+    }
+    let src = model_file_path(dir, model_id, "onnx/model.onnx");
+    let bytes = std::fs::read(&src).map_err(|e| format!("read {}: {e}", src.display()))?;
+    let (patched, n) = onnx_patch::patch_convtranspose_2d(&bytes)?;
+    // Atomic commit: write a temp sibling, then rename into place.
+    let part = dst.with_extension("part");
+    std::fs::write(&part, &patched).map_err(|e| e.to_string())?;
+    std::fs::rename(&part, &dst).map_err(|e| e.to_string())?;
+    Ok(n)
+}
+
+// Best-effort wrapper: prepare the DML model for the worker without failing the
+// download. The worker falls back to the CPU model (onnx/model_uint8.onnx) if
+// onnx/model_dml.onnx is missing, so a patch failure is logged, not fatal.
+async fn ensure_dml_and_log(dir: &Path, model_id: &str) {
+    let dir = dir.to_path_buf();
+    let model_id = model_id.to_string();
+    match tauri::async_runtime::spawn_blocking(move || ensure_dml_model(&dir, &model_id)).await {
+        Ok(Ok(n)) if n > 0 => eprintln!("[model] patched {n} ConvTranspose node(s) -> model_dml.onnx"),
+        Ok(Ok(_)) => {}
+        Ok(Err(e)) => eprintln!("[model] DML patch skipped: {e}"),
+        Err(e) => eprintln!("[model] DML patch task panicked: {e}"),
+    }
+}
+
 // Download the Kokoro model + curated voice packs into the app data dir,
 // emitting `model-download-progress` as bytes arrive. Each file is verified
 // against its manifest SHA-256 before being committed. Idempotent and
-// resumable: returns early if every file is already present, and on a re-run
-// skips files already on disk that verify, re-fetching only the rest.
+// resumable: skips the download if every file is already present, and on a
+// re-run skips files already on disk that verify, re-fetching only the rest.
+// After the manifest files are in place it derives onnx/model_dml.onnx for the
+// SAPI worker's GPU path.
 #[tauri::command]
 async fn download_model(app: AppHandle) -> Result<(), String> {
     let dir = model_dir(&app)?;
     let manifest = load_manifest()?;
     if model_is_complete(&dir, &manifest) {
+        ensure_dml_and_log(&dir, &manifest.model_id).await;
         return Ok(());
     }
 
@@ -245,6 +283,7 @@ async fn download_model(app: AppHandle) -> Result<(), String> {
         std::fs::rename(&part, &dest).map_err(|e| e.to_string())?;
     }
 
+    ensure_dml_and_log(&dir, &manifest.model_id).await;
     Ok(())
 }
 
