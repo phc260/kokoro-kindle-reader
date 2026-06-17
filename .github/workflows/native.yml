@@ -1,0 +1,30 @@
+name: native (kokoro-sapi)
+
+# Builds the Windows-only x86 SAPI engine (KokoroSapi.dll). It's a thin COM shim
+# + named-pipe client with no third-party dependencies — all synthesis happens in
+# the kokoro-reader app (WebGPU). There is no Linux/macOS counterpart (SAPI5 is
+# Windows-only), and nothing to fetch/build beyond the engine itself.
+
+on:
+  push:
+    paths: ['kokoro-sapi/**', '.github/workflows/native.yml']
+  pull_request:
+    paths: ['kokoro-sapi/**', '.github/workflows/native.yml']
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build engine (x86)
+        shell: pwsh
+        run: ./kokoro-sapi/build.ps1
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: KokoroSapi.dll
+          path: kokoro-sapi/build/KokoroSapi.dll
+          if-no-files-found: error
