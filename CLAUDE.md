@@ -36,9 +36,15 @@ bun run build              # tsc + vite build (frontend typecheck + bundle)
 # SAPI engine — x86 only, no deps (thin COM shim + pipe client). NMake via vcvarsall.
 kokoro-sapi\build.ps1
 
-# Register the voice (elevated; MUST be the 32-bit regsvr32). Same DLL path =
-# registration survives rebuilds; no re-register needed after a rebuild.
+# Register the voice — DEV path (elevated; MUST be the 32-bit regsvr32). Same DLL
+# path = registration survives rebuilds; no re-register needed after a rebuild.
+# The packaged installer does this automatically (see "Packaging / installer").
 C:\Windows\SysWOW64\regsvr32.exe "kokoro-sapi\build\KokoroSapi.dll"
+
+# Packaged installer — runs build.ps1 (so the DLL exists) then `tauri build`,
+# which bundles the DLL + registers the voice via installer-hooks.nsh on install.
+# CI does this on a v* tag (.github/workflows/installer.yml); locally:
+kokoro-sapi\build.ps1; bun run tauri build
 
 # SAPI smoke test — run under 32-BIT PowerShell, with the app running, to drive
 # the engine -> pipe -> WebGPU path without Kindle.
@@ -73,7 +79,10 @@ in Kindle (or `test-speak.ps1`).
 
 ### SAPI engine (`kokoro-sapi/src/`) — connect-only, ~900 lines, no deps
 - `Dll.cpp` — COM class factory + `DllRegisterServer`/`Unregister` (writes the
-  CLSID `InprocServer32` and the `KokoroTTS` voice token).
+  CLSID `InprocServer32` and the `KokoroTTS` voice token). Runs two ways: manual
+  `regsvr32` (dev) and the NSIS POSTINSTALL hook (installed app). `DllRegisterServer`
+  derives `AssetDir = <dll dir>\..\models`, i.e. `kokoro-sapi\models` in dev,
+  `$INSTDIR\models` when bundled (the DLL ships under `$INSTDIR\resources\`).
 - `KokoroTTSEngine.cpp` — `ISpTTSEngine`. `Speak` gathers the host's text, runs
   `SplitText` (1-sentence first chunk for fast start, then **4 sentences**/chunk),
   and runs a **depth-1 prefetch pipeline**: chunk N+1 synthesizes on a worker
@@ -85,6 +94,18 @@ in Kindle (or `test-speak.ps1`).
 - `WorkerProtocol.h` — the wire format, shared in spirit with `pipe_server.rs`.
   **Change it in both places.**
 
+### Packaging / installer
+- `tauri.conf.json` `bundle.resources` is a **map**: it pulls the x86 DLL straight
+  from `../kokoro-sapi/build/KokoroSapi.dll` into the bundle's `resources/`, so
+  `kokoro-sapi\build.ps1` **must run before `tauri build`** or bundling fails.
+- `.github/workflows/installer.yml` — one `windows-latest` job that enforces that
+  ordering (build DLL → `bun install` → `tauri build`) and uploads the NSIS/MSI on
+  a `v*` tag. (`native.yml` still builds + uploads just the DLL for `kokoro-sapi/**`.)
+- `src-tauri/installer-hooks.nsh` (wired via `bundle.windows.nsis.installerHooks`) —
+  POSTINSTALL registers the DLL (`$WINDIR\SysWOW64\regsvr32.exe /s`, the 32-bit one),
+  creates `$INSTDIR\models`, grants Users modify on it, and seeds `controls.ini`;
+  PREUNINSTALL runs `regsvr32 /u`; POSTUNINSTALL removes the `models` dir.
+
 ## Gotchas / invariants (do not rediscover these)
 
 - **The app must be running** or Kindle gets no audio (the engine's `Speak`
@@ -92,14 +113,24 @@ in Kindle (or `test-speak.ps1`).
   auto-start mode is the planned fix.
 - **The engine must stay x86** — Kindle is a 32-bit process and loads the COM DLL
   *in-process by registry path*. It therefore **cannot** be merged into the x64
-  app; it's a separate file, bundled + registered. (Rewriting it in Rust is
-  possible via `windows-rs` COM, but it'd still be a separate x86 cdylib.)
+  app; it's a separate file, bundled + registered (via `installer-hooks.nsh` in the
+  packaged app). (Rewriting it in Rust is possible via `windows-rs` COM, but it'd
+  still be a separate x86 cdylib.)
 - **Tauri v2 needs a capability for `listen`.** `src-tauri/capabilities/default.json`
   grants `core:default` (+ `opener:default`). Without it the frontend `listen`
   silently throws "event.listen not allowed" and the bridge never receives
   requests. (Custom `invoke` commands work without a capability; core ones don't.)
 - **Registration → `WOW6432Node`.** The 32-bit `regsvr32` writes
   `HKLM\SOFTWARE\Classes\…` into the WOW64 view — exactly what 32-bit Kindle reads.
+- **Installer must be `perMachine` (elevated).** `DllRegisterServer` writes HKLM,
+  so the NSIS hook can only register when elevated — `installMode: perMachine` in
+  `tauri.conf.json` forces that. Switch it to `currentUser` and registration
+  silently fails (no admin, no HKLM write).
+- **Bundled AssetDir is read-only without the icacls grant.** When installed,
+  AssetDir = `$INSTDIR\models` under `Program Files`; the POSTINSTALL hook grants
+  the Users group modify (well-known SID `S-1-5-32-545`) so the non-elevated app
+  can keep writing `controls.ini`. Drop the grant and the narrator/speed/gain
+  sliders stop reaching Kindle (the app can't write the file).
 - **Kindle (MSIX) shadows HKCU.** Its SAPI default voice (`DefaultTokenId`) comes
   from the package hive
   (`…\Packages\AMZNKindle…\SystemAppData\Helium\User.dat`), not real HKCU. Patch
