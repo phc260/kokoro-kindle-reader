@@ -28,6 +28,9 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          lfs: true # src-tauri/icons/* are in Git LFS; tauri-winres feeds icon.ico
+                    # to rc.exe at build time — without this it gets a text pointer
 
       # Must run before the bundler — produces kokoro-sapi/build/KokoroSapi.dll,
       # which tauri.conf.json's `bundle.resources` copies into the installer's
