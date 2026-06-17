@@ -1,21 +1,27 @@
 import { useEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import {
   Box,
   Button,
   CircularProgress,
+  FormControl,
+  ListSubheader,
   MenuItem,
+  Select,
   Slider,
-  TextField,
+  ToggleButton,
+  ToggleButtonGroup,
+  Tooltip,
   Typography,
 } from "@mui/material";
+import GraphicEqIcon from "@mui/icons-material/GraphicEq";
+import PlayArrowIcon from "@mui/icons-material/PlayArrow";
+import RecordVoiceOverIcon from "@mui/icons-material/RecordVoiceOver";
+import StopIcon from "@mui/icons-material/Stop";
 import { invoke } from "@tauri-apps/api/core";
 import { initTTS, stopTTS, synthesize } from "./tts";
-import { VOICES, loadVoice } from "./voices";
+import { VOICES, loadVoice, voiceIntro } from "./voices";
 import "./App.css";
-
-const SAMPLE_TEXT =
-  "Kokoro reader is alive! This text is synthesized locally in the browser by " +
-  "the Kokoro model running through kokoro.js. Pick a voice, then press play.";
 
 type Backend = "webgpu" | "wasm";
 
@@ -24,14 +30,54 @@ function loadNum(key: string, def: number): number {
   return Number.isFinite(v) ? v : def;
 }
 
+// Icon-only transport button: an outlined Button wrapped in a Tooltip, with the
+// icon as children. The span keeps the Tooltip working while the button is
+// disabled (MUI can't attach a listener to a disabled control directly).
+function ControlButton({
+  label,
+  onClick,
+  disabled,
+  color = "primary",
+  children,
+}: {
+  label: string;
+  onClick?: () => void;
+  disabled?: boolean;
+  color?: "primary" | "warning" | "error";
+  children: ReactNode;
+}) {
+  return (
+    <Tooltip title={label}>
+      <span>
+        <Button
+          variant="outlined"
+          color={color}
+          aria-label={label}
+          onClick={onClick}
+          disabled={disabled}
+          sx={{ minWidth: 0, p: 1, borderRadius: 1 }}
+        >
+          {children}
+        </Button>
+      </span>
+    </Tooltip>
+  );
+}
+
 function App() {
-  const [text, setText] = useState(SAMPLE_TEXT);
   const [voice, setVoice] = useState(loadVoice());
   const [speed, setSpeed] = useState(() => loadNum("tts-speed", 1));
   const [gain, setGain] = useState(() => loadNum("tts-gain", 1));
   const [ready, setReady] = useState(false);
   const [backend, setBackend] = useState<Backend | "">("");
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState(false); // synthesizing
+  const [playing, setPlaying] = useState(false); // audio is sounding
+  // Which voice agency Kindle is set to: "none" (unset — neither segment shown),
+  // "microsoft", or "kokoro". Drives the toggle and gates the Kokoro controls.
+  const [agency, setAgency] = useState(
+    () => localStorage.getItem("kindle-agency") ?? "none",
+  );
+  const kokoro = agency === "kokoro";
   const [error, setError] = useState("");
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -42,6 +88,14 @@ function App() {
       setReady(true);
       setBackend(b);
     });
+    // Reflect Kindle's recorded voice agency in the toggle ("none" | "microsoft"
+    // | "kokoro", from controls.ini). Defaults to "none" if it can't be read.
+    invoke<string>("kindle_voice")
+      .then((v) => {
+        setAgency(v);
+        localStorage.setItem("kindle-agency", v);
+      })
+      .catch((e) => console.debug("[kindle voice] detect skipped:", e));
     return () => {
       if (urlRef.current) URL.revokeObjectURL(urlRef.current);
     };
@@ -62,7 +116,7 @@ function App() {
     setError("");
     setBusy(true);
     try {
-      const url = await synthesize(text, voice, speed);
+      const url = await synthesize(voiceIntro(voice), voice, speed);
       if (!url) return; // superseded or stopped
       if (urlRef.current) URL.revokeObjectURL(urlRef.current);
       urlRef.current = url;
@@ -70,7 +124,9 @@ function App() {
       audioRef.current = audio;
       audio.src = url;
       audio.volume = Math.min(gain, 1); // preview gain (media volume can't boost > 1)
+      audio.onended = () => setPlaying(false);
       await audio.play();
+      setPlaying(true);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -82,55 +138,104 @@ function App() {
     stopTTS();
     audioRef.current?.pause();
     setBusy(false);
+    setPlaying(false);
+  }
+
+  // Switch Kindle's voice agency to "microsoft" or "kokoro". The backend runs the
+  // guard elevated (UAC) and resolves only once it succeeds, so we apply the
+  // selection optimistically but revert it if the switch is cancelled or fails.
+  // Kindle must be reopened to actually apply the change.
+  function selectAgency(next: "microsoft" | "kokoro") {
+    const prev = agency;
+    if (next !== "kokoro") stop(); // Kokoro controls go inactive; halt any preview
+    setAgency(next);
+    invoke("set_kindle_voice", { kokoro: next === "kokoro" })
+      .then(() => localStorage.setItem("kindle-agency", next))
+      .catch((e) => {
+        setAgency(prev); // UAC cancelled / guard failed
+        setError(String(e));
+      });
   }
 
   return (
     <Box sx={{ display: "flex", flexDirection: "column", gap: 2, p: 3 }}>
-      <Typography variant="h5">kokoro-reader</Typography>
-
-      <TextField
-        multiline
-        minRows={6}
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        placeholder="Paste text to read aloud…"
-        fullWidth
-      />
+      <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+        <Tooltip title="Voice">
+          <GraphicEqIcon fontSize="small" color="action" />
+        </Tooltip>
+        <ToggleButtonGroup
+          exclusive
+          size="small"
+          color="primary"
+          value={agency}
+          onChange={(_, val) => {
+            if (val !== null) selectAgency(val);
+          }}
+          sx={{
+            "& .MuiToggleButton-root.Mui-selected": {
+              bgcolor: "primary.main",
+              color: "primary.contrastText",
+              "&:hover": { bgcolor: "primary.dark" },
+            },
+          }}
+        >
+          <ToggleButton value="microsoft">Microsoft</ToggleButton>
+          <ToggleButton value="kokoro">Kokoro</ToggleButton>
+        </ToggleButtonGroup>
+      </Box>
 
       <Box sx={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 2 }}>
-        <TextField
-          select
-          label="Narrator"
-          size="small"
-          value={voice}
-          onChange={(e) => setVoice(e.target.value)}
-          sx={{ minWidth: 220 }}
-          disabled={!ready}
-        >
-          {VOICES.map((v) => (
-            <MenuItem key={v.id} value={v.id}>
-              {v.name} — {v.group}
-            </MenuItem>
-          ))}
-        </TextField>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1, width: 220 }}>
+          <RecordVoiceOverIcon fontSize="small" color="action" />
+          <FormControl size="small" fullWidth>
+            <Select
+              aria-label="Narrator"
+              value={voice}
+              onChange={(e) => setVoice(e.target.value)}
+              disabled={!ready || !kokoro}
+              MenuProps={{ slotProps: { paper: { sx: { maxHeight: 360 } } } }}
+            >
+              {VOICES.flatMap((v, i) => {
+                const items = [];
+                if (i === 0 || v.group !== VOICES[i - 1].group) {
+                  items.push(
+                    <ListSubheader key={v.group}>{v.group}</ListSubheader>,
+                  );
+                }
+                items.push(
+                  <MenuItem key={v.id} value={v.id}>
+                    {v.name}
+                  </MenuItem>,
+                );
+                return items;
+              })}
+            </Select>
+          </FormControl>
+        </Box>
 
-        <Button
-          variant="contained"
-          onClick={play}
-          disabled={!ready || busy}
-          startIcon={busy ? <CircularProgress size={18} color="inherit" /> : undefined}
-        >
-          {busy ? "Synthesizing…" : "▶ Play"}
-        </Button>
-        <Button variant="outlined" onClick={stop} disabled={!ready}>
-          ■ Stop
-        </Button>
+        {busy || playing ? (
+          <ControlButton
+            label={busy ? "Synthesizing…" : "Stop"}
+            onClick={stop}
+            color={busy ? "primary" : "error"}
+          >
+            {busy ? <CircularProgress size={24} color="inherit" /> : <StopIcon />}
+          </ControlButton>
+        ) : (
+          <ControlButton
+            label="Play"
+            onClick={play}
+            disabled={!ready || !kokoro}
+          >
+            <PlayArrowIcon />
+          </ControlButton>
+        )}
       </Box>
 
       <Box sx={{ display: "flex", flexWrap: "wrap", gap: 3 }}>
         <Box sx={{ width: 220 }}>
           <Typography variant="caption" color="text.secondary">
-            Speed — {speed.toFixed(2)}×
+            Speed — {Math.round(speed * 100)}%
           </Typography>
           <Slider
             size="small"
@@ -138,12 +243,13 @@ function App() {
             min={0.5}
             max={2}
             step={0.05}
+            disabled={!kokoro}
             onChange={(_, v) => setSpeed(v as number)}
           />
         </Box>
         <Box sx={{ width: 220 }}>
           <Typography variant="caption" color="text.secondary">
-            Volume — {gain.toFixed(2)}×
+            Volume — {Math.round(gain * 100)}%
           </Typography>
           <Slider
             size="small"
@@ -151,6 +257,7 @@ function App() {
             min={0}
             max={2}
             step={0.05}
+            disabled={!kokoro}
             onChange={(_, v) => setGain(v as number)}
           />
         </Box>

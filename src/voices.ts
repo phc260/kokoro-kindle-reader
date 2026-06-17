@@ -64,7 +64,7 @@ export function loadVoice(): string {
  * one sentence so it synthesizes quickly even on the WASM fallback. */
 export function voiceIntro(id: string): string {
   const v = BY_ID.get(id);
-  if (!v) return "Hi, I'd be glad to read the Scriptures to you.";
+  if (!v) return "Hi, I'd be glad to read your text aloud.";
   const accent = v.group.startsWith("American") ? "American" : "British";
-  return `Hi, I'm ${v.name}, your ${accent} reader. I'd be glad to read the Scriptures to you.`;
+  return `Hi, I'm ${v.name}, your ${accent} narrator. I'd be glad to read your text aloud.`;
 }
