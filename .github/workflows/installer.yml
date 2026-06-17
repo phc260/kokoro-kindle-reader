@@ -34,6 +34,15 @@ jobs:
         with:
           workspaces: src-tauri
 
+      # Puts the latest Windows SDK rc.exe on PATH for the x64 app build. Without
+      # it tauri-winres picks up a stale RC.EXE that can't compile our PNG-encoded
+      # icon.ico (RC2175 "not in 3.00 format"). build.ps1 above sets its own x86
+      # env in a cmd subshell, so this amd64 env doesn't disturb the DLL build.
+      - name: Set up MSVC dev environment (modern rc.exe)
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: amd64
+
       # Runs beforeBuildCommand (bun run build -> tsc + vite) then bundles the
       # NSIS/MSI installers, embedding controls.ini + KokoroSapi.dll.
       - name: Build installer
