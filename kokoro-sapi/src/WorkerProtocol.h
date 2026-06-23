@@ -9,10 +9,27 @@
 //     <- [u32 nSamples][float samples...]      (24 kHz mono, [-1, 1])
 //        nSamples == kSynthError signals a synthesis failure.
 //     `rate` is the host's rate-derived speed multiplier (1 = the host's normal
-//     rate). The synthesis host (the kokoro-reader app) owns the narrator voice,
-//     the user's speed multiplier and gain — it reads those from its own settings
+//     rate). The synthesis host (the kokoro-reader app) owns the narrator voice
+//     and the user's speed multiplier — it reads those from its own settings
 //     (webview localStorage) and folds `rate` into the final synthesis speed — so
-//     they're no longer carried on the wire.
+//     they're no longer carried on the wire. Gain is NOT applied here; the engine
+//     queries it at playback (kCmdGain) and scales the samples then.
+//
+//   kCmdGain ('G'):
+//     -> (nothing)
+//     <- [float gain]                          (1 = unity; the user's volume)
+//     The engine asks for the current gain when each chunk *starts playing*, so a
+//     volume change lands within the playing chunk instead of being frozen into
+//     already-synthesized/prefetched samples. The host reads "tts-gain" from its
+//     webview localStorage. Unity (1.0) is the safe fallback if it can't answer.
+//
+//   kCmdChunk ('C'):
+//     -> (nothing)
+//     <- [u32 sentences]                       (sentences per steady-state chunk)
+//     The engine asks once per Speak how many sentences to coalesce per chunk
+//     (after the always-1-sentence first chunk, which stays fixed for fast start).
+//     The host reads "tts-chunk" from its webview localStorage; the engine clamps
+//     it and keeps its built-in default if the query fails.
 //
 //   kCmdInfo ('I'):
 //     -> (nothing)
@@ -28,6 +45,8 @@ namespace kokoro_ipc {
 
 constexpr wchar_t kPipeName[]     = L"\\\\.\\pipe\\KokoroSapiSynth";
 constexpr uint8_t kCmdSynth       = 'S';
+constexpr uint8_t kCmdGain        = 'G';
+constexpr uint8_t kCmdChunk       = 'C';
 constexpr uint8_t kCmdInfo        = 'I';
 constexpr uint32_t kSynthError    = 0xFFFFFFFFu;
 constexpr uint32_t kMaxTextBytes  = 1u << 20;   // sanity cap (1 MB)

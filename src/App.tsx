@@ -16,6 +16,7 @@ import {
 } from "@mui/material";
 import GraphicEqIcon from "@mui/icons-material/GraphicEq";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
+import NotesIcon from "@mui/icons-material/Notes";
 import RecordVoiceOverIcon from "@mui/icons-material/RecordVoiceOver";
 import SpeedIcon from "@mui/icons-material/Speed";
 import StopIcon from "@mui/icons-material/Stop";
@@ -77,6 +78,10 @@ function App() {
   const [voice, setVoice] = useState(loadVoice());
   const [speed, setSpeed] = useState(() => loadNum("tts-speed", 1));
   const [gain, setGain] = useState(() => loadNum("tts-gain", 1));
+  // Sentences coalesced per steady-state chunk in the SAPI engine (Kindle path).
+  // Bigger = fewer seams but slower per-chunk start / coarser stop granularity;
+  // the engine clamps to 2–8. Read back over the pipe via bridge.ts ("tts-chunk").
+  const [chunk, setChunk] = useState(() => loadNum("tts-chunk", 2));
   const [ready, setReady] = useState(false);
   const [backend, setBackend] = useState<Backend | "">("");
   const [busy, setBusy] = useState(false); // synthesizing
@@ -98,6 +103,11 @@ function App() {
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const urlRef = useRef<string>("");
+  // Web Audio graph for preview: <audio> → MediaElementSource → GainNode →
+  // destination. Unlike HTMLMediaElement.volume (clamped to [0,1]), GainNode.gain
+  // is unbounded, so the slider's 100–200% boost range works in preview too.
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const gainNodeRef = useRef<GainNode | null>(null);
 
   useEffect(() => {
     initTTS((b) => {
@@ -108,8 +118,15 @@ function App() {
     // set on a successful switch below) — see the `agency` state initializer.
     return () => {
       if (urlRef.current) URL.revokeObjectURL(urlRef.current);
+      void audioCtxRef.current?.close();
     };
   }, []);
+
+  // Live-update the preview gain so moving the Volume slider during playback
+  // takes effect immediately (the node persists across previews).
+  useEffect(() => {
+    if (gainNodeRef.current) gainNodeRef.current.gain.value = gain;
+  }, [gain]);
 
   // Persist narrator/speed/gain to localStorage. The SAPI bridge (bridge.ts)
   // reads these same keys when synthesizing for Kindle, so they drive Kindle too
@@ -118,7 +135,8 @@ function App() {
     localStorage.setItem("tts-voice", voice);
     localStorage.setItem("tts-speed", String(speed));
     localStorage.setItem("tts-gain", String(gain));
-  }, [voice, speed, gain]);
+    localStorage.setItem("tts-chunk", String(chunk));
+  }, [voice, speed, gain, chunk]);
 
   async function play() {
     setError("");
@@ -131,7 +149,17 @@ function App() {
       const audio = audioRef.current ?? new Audio();
       audioRef.current = audio;
       audio.src = url;
-      audio.volume = Math.min(gain, 1); // preview gain (media volume can't boost > 1)
+      // Build the gain graph once: createMediaElementSource is one-shot per
+      // element, so we reuse the same <audio> + AudioContext for every preview.
+      if (!audioCtxRef.current) {
+        const ctx = new AudioContext();
+        const gainNode = ctx.createGain();
+        ctx.createMediaElementSource(audio).connect(gainNode).connect(ctx.destination);
+        audioCtxRef.current = ctx;
+        gainNodeRef.current = gainNode;
+      }
+      gainNodeRef.current!.gain.value = gain; // full 0–200% range (no [0,1] clamp)
+      if (audioCtxRef.current.state === "suspended") await audioCtxRef.current.resume();
       audio.onended = () => setPlaying(false);
       await audio.play();
       setPlaying(true);
@@ -287,6 +315,26 @@ function App() {
               valueLabelDisplay="auto"
               valueLabelFormat={(v) => `${Math.round(v * 100)}%`}
               onChange={(_, v) => setGain(v as number)}
+            />
+          </Box>
+        </Box>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+          <Tooltip title="Sentences per chunk (Kindle streaming): higher is smoother but starts slower">
+            <NotesIcon fontSize="medium" color="action" />
+          </Tooltip>
+          <Box sx={{ width: 220 }}>
+            <Slider
+              size="small"
+              sx={SLIDER_SX}
+              value={chunk}
+              min={1}
+              max={6}
+              step={1}
+              marks
+              disabled={!kokoro}
+              valueLabelDisplay="auto"
+              valueLabelFormat={(v) => `${v}`}
+              onChange={(_, v) => setChunk(v as number)}
             />
           </Box>
         </Box>

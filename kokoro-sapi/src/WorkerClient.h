@@ -22,6 +22,18 @@ public:
     bool Synthesize(const std::string& utf8Text, float rate,
                     std::vector<float>& outSamples);
 
+    // Ask the app for the user's current gain (volume multiplier, 1 = unity).
+    // Cheap 'G' round-trip; the engine calls this at each chunk's playback start
+    // so a slider move isn't frozen into already-synthesized samples. Leaves
+    // outGain untouched on failure (caller keeps its last value).
+    bool QueryGain(float& outGain);
+
+    // Ask the app how many sentences to coalesce per steady-state chunk (the
+    // first chunk is always one sentence for a fast start). Cheap 'C' round-trip
+    // the engine issues once per Speak before splitting. Leaves outSentences
+    // untouched on failure (caller keeps its built-in default).
+    bool QueryChunkSentences(uint32_t& outSentences);
+
     void Close();
 
 private:

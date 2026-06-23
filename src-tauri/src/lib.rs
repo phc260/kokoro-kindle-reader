@@ -428,7 +428,9 @@ pub fn run() {
             download_model,
             verify_model,
             set_kindle_voice,
-            pipe_server::synth_result
+            pipe_server::synth_result,
+            pipe_server::gain_result,
+            pipe_server::chunk_result
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

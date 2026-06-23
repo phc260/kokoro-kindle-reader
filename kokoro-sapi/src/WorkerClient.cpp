@@ -54,6 +54,40 @@ bool WorkerClient::Synthesize(const std::string& utf8Text, float rate,
     return true;
 }
 
+bool WorkerClient::QueryGain(float& outGain) {
+    if (m_pipe == INVALID_HANDLE_VALUE) return false;
+
+    const uint8_t cmd = kCmdGain;
+    if (!WriteExact(m_pipe, &cmd, sizeof(cmd))) {
+        Close();
+        return false;
+    }
+    float g = 1.0f;
+    if (!ReadExact(m_pipe, &g, sizeof(g))) {
+        Close();
+        return false;
+    }
+    outGain = g;
+    return true;
+}
+
+bool WorkerClient::QueryChunkSentences(uint32_t& outSentences) {
+    if (m_pipe == INVALID_HANDLE_VALUE) return false;
+
+    const uint8_t cmd = kCmdChunk;
+    if (!WriteExact(m_pipe, &cmd, sizeof(cmd))) {
+        Close();
+        return false;
+    }
+    uint32_t s = 0;
+    if (!ReadExact(m_pipe, &s, sizeof(s))) {
+        Close();
+        return false;
+    }
+    outSentences = s;
+    return true;
+}
+
 void WorkerClient::Close() {
     // Atomic so it's safe to call from another thread to interrupt a blocked
     // Synthesize (cancel-by-close): only one caller gets the real handle.
