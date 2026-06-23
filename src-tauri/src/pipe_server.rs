@@ -6,11 +6,13 @@
 // This end now owns all chunking: a single 'S' request carries the whole
 // utterance; we split it into sentence chunks, synthesize each in the frontend
 // (kokoro-js on WebGPU) via the `synth-request` event with a depth-1 prefetch
-// pipeline, and stream the PCM back to the engine frame by frame
-// ([nSamples][gain][samples...], then a kStreamEnd / kSynthError marker). The
-// engine is a pure sink that pumps frames to the SAPI site and aborts by closing
-// the pipe. Gain (per chunk) and the per-chunk sentence count are read from the
-// webview's localStorage via the `gain-request` / `chunk-request` events.
+// pipeline, and stream the PCM back to the engine as ~sub-frame-sized frames
+// ([nSamples][gain][samples...], then a kStreamEnd / kSynthError marker), paced
+// to ~real time. The engine is a pure sink that pumps frames to the SAPI site and
+// aborts by closing the pipe. Per-sub-frame gain comes from the `gain-request`
+// event; the per-utterance streaming knobs (sentences/chunk, pacing lead,
+// sub-frame size) come from the `stream-config-request` event — all reading the
+// webview's localStorage.
 //
 // While the app is running it owns the pipe, replacing the native worker.
 
@@ -37,21 +39,19 @@ const SYNTH_TIMEOUT: Duration = Duration::from_secs(120);
 // The gain query just reads localStorage in the webview, so it's quick; if the
 // frontend doesn't answer promptly we fall back to unity rather than stall audio.
 const GAIN_TIMEOUT: Duration = Duration::from_secs(2);
-// Same idea for the per-chunk sentence count; fall back to the default of 4 if
-// the frontend is slow/absent.
+// Same idea for the streaming config (sentences/lead/sub-frame), read once per
+// utterance; fall back to these defaults if the frontend is slow/absent.
 const CHUNK_TIMEOUT: Duration = Duration::from_secs(2);
 const DEFAULT_CHUNK_SENTENCES: u32 = 4;
-// Kokoro's output rate (mono f32). Used for sub-framing + send pacing.
+// Default send-pacing lead (ms): keep at most this much audio ahead of real time
+// so SAPI doesn't buffer a whole chunk of gain-baked PCM ahead of the speaker —
+// a volume/gain change then lands within ~this long. Responsiveness↔underrun knob.
+const DEFAULT_LEAD_MS: u32 = 500;
+// Default sub-frame size (ms): each chunk's PCM is sliced this fine, and gain is
+// re-read once per sub-frame. Smaller = finer volume granularity, more round-trips.
+const DEFAULT_SUBFRAME_MS: u32 = 250;
+// Kokoro's output rate (mono f32). Converts the ms knobs above to samples/seconds.
 const SAMPLE_RATE: f64 = 24_000.0;
-// Each chunk's PCM is sliced into sub-frames of this many samples (~250 ms) so
-// gain is re-read this often and the engine sees fine-grained frames.
-const SUBFRAME_SAMPLES: usize = 6_000;
-// Send pacing: never get more than this many seconds of audio ahead of real
-// time. This caps how much already-gain-baked PCM sits buffered in SAPI ahead of
-// the speaker, so a volume/gain change lands within ~this long instead of one
-// whole chunk. It's the responsiveness↔underrun-safety knob: smaller = snappier
-// volume but riskier glitches; synthesis runs ~3× real time so the buffer refills.
-const PACING_LEAD: f64 = 0.5;
 
 /// Correlates pipe requests with frontend responses. Shared (via Tauri state)
 /// between the pipe-serving tasks and the `synth_result` command.
@@ -63,9 +63,19 @@ pub struct Bridge {
     // webview per chunk). Separate from `pending`: the reply is a single float,
     // not a PCM buffer.
     gain_pending: Mutex<HashMap<u64, oneshot::Sender<f32>>>,
-    // Parallel map for `chunk-request` round-trips (the 'S' handler queries the
-    // webview once per utterance): the per-chunk sentence count, a single u32.
-    chunk_pending: Mutex<HashMap<u64, oneshot::Sender<u32>>>,
+    // Parallel map for `stream-config-request` round-trips (the 'S' handler
+    // queries the webview once per utterance): the per-chunk sentence count plus
+    // the pacing knobs (lead / sub-frame), all from localStorage.
+    config_pending: Mutex<HashMap<u64, oneshot::Sender<StreamConfig>>>,
+}
+
+/// The streaming knobs the webview owns (localStorage), pulled once per utterance.
+/// `lead_ms` / `subframe_ms` are in milliseconds; `sentences` is per steady chunk.
+#[derive(Clone, Copy)]
+struct StreamConfig {
+    sentences: u32,
+    lead_ms: u32,
+    subframe_ms: u32,
 }
 
 impl Bridge {
@@ -97,19 +107,19 @@ impl Bridge {
     fn cancel_gain(&self, id: u64) {
         self.gain_pending.lock().unwrap().remove(&id);
     }
-    fn register_chunk(&self) -> (u64, oneshot::Receiver<u32>) {
+    fn register_config(&self) -> (u64, oneshot::Receiver<StreamConfig>) {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
-        self.chunk_pending.lock().unwrap().insert(id, tx);
+        self.config_pending.lock().unwrap().insert(id, tx);
         (id, rx)
     }
-    fn fulfill_chunk(&self, id: u64, sentences: u32) {
-        if let Some(tx) = self.chunk_pending.lock().unwrap().remove(&id) {
-            let _ = tx.send(sentences);
+    fn fulfill_config(&self, id: u64, cfg: StreamConfig) {
+        if let Some(tx) = self.config_pending.lock().unwrap().remove(&id) {
+            let _ = tx.send(cfg);
         }
     }
-    fn cancel_chunk(&self, id: u64) {
-        self.chunk_pending.lock().unwrap().remove(&id);
+    fn cancel_config(&self, id: u64) {
+        self.config_pending.lock().unwrap().remove(&id);
     }
 }
 
@@ -131,10 +141,11 @@ struct GainRequest {
     id: u64,
 }
 
-/// Backend → frontend: payload of the `chunk-request` event; the webview replies
-/// with the current "tts-chunk" via the `chunk_result` command, keyed by `id`.
+/// Backend → frontend: payload of the `stream-config-request` event; the webview
+/// replies with the current streaming knobs via the `stream_config_result`
+/// command, keyed by `id`.
 #[derive(Clone, Serialize)]
-struct ChunkRequest {
+struct StreamConfigRequest {
     id: u64,
 }
 
@@ -150,10 +161,12 @@ pub fn gain_result(app: AppHandle, id: u64, gain: f32) {
     app.state::<Arc<Bridge>>().fulfill_gain(id, gain);
 }
 
-/// Frontend → backend: answer to a `chunk-request` (current "tts-chunk").
+/// Frontend → backend: answer to a `stream-config-request` (current "tts-chunk",
+/// "tts-lead" ms, "tts-subframe" ms).
 #[tauri::command]
-pub fn chunk_result(app: AppHandle, id: u64, sentences: u32) {
-    app.state::<Arc<Bridge>>().fulfill_chunk(id, sentences);
+pub fn stream_config_result(app: AppHandle, id: u64, sentences: u32, lead_ms: u32, subframe_ms: u32) {
+    app.state::<Arc<Bridge>>()
+        .fulfill_config(id, StreamConfig { sentences, lead_ms, subframe_ms });
 }
 
 /// Split an utterance into sentence chunks for streaming. We ramp up: the FIRST
@@ -326,18 +339,27 @@ fn split_text(text: &str, sentences_per_chunk: usize) -> Vec<String> {
 
 /// Ask the webview for the current per-chunk sentence count ("tts-chunk"); fall
 /// back to the default so a slow/absent frontend doesn't stall the start of
-/// synthesis. Clamped 1..=8.
-async fn query_chunk_sentences(app: &AppHandle, bridge: &Arc<Bridge>) -> usize {
-    let (id, rx) = bridge.register_chunk();
-    let _ = app.emit("chunk-request", ChunkRequest { id });
-    let s = match tokio::time::timeout(CHUNK_TIMEOUT, rx).await {
-        Ok(Ok(s)) => s,
+/// synthesis. Returns (sentences 1..=8, pacing lead in seconds, sub-frame size in
+/// samples), reading "tts-chunk" / "tts-lead" / "tts-subframe" from the webview.
+async fn query_stream_config(app: &AppHandle, bridge: &Arc<Bridge>) -> (usize, f64, usize) {
+    let (id, rx) = bridge.register_config();
+    let _ = app.emit("stream-config-request", StreamConfigRequest { id });
+    let cfg = match tokio::time::timeout(CHUNK_TIMEOUT, rx).await {
+        Ok(Ok(c)) => c,
         _ => {
-            bridge.cancel_chunk(id);
-            DEFAULT_CHUNK_SENTENCES
+            bridge.cancel_config(id);
+            StreamConfig {
+                sentences: DEFAULT_CHUNK_SENTENCES,
+                lead_ms: DEFAULT_LEAD_MS,
+                subframe_ms: DEFAULT_SUBFRAME_MS,
+            }
         }
     };
-    s.clamp(1, 8) as usize
+    let sentences = cfg.sentences.clamp(1, 8) as usize;
+    let lead_secs = cfg.lead_ms.clamp(50, 3000) as f64 / 1000.0;
+    // ms -> samples (24 kHz); clamp ≥ ~20 ms so a sub-frame is never empty.
+    let subframe_samples = (cfg.subframe_ms.clamp(20, 1000) as f64 * SAMPLE_RATE / 1000.0) as usize;
+    (sentences, lead_secs, subframe_samples)
 }
 
 /// Ask the webview for the user's current gain ("tts-gain"); unity on miss. Read
@@ -436,7 +458,8 @@ async fn serve_client(
                 // We own the chunking now: split the whole utterance, synthesize
                 // each chunk, then stream its PCM back as ~250 ms sub-frames
                 // ([nSamples][gain][samples...]), paced to ~real time.
-                let per_chunk = query_chunk_sentences(&app, &bridge).await;
+                let (per_chunk, pacing_lead, subframe_samples) =
+                    query_stream_config(&app, &bridge).await;
                 let chunks = split_text(&text, per_chunk);
                 if chunks.is_empty() {
                     pipe.write_all(&STREAM_END.to_le_bytes()).await?;
@@ -449,7 +472,7 @@ async fn serve_client(
                 let mut pending =
                     Some(spawn_synth(app.clone(), bridge.clone(), chunks[0].clone(), rate));
                 let mut failed = false;
-                // Send-pacing clock (whole utterance): we keep at most PACING_LEAD
+                // Send-pacing clock (whole utterance): we keep at most `pacing_lead`
                 // seconds of audio ahead of real time so SAPI doesn't buffer a
                 // whole chunk of gain-baked PCM ahead of the speaker. The clock
                 // starts on the first sub-frame actually sent.
@@ -479,22 +502,22 @@ async fn serve_client(
                     let total = pcm.len() / 4; // bytes -> f32 sample count
                     let mut off = 0usize; // sample offset within the chunk
                     while off < total {
-                        let n = SUBFRAME_SAMPLES.min(total - off);
+                        let n = subframe_samples.min(total - off);
                         let gain = query_gain(&app, &bridge).await;
                         pipe.write_all(&(n as u32).to_le_bytes()).await?;
                         pipe.write_all(&gain.to_le_bytes()).await?;
                         pipe.write_all(&pcm[off * 4..(off + n) * 4]).await?;
                         off += n;
 
-                        // Pace: sleep if we're more than PACING_LEAD ahead of real
+                        // Pace: sleep if we're more than `pacing_lead` ahead of real
                         // time. Self-correcting — if synthesis falls behind, `ahead`
                         // shrinks and we send eagerly to catch up.
                         samples_sent += n as u64;
                         let clk = clock.get_or_insert_with(Instant::now);
                         let ahead =
                             samples_sent as f64 / SAMPLE_RATE - clk.elapsed().as_secs_f64();
-                        if ahead > PACING_LEAD {
-                            tokio::time::sleep(Duration::from_secs_f64(ahead - PACING_LEAD))
+                        if ahead > pacing_lead {
+                            tokio::time::sleep(Duration::from_secs_f64(ahead - pacing_lead))
                                 .await;
                         }
                     }

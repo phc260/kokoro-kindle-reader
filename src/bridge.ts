@@ -17,9 +17,10 @@ type SynthRequest = { id: number; text: string; rate: number };
 // rides back in that PCM frame), so a volume change isn't frozen into already-
 // synthesized/prefetched PCM.
 type GainRequest = { id: number };
-// pipe_server.rs asks once per utterance how many sentences to coalesce per chunk
-// (it drives the split); we answer from the "tts-chunk" key the reader UI writes.
-type ChunkRequest = { id: number };
+// pipe_server.rs asks once per utterance for the streaming knobs — sentences per
+// chunk (drives the split) plus the pacing lead and sub-frame size (ms) — which we
+// answer from the "tts-chunk" / "tts-lead" / "tts-subframe" keys the reader UI writes.
+type StreamConfigRequest = { id: number };
 
 // Read a persisted numeric setting, clamped, falling back to `def` if unset/NaN.
 function loadNum(key: string, def: number, lo: number, hi: number): number {
@@ -61,10 +62,15 @@ export function startSapiBridge() {
     void invoke("gain_result", { id: e.payload.id, gain });
   });
 
-  // pipe_server.rs asks once per utterance for the per-chunk sentence count;
-  // answer from the same "tts-chunk" key the reader UI writes (integer, 2–8).
-  void listen<ChunkRequest>("chunk-request", (e) => {
+  // pipe_server.rs asks once per utterance for the streaming knobs; answer from
+  // the same keys the reader UI writes: sentences/chunk (2–8), the pacing lead in
+  // ms (how much audio stays buffered ahead — lower = snappier volume, riskier
+  // underruns) and the sub-frame size in ms (gain re-read granularity). Rust
+  // clamps these too; these ranges just keep the UI honest.
+  void listen<StreamConfigRequest>("stream-config-request", (e) => {
     const sentences = Math.round(loadNum("tts-chunk", 4, 2, 8));
-    void invoke("chunk_result", { id: e.payload.id, sentences });
+    const leadMs = Math.round(loadNum("tts-lead", 500, 50, 3000));
+    const subframeMs = Math.round(loadNum("tts-subframe", 250, 20, 1000));
+    void invoke("stream_config_result", { id: e.payload.id, sentences, leadMs, subframeMs });
   });
 }

@@ -17,6 +17,8 @@ import {
 import GraphicEqIcon from "@mui/icons-material/GraphicEq";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import NotesIcon from "@mui/icons-material/Notes";
+import TimerIcon from "@mui/icons-material/Timer";
+import GrainIcon from "@mui/icons-material/Grain";
 import RecordVoiceOverIcon from "@mui/icons-material/RecordVoiceOver";
 import SpeedIcon from "@mui/icons-material/Speed";
 import StopIcon from "@mui/icons-material/Stop";
@@ -81,8 +83,14 @@ function App() {
   // Sentences coalesced per steady-state chunk for the Kindle path. Bigger =
   // fewer seams but slower per-chunk start / coarser stop granularity. The split
   // happens in pipe_server.rs, which reads this over the pipe via bridge.ts's
-  // chunk-request handler ("tts-chunk", clamped 2–8).
+  // stream-config handler ("tts-chunk", clamped 2–8).
   const [chunk, setChunk] = useState(() => loadNum("tts-chunk", 2));
+  // Kindle-path streaming/pacing knobs (also read by pipe_server.rs per utterance,
+  // for tuning volume responsiveness across machines). `lead` = ms of audio kept
+  // buffered ahead of the speaker (lower = snappier volume changes but riskier
+  // underruns/gaps); `subframe` = ms granularity at which gain/volume is re-read.
+  const [lead, setLead] = useState(() => loadNum("tts-lead", 500));
+  const [subframe, setSubframe] = useState(() => loadNum("tts-subframe", 250));
   const [ready, setReady] = useState(false);
   const [backend, setBackend] = useState<Backend | "">("");
   const [busy, setBusy] = useState(false); // synthesizing
@@ -137,7 +145,9 @@ function App() {
     localStorage.setItem("tts-speed", String(speed));
     localStorage.setItem("tts-gain", String(gain));
     localStorage.setItem("tts-chunk", String(chunk));
-  }, [voice, speed, gain, chunk]);
+    localStorage.setItem("tts-lead", String(lead));
+    localStorage.setItem("tts-subframe", String(subframe));
+  }, [voice, speed, gain, chunk, lead, subframe]);
 
   async function play() {
     setError("");
@@ -336,6 +346,44 @@ function App() {
               valueLabelDisplay="auto"
               valueLabelFormat={(v) => `${v}`}
               onChange={(_, v) => setChunk(v as number)}
+            />
+          </Box>
+        </Box>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+          <Tooltip title="Pacing lead (ms, Kindle streaming): audio kept buffered ahead — lower = snappier volume changes but riskier gaps/underruns">
+            <TimerIcon fontSize="medium" color="action" />
+          </Tooltip>
+          <Box sx={{ width: 220 }}>
+            <Slider
+              size="small"
+              sx={SLIDER_SX}
+              value={lead}
+              min={50}
+              max={1500}
+              step={50}
+              disabled={!kokoro}
+              valueLabelDisplay="auto"
+              valueLabelFormat={(v) => `${v} ms`}
+              onChange={(_, v) => setLead(v as number)}
+            />
+          </Box>
+        </Box>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+          <Tooltip title="Sub-frame size (ms, Kindle streaming): how finely gain/volume is re-read — smaller = finer response, more overhead">
+            <GrainIcon fontSize="medium" color="action" />
+          </Tooltip>
+          <Box sx={{ width: 220 }}>
+            <Slider
+              size="small"
+              sx={SLIDER_SX}
+              value={subframe}
+              min={50}
+              max={500}
+              step={25}
+              disabled={!kokoro}
+              valueLabelDisplay="auto"
+              valueLabelFormat={(v) => `${v} ms`}
+              onChange={(_, v) => setSubframe(v as number)}
             />
           </Box>
         </Box>
