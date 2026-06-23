@@ -48,11 +48,12 @@ const DEFAULT_CHUNK_SENTENCES: u32 = 4;
 pub struct Bridge {
     next_id: AtomicU64,
     pending: Mutex<HashMap<u64, oneshot::Sender<Vec<u8>>>>,
-    // Parallel map for `gain-request` round-trips (engine 'G' command). Separate
-    // from `pending` because the reply is a single float, not a PCM buffer.
+    // Parallel map for `gain-request` round-trips (the 'S' handler queries the
+    // webview per chunk). Separate from `pending`: the reply is a single float,
+    // not a PCM buffer.
     gain_pending: Mutex<HashMap<u64, oneshot::Sender<f32>>>,
-    // Parallel map for `chunk-request` round-trips (engine 'C' command): the
-    // per-chunk sentence count, replied as a single u32.
+    // Parallel map for `chunk-request` round-trips (the 'S' handler queries the
+    // webview once per utterance): the per-chunk sentence count, a single u32.
     chunk_pending: Mutex<HashMap<u64, oneshot::Sender<u32>>>,
 }
 
@@ -106,8 +107,9 @@ struct SynthRequest {
     id: u64,
     text: String,
     // Host's rate-derived speed multiplier (1 = host normal). The frontend owns
-    // the narrator voice + the user's speed/gain (from localStorage) and folds
-    // `rate` into the final synthesis speed — see bridge.ts / WorkerProtocol.h.
+    // the narrator voice + the user's speed (from localStorage) and folds `rate`
+    // into the final synthesis speed — see bridge.ts / WorkerProtocol.h. (Gain is
+    // not folded in here; it's queried separately per chunk and rides each frame.)
     rate: f32,
 }
 

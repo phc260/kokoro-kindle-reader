@@ -78,9 +78,10 @@ function App() {
   const [voice, setVoice] = useState(loadVoice());
   const [speed, setSpeed] = useState(() => loadNum("tts-speed", 1));
   const [gain, setGain] = useState(() => loadNum("tts-gain", 1));
-  // Sentences coalesced per steady-state chunk in the SAPI engine (Kindle path).
-  // Bigger = fewer seams but slower per-chunk start / coarser stop granularity;
-  // the engine clamps to 2–8. Read back over the pipe via bridge.ts ("tts-chunk").
+  // Sentences coalesced per steady-state chunk for the Kindle path. Bigger =
+  // fewer seams but slower per-chunk start / coarser stop granularity. The split
+  // happens in pipe_server.rs, which reads this over the pipe via bridge.ts's
+  // chunk-request handler ("tts-chunk", clamped 2–8).
   const [chunk, setChunk] = useState(() => loadNum("tts-chunk", 2));
   const [ready, setReady] = useState(false);
   const [backend, setBackend] = useState<Backend | "">("");

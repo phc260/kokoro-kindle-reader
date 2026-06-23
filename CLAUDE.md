@@ -72,29 +72,40 @@ in Kindle (or `test-speak.ps1`).
   `model-manifest.json`, embedded via `include_str!`; its voice entries must stay
   in sync with `VOICES` in `src/voices.ts`). Narrator/speed/gain are **not** here
   — they live in the webview's `localStorage` (see `App.tsx`/`bridge.ts`).
-- `pipe_server.rs` — the **SAPI bridge**. A tokio named-pipe **server** at
-  `\\.\pipe\KokoroSapiSynth` speaking the `WorkerProtocol.h` wire format. Each
-  `'S'` request → `emit("synth-request", {id,text,rate})` → the frontend
-  (`src/bridge.ts`) folds in the localStorage narrator/speed/gain, synthesizes via
-  `synthesizeRaw` and returns bytes through the `synth_result` command, correlated
-  by id (a `oneshot` map). While the app runs it owns the pipe; the engine just
+- `pipe_server.rs` — the **SAPI bridge** and the **owner of all chunking**. A tokio
+  named-pipe **server** at `\\.\pipe\KokoroSapiSynth` speaking the
+  `WorkerProtocol.h` wire format. Each `'S'` request carries the **whole utterance**;
+  `split_text` cuts it into sentence chunks (first chunk = 1 sentence for fast
+  start, then `tts-chunk` sentences each, with clause/word soft-caps for run-ons),
+  and a **depth-1 prefetch pipeline** (detached tokio tasks, bounded by pipe
+  backpressure) renders each chunk via `emit("synth-request", {id,text,rate})` →
+  the frontend (`src/bridge.ts`) folds in the localStorage narrator/speed and
+  returns PCM through `synth_result` (correlated by id, a `oneshot` map). The PCM
+  is streamed back to the engine **frame by frame** (`[nSamples][gain][f32…]`, then
+  a `kStreamEnd`/`kSynthError` marker); gain (`tts-gain`) and the chunk count
+  (`tts-chunk`) are read per request from the webview via the `gain-request` /
+  `chunk-request` events. While the app runs it owns the pipe; the engine just
   connects.
 
-### SAPI engine (`kokoro-sapi/src/`) — connect-only, ~900 lines, no deps
+### SAPI engine (`kokoro-sapi/src/`) — connect-only, ~700 lines, no deps
 - `Dll.cpp` — COM class factory + `DllRegisterServer`/`Unregister` (writes the
   CLSID `InprocServer32` and the `KokoroTTS` voice token). Runs two ways: manual
   `regsvr32` (dev) and the NSIS POSTINSTALL hook (installed app). The engine holds
   no on-disk settings/asset state — narrator/speed/gain live in the app's webview
   localStorage — so no AssetDir is registered (the token's `VoiceFile` attribute
   is informational only).
-- `KokoroTTSEngine.cpp` — `ISpTTSEngine`. `Speak` gathers the host's text, runs
-  `SplitText` (1-sentence first chunk for fast start, then **4 sentences**/chunk),
-  and runs a **depth-1 prefetch pipeline**: chunk N+1 synthesizes on a worker
-  thread (`std::async`) while chunk N streams to the SAPI site in ~250 ms blocks
-  with `SPVES_ABORT` checks. On stop it interrupts the in-flight synth by closing
-  the pipe (`WorkerClient::Close` is atomic for that cross-thread cancel).
+- `KokoroTTSEngine.cpp` — `ISpTTSEngine`, now a **pure streaming sink** (no
+  chunking — that moved to `pipe_server.rs`). `Speak` gathers the host's text,
+  sends it whole (`BeginSynth`), then loops `ReadFrame` over the response stream:
+  for each frame it applies the carried gain × host volume and writes ~250 ms
+  blocks to the SAPI site with `SPVES_ABORT` checks. On stop it interrupts the
+  in-flight stream by closing the pipe (`WorkerClient::Close` is atomic for that
+  cross-thread cancel; the app's next frame-write then fails and it drops the
+  rest). Note: rate is fixed per utterance — a mid-page host rate change lands on
+  the next `Speak`, not the next chunk.
 - `WorkerClient.cpp` — pipe **client**: `EnsureConnected` is connect-only (no
-  spawn); `Synthesize` does the `'S'` round-trip.
+  spawn); `BeginSynth` writes the `'S'` request and `ReadFrame` pulls each PCM
+  frame (or the end/error marker) off the response stream.
 - `WorkerProtocol.h` — the wire format, shared in spirit with `pipe_server.rs`.
   **Change it in both places.**
 
@@ -155,11 +166,15 @@ in Kindle (or `test-speak.ps1`).
   `tts.worker.ts` derives it from `self.location.protocol` — don't hardcode it.
 - **App ↔ engine settings live in webview `localStorage`, not a file.** The
   engine sends only the host's rate-derived `rate` over the pipe; the webview owns
-  the narrator (`tts-voice`), speed (`tts-speed`) and gain (`tts-gain`) and the
-  `kindle-agency` record. `bridge.ts` reads those keys per request: it folds
-  `rate × tts-speed` into the synthesis speed and scales the returned PCM by
-  `tts-gain`; the engine still applies the host's volume slider when it converts
-  to int16. `App.tsx` writes the keys directly — there's no `set_controls`
+  the narrator (`tts-voice`), speed (`tts-speed`), gain (`tts-gain`), per-chunk
+  sentence count (`tts-chunk`) and the `kindle-agency` record. The webview reads
+  these per request via three event handlers in `bridge.ts`: `synth-request` folds
+  `rate × tts-speed` into the synthesis speed and returns **raw** PCM; `gain-request`
+  reports `tts-gain`; `chunk-request` reports `tts-chunk`. Gain rides back to the
+  engine **in each PCM frame** and the engine applies it × the host's volume slider
+  when it converts to int16 (so a slider move lands within the playing chunk, not
+  frozen into prefetched samples); `tts-chunk` drives `split_text` in
+  `pipe_server.rs`. `App.tsx` writes the keys directly — there's no `set_controls`
   round-trip and no `controls.ini` (so no path-divergence / icacls / seed-on-
   install concerns). **Invariant: the same localStorage keys the reader UI writes
   are the ones `bridge.ts` reads — change them in both places.**

@@ -44,11 +44,13 @@ COM loads our DLL straight into Kindle and calls its functions:
    This is why the engine **must be x86** (matching Kindle) and a native COM DLL —
    a webview/JS thing can't be loaded this way, and it can't be merged into the
    x64 app.
-3. **The DLL is a thin shim → the app.** `Speak` splits the text into chunks and,
-   over the pipe `\\.\pipe\KokoroSapiSynth` (`WorkerProtocol.h`), asks the running
-   app to synthesize each (`'S'` = `[speed][voice][text]` → `[nSamples][f32]`).
-   `pipe_server.rs` relays to the webview, kokoro-js renders on **WebGPU**, and the
-   PCM comes back and is written to Kindle's audio site.
+3. **The DLL is a thin shim → the app.** `Speak` sends the *whole* utterance over
+   the pipe `\\.\pipe\KokoroSapiSynth` (`WorkerProtocol.h`) in one `'S'` request
+   (`[rate][textBytes][text]`) and gets back a **stream** of PCM frames
+   (`[nSamples][gain][f32…]`, ended by a `kStreamEnd`/`kSynthError` marker).
+   `pipe_server.rs` owns the chunking: it splits the text, renders each chunk in
+   the webview (kokoro-js on **WebGPU**) and streams the PCM back; the engine just
+   writes each frame to Kindle's audio site.
 4. **Default-voice selection (MSIX).** Kindle plays whichever token equals
    `DefaultTokenId` — and because it's sandboxed, that value lives in its
    **private hive** (`…\Packages\AMZNKindle…\SystemAppData\Helium\User.dat`), not
@@ -60,11 +62,13 @@ COM loads our DLL straight into Kindle and calls its functions:
    webview's `localStorage` (`kindle-agency`) so the toggle initializes to the
    last-set state.
 
-**Streaming.** `Speak` synthesizes **sentence by sentence** — a small first chunk
-(fast first sound) then 4-sentence chunks — with a **depth-1 prefetch pipeline**:
-chunk N+1 synthesizes on a background thread while chunk N streams to the host in
-~250 ms blocks. So there's no gap at chunk boundaries and `SPVES_ABORT` stops
-playback promptly. (Gaps *between Kindle pages* are Kindle's own page-turn time —
+**Streaming.** `pipe_server.rs` synthesizes **sentence by sentence** — a small
+first chunk (fast first sound) then N-sentence chunks (user-tunable via the
+`tts-chunk` setting) — with a **depth-1 prefetch pipeline**: chunk N+1 synthesizes
+while chunk N streams back, bounded by pipe backpressure. The engine writes each
+frame to the host in ~250 ms blocks, so there's no gap at chunk boundaries and
+`SPVES_ABORT` stops playback promptly (it closes the pipe, which cancels the rest
+of the stream). (Gaps *between Kindle pages* are Kindle's own page-turn time —
 each page is a fresh `Speak` whose text we can't see in advance.)
 
 ## Layout
@@ -73,7 +77,7 @@ each page is a fresh `Speak` whose text we can't see in advance.)
 |---|---|
 | `src/` | React frontend; `tts.worker.ts` (kokoro-js Web Worker), `tts.ts` (client; `synthesize` / `synthesizeRaw`), `bridge.ts` (SAPI bridge listener; reads narrator/speed/gain from `localStorage`), `voices.ts` |
 | `src-tauri/src/lib.rs` | Model download/verify + `kokoro://` asset server + `set_kindle_voice` (UAC voice-guard) |
-| `src-tauri/src/pipe_server.rs` | Named-pipe server bridging the SAPI engine to webview synthesis |
+| `src-tauri/src/pipe_server.rs` | Named-pipe server bridging the SAPI engine to webview synthesis; owns text chunking + the prefetch pipeline |
 | `src-tauri/model-manifest.json` | Files the app downloads from HF (paths + sizes + SHA-256); kept in sync with `src/voices.ts` |
 | `kokoro-sapi/src/` | The x86 SAPI engine: `Dll.cpp`, `KokoroTTSEngine.cpp`, `WorkerClient.cpp`, `WorkerProtocol.h` (thin COM shim + pipe client, no deps) |
 | `kokoro-sapi/build.ps1` | Builds the x86 engine (NMake via vcvarsall) |

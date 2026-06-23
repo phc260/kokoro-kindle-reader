@@ -68,7 +68,7 @@ WorkerClient::FrameStatus WorkerClient::ReadFrame(std::vector<float>& outSamples
 
 void WorkerClient::Close() {
     // Atomic so it's safe to call from another thread to interrupt a blocked
-    // Synthesize (cancel-by-close): only one caller gets the real handle.
+    // ReadFrame mid-stream (cancel-by-close): only one caller gets the real handle.
     HANDLE h = static_cast<HANDLE>(
         InterlockedExchangePointer(reinterpret_cast<PVOID volatile*>(&m_pipe),
                                    INVALID_HANDLE_VALUE));

@@ -1,8 +1,8 @@
-// SAPI bridge (frontend side): the Rust pipe server (pipe_server.rs) relays each
-// Kindle synth request to the webview as a `synth-request` event; we synthesize
-// raw PCM with kokoro-js (WebGPU) and hand the bytes back via `synth_result`,
-// which Rust writes over the named pipe. Lets the in-Kindle SAPI engine narrate
-// with the same WebGPU engine the reader app uses.
+// SAPI bridge (frontend side): the Rust pipe server (pipe_server.rs) owns the
+// chunking — it splits each Kindle utterance and relays one `synth-request` event
+// per chunk; we synthesize raw PCM with kokoro-js (WebGPU) and hand the bytes back
+// via `synth_result`, which Rust streams over the named pipe to the engine. Lets
+// the in-Kindle SAPI engine narrate with the same WebGPU engine the reader app uses.
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { initTTS, synthesizeRaw } from "./tts";
@@ -13,11 +13,12 @@ import { loadVoice } from "./voices";
 // the same keys the reader UI writes (see App.tsx) — so the engine no longer
 // carries them over the pipe (see WorkerProtocol.h).
 type SynthRequest = { id: number; text: string; rate: number };
-// The engine asks for the current gain when each chunk starts playing (the 'G'
-// pipe command), so a volume change isn't frozen into already-synthesized PCM.
+// pipe_server.rs asks for the current gain as each chunk is about to ship (it
+// rides back in that PCM frame), so a volume change isn't frozen into already-
+// synthesized/prefetched PCM.
 type GainRequest = { id: number };
-// The engine asks once per Speak how many sentences to coalesce per chunk (the
-// 'C' pipe command); we answer from the same "tts-chunk" key the reader UI writes.
+// pipe_server.rs asks once per utterance how many sentences to coalesce per chunk
+// (it drives the split); we answer from the "tts-chunk" key the reader UI writes.
 type ChunkRequest = { id: number };
 
 // Read a persisted numeric setting, clamped, falling back to `def` if unset/NaN.
@@ -36,10 +37,10 @@ export function startSapiBridge() {
   initTTS(() => {});
   void listen<SynthRequest>("synth-request", async (e) => {
     const { id, text, rate } = e.payload;
-    // Fold the user's own settings (localStorage) over the host's live rate.
-    // Gain is NOT applied here — it's queried by the engine at playback (see the
-    // gain-request handler below), so a slider move isn't baked into prefetched
-    // PCM. We return the raw synthesized samples.
+    // Fold the user's own speed (localStorage) over the host's live rate.
+    // Gain is NOT applied here — pipe_server.rs queries it separately and ships it
+    // in each PCM frame (see the gain-request handler below), so a slider move
+    // isn't baked into prefetched PCM. We return the raw synthesized samples.
     const voice = loadVoice();
     const speed = rate * loadNum("tts-speed", 1, 0.5, 2);
     try {
@@ -53,15 +54,15 @@ export function startSapiBridge() {
     }
   });
 
-  // The engine queries the current gain as each chunk begins playing; answer
-  // from the same "tts-gain" key the reader UI writes (clamped 0–2 = 0–200%).
+  // pipe_server.rs queries the current gain as each chunk ships; answer from the
+  // same "tts-gain" key the reader UI writes (clamped 0–2 = 0–200%).
   void listen<GainRequest>("gain-request", (e) => {
     const gain = loadNum("tts-gain", 1, 0, 2);
     void invoke("gain_result", { id: e.payload.id, gain });
   });
 
-  // The engine asks once per Speak for the per-chunk sentence count; answer from
-  // the same "tts-chunk" key the reader UI writes (integer, clamped 2–8).
+  // pipe_server.rs asks once per utterance for the per-chunk sentence count;
+  // answer from the same "tts-chunk" key the reader UI writes (integer, 2–8).
   void listen<ChunkRequest>("chunk-request", (e) => {
     const sentences = Math.round(loadNum("tts-chunk", 4, 2, 8));
     void invoke("chunk_result", { id: e.payload.id, sentences });
