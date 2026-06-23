@@ -206,7 +206,10 @@ function App() {
               <Select
                 aria-label="Narrator"
                 value={voice}
-                onChange={(e) => setVoice(e.target.value)}
+                onChange={(e) => {
+                  stop(); // halt any in-flight/playing preview of the old voice
+                  setVoice(e.target.value);
+                }}
                 disabled={!ready || !kokoro}
                 MenuProps={{ slotProps: { paper: { sx: { maxHeight: 360 } } } }}
               >
