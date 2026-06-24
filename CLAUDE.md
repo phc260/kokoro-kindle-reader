@@ -5,7 +5,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Local, offline Kokoro-82M text-to-speech with a **single synthesis engine** —
 `kokoro-js` on **WebGPU**, running in the Tauri app's webview. The app is both:
 
-1. **A reader app** (Tauri 2 + React) — paste/read text, pick a narrator, listen.
+1. **A voice control panel** (Tauri 2 + React) — pick a narrator, tune speed/volume,
+   and audition it with a **Preview** button (synthesizes a fixed per-voice intro
+   line via `voiceIntro()`; there is **no** free-text reading box). All controls are
+   gated on the Voice Mode toggle being set to Kokoro.
 2. **The synthesis host for a Windows SAPI5 voice** — "Kokoro (SAPI5)" appears in
    the system voice list so 32-bit hosts like **Kindle for PC Read Aloud** narrate
    with Kokoro. A thin **x86** COM DLL (`KokoroSapi.dll`) that Kindle loads
