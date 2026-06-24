@@ -14,10 +14,10 @@ bool WorkerClient::TryOpenPipe() {
 
 bool WorkerClient::EnsureConnected() {
     if (m_pipe != INVALID_HANDLE_VALUE) return true;
-    // Connect-only: the kokoro-reader app serves the pipe. If it isn't running,
+    // Connect-only: the kokoro-kindle-reader app serves the pipe. If it isn't running,
     // there's nothing to spawn — the utterance is silently skipped.
     if (TryOpenPipe()) return true;
-    KokoroLog("client: pipe not available (kokoro-reader app not running?)");
+    KokoroLog("client: pipe not available (kokoro-kindle-reader app not running?)");
     return false;
 }
 

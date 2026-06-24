@@ -1,6 +1,6 @@
 # Architecture
 
-How kokoro-reader works under the hood, and how to build it from source. For
+How kokoro-kindle-reader works under the hood, and how to build it from source. For
 installation and day-to-day use, see the [README](README.md).
 
 Local, offline text-to-speech built on [Kokoro-82M](https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX),
@@ -18,7 +18,7 @@ on **WebGPU**, in a Tauri webview — serving two front ends:
    audio.
 
 ```
-Kindle.exe (x86, MSIX)                         kokoro-reader app (Tauri 2, x64)
+Kindle.exe (x86, MSIX)                         kokoro-kindle-reader app (Tauri 2, x64)
   │ classic SAPI5 (ISpVoice)                      React UI ──┐
   ▼  loads in-process via COM                                │ kokoro-js on WebGPU
 KokoroSapi.dll  (x86 SAPI shim, connect-only)     webview ◀──┘   (the one engine)

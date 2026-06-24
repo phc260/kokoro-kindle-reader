@@ -1,6 +1,6 @@
 #pragma once
 // Client side of the synthesis pipe (see WorkerProtocol.h). The 32-bit SAPI
-// engine connects to the pipe served by the running kokoro-reader app, which
+// engine connects to the pipe served by the running kokoro-kindle-reader app, which
 // performs synthesis in its webview (WebGPU) and returns PCM. No worker process
 // is spawned: if the app isn't running, the pipe is absent and EnsureConnected
 // fails (the host then gets no audio for that utterance).
@@ -13,7 +13,7 @@ public:
     ~WorkerClient() { Close(); }
 
     // Connect to the app's pipe. Returns false if nothing is serving it
-    // (i.e. the kokoro-reader app isn't running).
+    // (i.e. the kokoro-kindle-reader app isn't running).
     bool EnsureConnected();
 
     // Result of reading one frame of the 'S' response stream.

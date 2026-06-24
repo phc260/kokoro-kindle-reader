@@ -2,7 +2,7 @@ name: native (kokoro-sapi)
 
 # Builds the Windows-only x86 SAPI engine (KokoroSapi.dll). It's a thin COM shim
 # + named-pipe client with no third-party dependencies — all synthesis happens in
-# the kokoro-reader app (WebGPU). There is no Linux/macOS counterpart (SAPI5 is
+# the kokoro-kindle-reader app (WebGPU). There is no Linux/macOS counterpart (SAPI5 is
 # Windows-only), and nothing to fetch/build beyond the engine itself.
 
 on:

@@ -1,5 +1,5 @@
 #pragma once
-// Wire protocol between clients (the 32-bit SAPI engine, the kokoro-reader
+// Wire protocol between clients (the 32-bit SAPI engine, the kokoro-kindle-reader
 // Tauri backend) and the 64-bit synthesis worker over a byte-mode named pipe.
 //
 // Every request starts with a one-byte command:
@@ -11,7 +11,7 @@
 //        terminated by a marker frame whose leading u32 is:
 //          kStreamEnd  -> the utterance is complete (no gain/samples follow)
 //          kSynthError -> a chunk failed; playback stops (no gain/samples follow)
-//     The host (the kokoro-reader app) now owns ALL chunking: it splits the text
+//     The host (the kokoro-kindle-reader app) now owns ALL chunking: it splits the text
 //     into sentence chunks, synthesizes them with a prefetch pipeline and streams
 //     the PCM back frame by frame. The engine is a pure sink — it pumps each
 //     frame to the SAPI site in ~250 ms blocks and aborts by closing the pipe.

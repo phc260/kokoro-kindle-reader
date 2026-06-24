@@ -16,7 +16,7 @@ extern long g_cObjects;
 namespace {
 
 // Kokoro's native output rate. The engine never loads a model now — synthesis
-// happens in the kokoro-reader app (WebGPU) reached over the pipe — so this is
+// happens in the kokoro-kindle-reader app (WebGPU) reached over the pipe — so this is
 // just the format we declare to the host.
 constexpr int kSampleRate = 24000;
 

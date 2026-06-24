@@ -1,9 +1,9 @@
-# kokoro-reader
+# kokoro-kindle-reader
 
 Local, offline text-to-speech for Windows, powered by
 [Kokoro-82M](https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX) running
 on your GPU. Nothing is sent to the cloud — the model runs entirely on your
-machine. kokoro-reader is two things in one app:
+machine. kokoro-kindle-reader is two things in one app:
 
 1. **A voice control panel** — choose your narrator and tune speed and volume,
    with a **Preview** button to hear how it sounds.
@@ -11,19 +11,19 @@ machine. kokoro-reader is two things in one app:
    voice list, so **Kindle's Read Aloud** narrates your books in Kokoro's voice
    instead of the robotic system one.
 
-> **One thing to know up front:** the kokoro-reader app does the actual speaking,
+> **One thing to know up front:** the kokoro-kindle-reader app does the actual speaking,
 > so **it must be running** whenever you want Kindle to read aloud. Think of it as
 > the engine Kindle plugs into.
 
 ## Install
 
 1. Download the latest installer from the
-   [**Releases**](https://github.com/phc260/kokoro-reader/releases) page (the
+   [**Releases**](https://github.com/phc260/kokoro-kindle-reader/releases) page (the
    `.exe` / `.msi` under the newest version).
 2. Run it. Installation needs administrator rights — it registers the Kokoro
    voice with Windows and (if Kindle is installed) sets Kokoro as Kindle's Read
    Aloud voice automatically.
-3. Launch **kokoro-reader**. On first run it downloads the voice model
+3. Launch **kokoro-kindle-reader**. On first run it downloads the voice model
    (~430 MB) — a one-time setup wizard walks you through it. After that it works
    fully offline.
 
@@ -32,7 +32,7 @@ falls back to a slower CPU mode automatically.
 
 ## Using the app
 
-The kokoro-reader window is a **control panel** for the Kokoro voice — it's where
+The kokoro-kindle-reader window is a **control panel** for the Kokoro voice — it's where
 you choose and audition the voice, not a place to paste text. Whatever you set
 here is exactly what Kindle (and the SAPI voice) uses when it reads.
 
@@ -50,7 +50,7 @@ Your narrator, speed, and volume choices are remembered between sessions.
 
 ## Reading Kindle books with Kokoro
 
-1. Make sure **kokoro-reader is running** (it's the voice engine — no app, no
+1. Make sure **kokoro-kindle-reader is running** (it's the voice engine — no app, no
    sound).
 2. Set the **Voice Mode** toggle to **Kokoro** if it isn't already (see above).
    Switch back to **Microsoft** anytime to restore Kindle's built-in voice.
@@ -78,10 +78,10 @@ defaults are set, but if you want to tune:
 
 ## Troubleshooting
 
-- **Kindle is silent / no Read Aloud sound** — the kokoro-reader app isn't
+- **Kindle is silent / no Read Aloud sound** — the kokoro-kindle-reader app isn't
   running. Start it and try again. (There's no fallback voice by design.)
 - **Kindle reverted to the old robotic voice** — a Kindle update can reset its
-  voice. Open kokoro-reader and flip the Microsoft/Kokoro toggle back to Kokoro,
+  voice. Open kokoro-kindle-reader and flip the Microsoft/Kokoro toggle back to Kokoro,
   then reopen Kindle.
 - **A switch didn't take effect** — fully close and reopen Kindle after changing
   the voice.
@@ -92,7 +92,7 @@ defaults are set, but if you want to tune:
 
 The interesting part is letting 32-bit Kindle narrate with GPU TTS that lives in
 a separate 64-bit process: a thin x86 COM voice plugin loads inside Kindle and
-forwards each utterance over a named pipe to the kokoro-reader app, which
+forwards each utterance over a named pipe to the kokoro-kindle-reader app, which
 synthesizes on WebGPU and streams the audio back.
 
 If you're curious about the engine chain, the wire protocol, the Kindle voice

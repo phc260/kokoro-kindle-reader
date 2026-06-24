@@ -1,6 +1,6 @@
 # Builds the Kokoro SAPI engine (x86). Kindle.exe is a 32-bit process and loads
 # the engine in-process via ISpVoice, so the DLL must be x86. The engine is
-# connect-only — it delegates synthesis to the kokoro-reader app over a named
+# connect-only — it delegates synthesis to the kokoro-kindle-reader app over a named
 # pipe — so there is no x64 worker and no ONNX/espeak dependency to build.
 #
 # Usage:
@@ -41,4 +41,4 @@ Write-Host "    C:\Windows\SysWOW64\regsvr32.exe `"$dll`""
 Write-Host "Unregister:"
 Write-Host "    C:\Windows\SysWOW64\regsvr32.exe /u `"$dll`""
 Write-Host ""
-Write-Host "Synthesis requires the kokoro-reader app to be running (it serves the pipe)."
+Write-Host "Synthesis requires the kokoro-kindle-reader app to be running (it serves the pipe)."

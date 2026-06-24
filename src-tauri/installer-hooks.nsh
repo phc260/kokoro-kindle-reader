@@ -1,4 +1,4 @@
-; NSIS installer hooks for kokoro-reader.
+; NSIS installer hooks for kokoro-kindle-reader.
 ;
 ; Registers the bundled x86 SAPI engine (resources\KokoroSapi.dll) so
 ; "Kokoro (SAPI5)" appears in the Windows voice list and 32-bit hosts like

@@ -1,4 +1,4 @@
-name: Release (kokoro-reader installer)
+name: Release (kokoro-kindle-reader installer)
 
 # Builds the Windows installer with the x86 SAPI engine (KokoroSapi.dll) bundled
 # in, then publishes it to a GitHub Release. The DLL is compiled FIRST, in the
@@ -64,7 +64,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || 'v__VERSION__' }}
-          releaseName: kokoro-reader ${{ github.ref_type == 'tag' && github.ref_name || 'v__VERSION__' }}
+          releaseName: kokoro-kindle-reader ${{ github.ref_type == 'tag' && github.ref_name || 'v__VERSION__' }}
           releaseBody: |
             Local, offline Kokoro-82M text-to-speech — Windows installer
             (.msi / NSIS .exe). Bundles the "Kokoro (SAPI5)" voice engine so

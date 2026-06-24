@@ -130,13 +130,13 @@ STDAPI DllRegisterServer() {
 
     StringCchPrintfW(key, ARRAYSIZE(key), L"%s\\Attributes", kTokenKeyPath);
     SetString(key, L"Name",     kFriendlyName);
-    SetString(key, L"Vendor",   L"kokoro-reader");
+    SetString(key, L"Vendor",   L"kokoro-kindle-reader");
     SetString(key, L"Age",      L"Adult");
     SetString(key, L"Gender",   L"Female");
     SetString(key, L"Language", L"409");  // en-US (LCID 0x0409)
 
     // Informational default-narrator attribute. The engine no longer reads it —
-    // the kokoro-reader app owns the narrator (webview localStorage) and applies
+    // the kokoro-kindle-reader app owns the narrator (webview localStorage) and applies
     // it during synthesis — so it carries no asset-dir path and nothing runtime.
     SetString(key, L"VoiceFile", L"af_heart");
 

@@ -5,7 +5,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # x86 SAPI5 engine for 32-bit hosts (Kindle.exe loads it in-process via
-# ISpVoice). It is connect-only: all synthesis happens in the kokoro-reader app
+# ISpVoice). It is connect-only: all synthesis happens in the kokoro-kindle-reader app
 # (kokoro-js on WebGPU), reached over a named pipe (see src/WorkerProtocol.h and
 # pipe_server.rs in the Tauri app). The engine links no ONNX/espeak/DirectML —
 # it's a thin COM shim + pipe client.
