@@ -105,12 +105,6 @@ function App() {
   const kokoro = agency === "kokoro";
   const [error, setError] = useState("");
 
-  // Label for the narrator tooltip: the selected voice's name + group (accent /
-  // gender), so the current pick is legible without opening the dropdown.
-  const current = VOICES.find((v) => v.id === voice);
-  const narratorLabel = current
-    ? `${current.name} · ${current.group}`
-    : "Narrator";
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const urlRef = useRef<string>("");
@@ -257,35 +251,33 @@ function App() {
           <Tooltip title="Narrator">
             <RecordVoiceOverIcon fontSize="medium" color="action" />
           </Tooltip>
-          <Tooltip title={narratorLabel}>
-            <FormControl size="small" fullWidth>
-              <Select
-                aria-label="Narrator"
-                value={voice}
-                onChange={(e) => {
-                  stop(); // halt any in-flight/playing preview of the old voice
-                  setVoice(e.target.value);
-                }}
-                disabled={!ready || !kokoro}
-                MenuProps={{ slotProps: { paper: { sx: { maxHeight: 360 } } } }}
-              >
-                {VOICES.flatMap((v, i) => {
-                  const items = [];
-                  if (i === 0 || v.group !== VOICES[i - 1].group) {
-                    items.push(
-                      <ListSubheader key={v.group}>{v.group}</ListSubheader>,
-                    );
-                  }
+          <FormControl size="small" fullWidth>
+            <Select
+              aria-label="Narrator"
+              value={voice}
+              onChange={(e) => {
+                stop(); // halt any in-flight/playing preview of the old voice
+                setVoice(e.target.value);
+              }}
+              disabled={!ready || !kokoro}
+              MenuProps={{ slotProps: { paper: { sx: { maxHeight: 360 } } } }}
+            >
+              {VOICES.flatMap((v, i) => {
+                const items = [];
+                if (i === 0 || v.group !== VOICES[i - 1].group) {
                   items.push(
-                    <MenuItem key={v.id} value={v.id}>
-                      {v.name}
-                    </MenuItem>,
+                    <ListSubheader key={v.group}>{v.group}</ListSubheader>,
                   );
-                  return items;
-                })}
-              </Select>
-            </FormControl>
-          </Tooltip>
+                }
+                items.push(
+                  <MenuItem key={v.id} value={v.id}>
+                    {v.name}
+                  </MenuItem>,
+                );
+                return items;
+              })}
+            </Select>
+          </FormControl>
         </Box>
 
         {busy || playing ? (
