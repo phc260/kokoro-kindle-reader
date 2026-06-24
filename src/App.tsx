@@ -5,6 +5,7 @@ import {
   Button,
   CircularProgress,
   FormControl,
+  IconButton,
   ListSubheader,
   MenuItem,
   Select,
@@ -23,6 +24,7 @@ import RecordVoiceOverIcon from "@mui/icons-material/RecordVoiceOver";
 import SpeedIcon from "@mui/icons-material/Speed";
 import StopIcon from "@mui/icons-material/Stop";
 import VolumeUpIcon from "@mui/icons-material/VolumeUp";
+import VolumeOffIcon from "@mui/icons-material/VolumeOff";
 import { invoke } from "@tauri-apps/api/core";
 import { initTTS, stopTTS, synthesize } from "./tts";
 import { VOICES, loadVoice, voiceIntro } from "./voices";
@@ -117,6 +119,21 @@ function App() {
   // is unbounded, so the slider's 100–200% boost range works in preview too.
   const audioCtxRef = useRef<AudioContext | null>(null);
   const gainNodeRef = useRef<GainNode | null>(null);
+  // Gain to restore when un-muting (the level the slider held before it was
+  // clicked to 0). Clicking the volume icon toggles between 0 and this.
+  const preMuteGainRef = useRef(1);
+
+  // Clicking the volume icon mutes (gain → 0) or restores the pre-mute level.
+  // Like the sliders, this writes `tts-gain`, so it drives both the in-app
+  // preview and the Kindle path (gain rides back per PCM frame).
+  const toggleMute = () => {
+    if (gain > 0) {
+      preMuteGainRef.current = gain;
+      setGain(0);
+    } else {
+      setGain(preMuteGainRef.current > 0 ? preMuteGainRef.current : 1);
+    }
+  };
 
   useEffect(() => {
     initTTS((b) => {
@@ -311,8 +328,20 @@ function App() {
           </Box>
         </Box>
         <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-          <Tooltip title="Volume">
-            <VolumeUpIcon fontSize="medium" color="action" />
+          <Tooltip title={gain > 0 ? "Mute" : "Unmute"}>
+            <IconButton
+              size="small"
+              onClick={toggleMute}
+              disabled={!kokoro}
+              aria-label={gain > 0 ? "Mute" : "Unmute"}
+              sx={{ p: 0 }}
+            >
+              {gain > 0 ? (
+                <VolumeUpIcon fontSize="medium" color="action" />
+              ) : (
+                <VolumeOffIcon fontSize="medium" color="action" />
+              )}
+            </IconButton>
           </Tooltip>
           <Box sx={{ width: 220 }}>
             <Slider
