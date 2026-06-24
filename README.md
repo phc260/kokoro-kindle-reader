@@ -1,119 +1,91 @@
 # kokoro-reader
 
-Local, offline text-to-speech built on [Kokoro-82M](https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX),
-with **one** synthesis engine — [`kokoro-js`](https://www.npmjs.com/package/kokoro-js)
-on **WebGPU**, in a Tauri webview — serving two front ends:
+Local, offline text-to-speech for Windows, powered by
+[Kokoro-82M](https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX) running
+on your GPU. Nothing is sent to the cloud — the model runs entirely on your
+machine. kokoro-reader is two things in one app:
 
-1. **A desktop reader app** (Tauri 2 + React) — paste text, pick a narrator, listen.
-   A Microsoft/Kokoro toggle also switches Kindle's default voice from inside the app.
-2. **A SAPI5 voice for Windows** — "Kokoro (SAPI5)" appears in the system voice
-   list, so apps like **Kindle for PC Read Aloud** narrate books with Kokoro. A
-   thin **x86** COM DLL that Kindle loads in-process forwards each utterance over
-   a named pipe to the running app, which synthesizes on the GPU and returns
-   audio.
+1. **A reader app** — paste or type text, pick a narrator, and listen.
+2. **A natural voice for Kindle for PC** — "Kokoro (SAPI5)" shows up in Windows'
+   voice list, so **Kindle's Read Aloud** narrates your books in Kokoro's voice
+   instead of the robotic system one.
 
-```
-Kindle.exe (x86, MSIX)                         kokoro-reader app (Tauri 2, x64)
-  │ classic SAPI5 (ISpVoice)                      React UI ──┐
-  ▼  loads in-process via COM                                │ kokoro-js on WebGPU
-KokoroSapi.dll  (x86 SAPI shim, connect-only)     webview ◀──┘   (the one engine)
-  │  named pipe \\.\pipe\KokoroSapiSynth             ▲ synth-request / synth_result
-  └──────────────────────────────────────────▶ Rust pipe_server.rs
-                                                    └ also: download + serve model
-                                                      (app-data dir, kokoro:// scheme)
-```
+> **One thing to know up front:** the kokoro-reader app does the actual speaking,
+> so **it must be running** whenever you want Kindle to read aloud. Think of it as
+> the engine Kindle plugs into.
 
-The app's webview is the **only** place audio is produced. The Rust backend
-downloads the model on first run, serves it to the webview, and hosts the named
-pipe that bridges Kindle's SAPI engine to that webview. **The app must be running
-for Kindle to speak.**
+## Install
 
-## How Kindle reads with Kokoro (the engine chain)
+1. Download the latest installer from the
+   [**Releases**](https://github.com/phc260/kokoro-reader/releases) page (the
+   `.exe` / `.msi` under the newest version).
+2. Run it. Installation needs administrator rights — it registers the Kokoro
+   voice with Windows and (if Kindle is installed) sets Kokoro as Kindle's Read
+   Aloud voice automatically.
+3. Launch **kokoro-reader**. On first run it downloads the voice model
+   (~430 MB) — a one-time setup wizard walks you through it. After that it works
+   fully offline.
 
-The trick is letting a 32-bit app drive GPU TTS that lives in a *different*,
-64-bit process. It does **not** connect to anything in the networking sense —
-COM loads our DLL straight into Kindle and calls its functions:
+A modern GPU is recommended (the app uses WebGPU). On machines without it, it
+falls back to a slower CPU mode automatically.
 
-1. **SAPI5 is a registry-discovered COM plugin.** `DllRegisterServer` (`Dll.cpp`)
-   writes `CLSID\{guid}\InprocServer32` → the DLL's path, and a voice token
-   `…\Speech\Voices\Tokens\KokoroTTS` whose `CLSID` points back at that GUID. The
-   32-bit `regsvr32` lands these in `WOW6432Node`, the view 32-bit Kindle reads.
-2. **Kindle loads the DLL in-process.** It resolves its default voice token →
-   CLSID → `CoCreateInstance(CLSCTX_INPROC_SERVER)` → COM `LoadLibrary`s
-   `KokoroSapi.dll` into *Kindle's* address space and calls `ISpTTSEngine::Speak`.
-   This is why the engine **must be x86** (matching Kindle) and a native COM DLL —
-   a webview/JS thing can't be loaded this way, and it can't be merged into the
-   x64 app.
-3. **The DLL is a thin shim → the app.** `Speak` sends the *whole* utterance over
-   the pipe `\\.\pipe\KokoroSapiSynth` (`WorkerProtocol.h`) in one `'S'` request
-   (`[rate][textBytes][text]`) and gets back a **stream** of PCM frames
-   (`[nSamples][gain][f32…]`, ended by a `kStreamEnd`/`kSynthError` marker).
-   `pipe_server.rs` owns the chunking: it splits the text, renders each chunk in
-   the webview (kokoro-js on **WebGPU**) and streams the PCM back; the engine just
-   writes each frame to Kindle's audio site.
-4. **Default-voice selection (MSIX).** Kindle plays whichever token equals
-   `DefaultTokenId` — and because it's sandboxed, that value lives in its
-   **private hive** (`…\Packages\AMZNKindle…\SystemAppData\Helium\User.dat`), not
-   real HKCU. Point it at Kokoro: stop Kindle, `reg load` the hive, set
-   `Software\Microsoft\Speech\Voices\DefaultTokenId` to the `KokoroTTS` token,
-   `reg unload`. `kindle-voice-guard.ps1 -Set kokoro|david` automates this; the
-   installer runs it at install time, and the app's **Microsoft/Kokoro toggle**
-   re-runs it elevated (UAC) on demand. The chosen voice is recorded in the
-   webview's `localStorage` (`kindle-agency`) so the toggle initializes to the
-   last-set state.
+## Using the reader
 
-**Streaming.** `pipe_server.rs` synthesizes **sentence by sentence** — a small
-first chunk (fast first sound) then N-sentence chunks (user-tunable via the
-`tts-chunk` setting) — with a **depth-1 prefetch pipeline**: chunk N+1 synthesizes
-while chunk N streams back, bounded by pipe backpressure. The engine writes each
-frame to the host in ~250 ms blocks, so there's no gap at chunk boundaries and
-`SPVES_ABORT` stops playback promptly (it closes the pipe, which cancels the rest
-of the stream). (Gaps *between Kindle pages* are Kindle's own page-turn time —
-each page is a fresh `Speak` whose text we can't see in advance.)
+1. Paste or type text into the box.
+2. Pick a **narrator** from the dropdown (different accents and voices).
+3. Adjust **Speed** and **Volume** to taste. Click the **volume icon** to
+   mute/unmute instantly.
+4. Press **Play**. Press again to stop.
 
-## Layout
+Your narrator, speed, and volume choices are remembered between sessions.
 
-| Path | What |
-|---|---|
-| `src/` | React frontend; `tts.worker.ts` (kokoro-js Web Worker), `tts.ts` (client; `synthesize` / `synthesizeRaw`), `bridge.ts` (SAPI bridge listener; reads narrator/speed/gain from `localStorage`), `voices.ts` |
-| `src-tauri/src/lib.rs` | Model download/verify + `kokoro://` asset server + `set_kindle_voice` (UAC voice-guard) |
-| `src-tauri/src/pipe_server.rs` | Named-pipe server bridging the SAPI engine to webview synthesis; owns text chunking + the prefetch pipeline |
-| `src-tauri/model-manifest.json` | Files the app downloads from HF (paths + sizes + SHA-256); kept in sync with `src/voices.ts` |
-| `kokoro-sapi/src/` | The x86 SAPI engine: `Dll.cpp`, `KokoroTTSEngine.cpp`, `WorkerClient.cpp`, `WorkerProtocol.h` (thin COM shim + pipe client, no deps) |
-| `kokoro-sapi/build.ps1` | Builds the x86 engine (NMake via vcvarsall) |
-| `kokoro-sapi/*.ps1` | `test-speak.ps1` (SAPI smoke test), `kindle-voice-guard.ps1` (hive patch), `switch-voice.ps1` |
+## Reading Kindle books with Kokoro
 
-## Building
+1. Make sure **kokoro-reader is running** (it's the voice engine — no app, no
+   sound).
+2. In the app, use the **Microsoft / Kokoro** toggle to choose which voice Kindle
+   uses. Switching to **Kokoro** prompts for administrator rights (Windows
+   requires this to change Kindle's voice). Switch back to **Microsoft** anytime.
+3. **Reopen Kindle** after switching so it picks up the new voice.
+4. In Kindle, start **Read Aloud** as usual — it now speaks with Kokoro.
 
-Prerequisites: [bun](https://bun.sh), Rust, and (for the SAPI voice) Visual
-Studio with the **x86** MSVC toolchain + CMake.
+The installer sets this up for you the first time; the in-app toggle is for
+switching back and forth later.
 
-```powershell
-# Reader app
-bun install
-bun run tauri dev        # also serves the SAPI pipe while running
+### Tuning Kindle playback
 
-# SAPI engine (x86) — thin shim, no third-party deps
-.\kokoro-sapi\build.ps1
+The app exposes a few sliders that affect how Kindle narration streams. Sensible
+defaults are set, but if you want to tune:
 
-# Register the voice (ELEVATED prompt; the 32-bit regsvr32 is the one that matters)
-C:\Windows\SysWOW64\regsvr32.exe "kokoro-sapi\build\KokoroSapi.dll"
-```
+- **Sentences per chunk** — higher is smoother but takes slightly longer to start
+  each chunk.
+- **Pacing lead** — how much audio stays buffered ahead. **Lower = volume/mute
+  changes take effect faster**, but set it too low and you may hear gaps or
+  stutter. Lower it until you hear gaps, then back off a notch. The right value
+  depends on how fast your machine synthesizes.
+- **Sub-frame size** — how finely volume is re-checked. Smaller = slightly snappier
+  volume response, but going much smaller than the pacing lead just adds overhead
+  for no real benefit.
 
-The TTS model (~430 MB: `onnx/model.onnx` for WebGPU, `onnx/model_quantized.onnx`
-for the wasm fallback, voices, config/tokenizer) is **downloaded by the app** on
-first run into its app-data dir — there's a setup wizard; no manual asset step.
+## Troubleshooting
 
-## Kindle for PC notes
+- **Kindle is silent / no Read Aloud sound** — the kokoro-reader app isn't
+  running. Start it and try again. (There's no fallback voice by design.)
+- **Kindle reverted to the old robotic voice** — a Kindle update can reset its
+  voice. Open kokoro-reader and flip the Microsoft/Kokoro toggle back to Kokoro,
+  then reopen Kindle.
+- **A switch didn't take effect** — fully close and reopen Kindle after changing
+  the voice.
+- **First launch is slow** — that's the one-time model download (~430 MB).
+  Subsequent launches are fast and offline.
 
-- Kindle is **32-bit MSIX**; the engine must be x86, registered under
-  `WOW6432Node` (the 32-bit `regsvr32` does this), and its default voice patched
-  in the package hive (above). The installer patches it to Kokoro at install time
-  and reverts it to Microsoft David on uninstall (so Kindle isn't left pointing at
-  a removed token); the app's Microsoft/Kokoro toggle re-runs
-  `kindle-voice-guard.ps1` on demand; re-run it manually if a Kindle update resets
-  the voice. Reopen Kindle after a switch for it to take effect.
-- **The app must be running** when Kindle reads — it's the synthesizer. If it
-  isn't, the voice is silent (the shim has no local fallback by design).
-- Don't move/delete `kokoro-sapi/` — the registered token references the DLL by
-  path.
+## How it works
+
+The interesting part is letting 32-bit Kindle narrate with GPU TTS that lives in
+a separate 64-bit process: a thin x86 COM voice plugin loads inside Kindle and
+forwards each utterance over a named pipe to the kokoro-reader app, which
+synthesizes on WebGPU and streams the audio back.
+
+If you're curious about the engine chain, the wire protocol, the Kindle voice
+registry/hive details, or want to **build from source**, see
+[**ARCHITECTURE.md**](ARCHITECTURE.md).
