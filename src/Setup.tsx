@@ -11,7 +11,7 @@ import {
   Link,
   Typography,
 } from "@mui/material";
-import CheckCircleIcon from "@mui/icons-material/CheckCircle";
+import CheckCircleIcon from "@mui/icons-material/CheckCircleRounded";
 
 interface DownloadProgress {
   downloaded: number;

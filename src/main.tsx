@@ -5,6 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import App from "./App";
 import Setup from "./Setup";
 import { startSapiBridge } from "./bridge";
+import { ColorModeProvider } from "./theme";
 
 // Serve Kindle's SAPI synth requests via WebGPU for the lifetime of the app.
 startSapiBridge();
@@ -28,11 +29,13 @@ function AppGate() {
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
-    <HashRouter>
-      <Routes>
-        <Route path="/" element={<AppGate />} />
-        <Route path="/setup" element={<Setup />} />
-      </Routes>
-    </HashRouter>
+    <ColorModeProvider>
+      <HashRouter>
+        <Routes>
+          <Route path="/" element={<AppGate />} />
+          <Route path="/setup" element={<Setup />} />
+        </Routes>
+      </HashRouter>
+    </ColorModeProvider>
   </React.StrictMode>,
 );

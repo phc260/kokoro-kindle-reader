@@ -7,6 +7,7 @@ import {
   FormControl,
   IconButton,
   ListSubheader,
+  Menu,
   MenuItem,
   Select,
   Slider,
@@ -15,19 +16,24 @@ import {
   Tooltip,
   Typography,
 } from "@mui/material";
-import GraphicEqIcon from "@mui/icons-material/GraphicEq";
-import PlayArrowIcon from "@mui/icons-material/PlayArrow";
-import NotesIcon from "@mui/icons-material/Notes";
-import TimerIcon from "@mui/icons-material/Timer";
-import GrainIcon from "@mui/icons-material/Grain";
-import RecordVoiceOverIcon from "@mui/icons-material/RecordVoiceOver";
-import SpeedIcon from "@mui/icons-material/Speed";
-import StopIcon from "@mui/icons-material/Stop";
-import VolumeUpIcon from "@mui/icons-material/VolumeUp";
-import VolumeOffIcon from "@mui/icons-material/VolumeOff";
+import Brightness7Icon from "@mui/icons-material/Brightness7Rounded";
+import Brightness4Icon from "@mui/icons-material/Brightness4Rounded";
+import ContrastIcon from "@mui/icons-material/ContrastRounded";
+import ThermostatIcon from "@mui/icons-material/ThermostatRounded";
+import GraphicEqIcon from "@mui/icons-material/GraphicEqRounded";
+import PlayArrowIcon from "@mui/icons-material/PlayArrowRounded";
+import NotesIcon from "@mui/icons-material/NotesRounded";
+import TimerIcon from "@mui/icons-material/TimerRounded";
+import GrainIcon from "@mui/icons-material/GrainRounded";
+import RecordVoiceOverIcon from "@mui/icons-material/RecordVoiceOverRounded";
+import SpeedIcon from "@mui/icons-material/SpeedRounded";
+import StopIcon from "@mui/icons-material/StopRounded";
+import VolumeUpIcon from "@mui/icons-material/VolumeUpRounded";
+import VolumeOffIcon from "@mui/icons-material/VolumeOffRounded";
 import { invoke } from "@tauri-apps/api/core";
 import { initTTS, stopTTS, synthesize } from "./tts";
 import { VOICES, loadVoice, voiceIntro } from "./voices";
+import { useColorMode } from "./theme";
 import "./App.css";
 
 type Backend = "webgpu" | "wasm";
@@ -104,6 +110,13 @@ function App() {
   );
   const kokoro = agency === "kokoro";
   const [error, setError] = useState("");
+  // App-wide light/dark theme + page warmth (see theme.tsx).
+  const { mode, toggle: toggleColorMode, temperature, setTemperature } =
+    useColorMode();
+  // Anchor for the top-right Appearance menu (light/dark + temperature).
+  const [appearanceAnchor, setAppearanceAnchor] = useState<HTMLElement | null>(
+    null,
+  );
 
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -217,6 +230,69 @@ function App() {
 
   return (
     <Box sx={{ display: "flex", flexDirection: "column", gap: 2, p: 3 }}>
+      <Box sx={{ display: "flex", justifyContent: "flex-end" }}>
+        <Tooltip title="Appearance">
+          <IconButton
+            aria-label="Appearance"
+            onClick={(e) => setAppearanceAnchor(e.currentTarget)}
+          >
+            <ContrastIcon fontSize="medium" />
+          </IconButton>
+        </Tooltip>
+        <Menu
+          anchorEl={appearanceAnchor}
+          open={Boolean(appearanceAnchor)}
+          onClose={() => setAppearanceAnchor(null)}
+          anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+          transformOrigin={{ vertical: "top", horizontal: "right" }}
+        >
+          <Box sx={{ px: 2.5, py: 1.5, width: 240 }}>
+            <Typography variant="subtitle2" gutterBottom>
+              Appearance
+            </Typography>
+            <ToggleButtonGroup
+              exclusive
+              size="small"
+              fullWidth
+              value={mode}
+              onChange={(_, val) => {
+                if (val && val !== mode) toggleColorMode();
+              }}
+              aria-label="Appearance"
+              sx={{ mb: 2 }}
+            >
+              <ToggleButton value="light" aria-label="Light mode">
+                <Brightness7Icon fontSize="small" sx={{ mr: 0.75 }} />
+                Light
+              </ToggleButton>
+              <ToggleButton value="dark" aria-label="Dark mode">
+                <Brightness4Icon fontSize="small" sx={{ mr: 0.75 }} />
+                Dark
+              </ToggleButton>
+            </ToggleButtonGroup>
+
+            <Typography variant="subtitle2" gutterBottom>
+              Color temperature
+            </Typography>
+            <Box sx={{ display: "flex", alignItems: "center", gap: 1.5 }}>
+              <Tooltip title="Cooler ← → warmer">
+                <ThermostatIcon fontSize="small" color="action" />
+              </Tooltip>
+              <Slider
+                size="small"
+                sx={SLIDER_SX}
+                aria-label="Color temperature"
+                value={temperature}
+                min={0}
+                max={1}
+                step={0.05}
+                onChange={(_, v) => setTemperature(v as number)}
+              />
+            </Box>
+          </Box>
+        </Menu>
+      </Box>
+
       <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
         <Tooltip title="Voice Mode">
           <GraphicEqIcon fontSize="medium" color="action" />
