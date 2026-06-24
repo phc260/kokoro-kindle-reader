@@ -7,8 +7,10 @@ Local, offline text-to-speech built on [Kokoro-82M](https://huggingface.co/onnx-
 with **one** synthesis engine — [`kokoro-js`](https://www.npmjs.com/package/kokoro-js)
 on **WebGPU**, in a Tauri webview — serving two front ends:
 
-1. **A desktop reader app** (Tauri 2 + React) — paste text, pick a narrator, listen.
-   A Microsoft/Kokoro toggle also switches Kindle's default voice from inside the app.
+1. **A desktop control panel** (Tauri 2 + React) — pick a narrator, tune speed and
+   volume, and audition it with a Preview button (there's no free-text reading box;
+   the app's job is choosing/hosting the voice, not reading pasted text). A
+   Microsoft/Kokoro toggle also switches Kindle's default voice from inside the app.
 2. **A SAPI5 voice for Windows** — "Kokoro (SAPI5)" appears in the system voice
    list, so apps like **Kindle for PC Read Aloud** narrate books with Kokoro. A
    thin **x86** COM DLL that Kindle loads in-process forwards each utterance over

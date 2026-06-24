@@ -5,7 +5,8 @@ Local, offline text-to-speech for Windows, powered by
 on your GPU. Nothing is sent to the cloud — the model runs entirely on your
 machine. kokoro-reader is two things in one app:
 
-1. **A reader app** — paste or type text, pick a narrator, and listen.
+1. **A voice control panel** — choose your narrator and tune speed and volume,
+   with a **Preview** button to hear how it sounds.
 2. **A natural voice for Kindle for PC** — "Kokoro (SAPI5)" shows up in Windows'
    voice list, so **Kindle's Read Aloud** narrates your books in Kokoro's voice
    instead of the robotic system one.
@@ -29,13 +30,21 @@ machine. kokoro-reader is two things in one app:
 A modern GPU is recommended (the app uses WebGPU). On machines without it, it
 falls back to a slower CPU mode automatically.
 
-## Using the reader
+## Using the app
 
-1. Paste or type text into the box.
-2. Pick a **narrator** from the dropdown (different accents and voices).
-3. Adjust **Speed** and **Volume** to taste. Click the **volume icon** to
-   mute/unmute instantly.
-4. Press **Play**. Press again to stop.
+The kokoro-reader window is a **control panel** for the Kokoro voice — it's where
+you choose and audition the voice, not a place to paste text. Whatever you set
+here is exactly what Kindle (and the SAPI voice) uses when it reads.
+
+1. **Voice Mode** — set the toggle at the top to **Kokoro**. This makes Kokoro the
+   active voice and enables the controls below. (Switching to Kokoro asks for
+   administrator rights — Windows requires that to change Kindle's voice.) Set it
+   back to **Microsoft** to hand Kindle its built-in voice.
+2. Pick a **Narrator** from the dropdown (different accents and voices).
+3. Adjust **Speed** and **Volume**. Click the **volume icon** to mute/unmute
+   instantly.
+4. Click **Preview** to hear the selected narrator read a short sample line; click
+   **Stop** to halt it.
 
 Your narrator, speed, and volume choices are remembered between sessions.
 
@@ -43,11 +52,11 @@ Your narrator, speed, and volume choices are remembered between sessions.
 
 1. Make sure **kokoro-reader is running** (it's the voice engine — no app, no
    sound).
-2. In the app, use the **Microsoft / Kokoro** toggle to choose which voice Kindle
-   uses. Switching to **Kokoro** prompts for administrator rights (Windows
-   requires this to change Kindle's voice). Switch back to **Microsoft** anytime.
+2. Set the **Voice Mode** toggle to **Kokoro** if it isn't already (see above).
+   Switch back to **Microsoft** anytime to restore Kindle's built-in voice.
 3. **Reopen Kindle** after switching so it picks up the new voice.
-4. In Kindle, start **Read Aloud** as usual — it now speaks with Kokoro.
+4. In Kindle, start **Read Aloud** as usual — it now speaks with Kokoro, using the
+   narrator, speed, and volume you set in the app.
 
 The installer sets this up for you the first time; the in-app toggle is for
 switching back and forth later.
