@@ -18,7 +18,10 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon"] }
+# Launch the app hidden at login so Kindle always has its synthesis host (the
+# app must be running for the SAPI pipe to answer). Registered in lib.rs.
+tauri-plugin-autostart = "2"
 serde = { version = "1", features = ["derive"] }
 # The Kokoro TTS model is not bundled: it is downloaded into the app data dir on
 # first run (see `download_model` in src/lib.rs) and served back to the webview

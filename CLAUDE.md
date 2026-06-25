@@ -133,8 +133,19 @@ in Kindle (or `test-speak.ps1`).
 ## Gotchas / invariants (do not rediscover these)
 
 - **The app must be running** or Kindle gets no audio (the engine's `Speak`
-  returns `E_FAIL` when the pipe is absent — there's no fallback). A tray /
-  auto-start mode is the planned fix.
+  returns `E_FAIL` when the pipe is absent — there's no fallback). To keep it
+  alive, **closing the window only hides it to the tray** (`lib.rs`
+  `on_window_event` → `prevent_close` + `hide`); Quit is only via the tray menu,
+  and the app **auto-starts hidden at login** (`tauri-plugin-autostart`, launched
+  with `--hidden`). This also fixes Kindle **fast-scrolling** pages when the app
+  is closed mid-Read-Aloud: a mid-session pipe disconnect makes each per-page
+  `Speak` fail instantly, which Kindle (already narrating) reads as "page done"
+  and races through the book. Hidden-window synthesis needs the Chromium
+  anti-throttle flags — set via `additionalBrowserArgs` in `tauri.conf.json`
+  (`--disable-background-timer-throttling --disable-renderer-backgrounding
+  --disable-backgrounding-occluded-windows`), which **replaces** Tauri's WebView2
+  defaults, so `--autoplay-policy=no-user-gesture-required` is included there to
+  keep Preview audio working.
 - **The engine must stay x86** — Kindle is a 32-bit process and loads the COM DLL
   *in-process by registry path*. It therefore **cannot** be merged into the x64
   app; it's a separate file, bundled + registered (via `installer-hooks.nsh` in the

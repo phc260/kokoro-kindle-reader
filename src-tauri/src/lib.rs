@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager};
 
 mod pipe_server;
@@ -408,16 +410,81 @@ fn set_kindle_voice(_kokoro: bool) -> Result<(), String> {
     Err("the SAPI voice is Windows-only".into())
 }
 
+// Bring the main window back from the tray (used by the tray menu + click).
+fn show_main_window(app: &AppHandle) {
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.show();
+        let _ = win.set_focus();
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        // Launch hidden at login (the app must stay running for Kindle to
+        // narrate). The "--hidden" arg lets setup boot straight to the tray.
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec!["--hidden"]),
+        ))
         // Shared state + named-pipe server bridging Kindle's SAPI engine to
         // webview WebGPU synthesis (see pipe_server.rs).
         .manage(std::sync::Arc::new(pipe_server::Bridge::default()))
         .setup(|app| {
             pipe_server::start(app.handle().clone());
+
+            // Always-on synthesis host for Kindle: register to auto-start at
+            // login (idempotent; Rust-side, so no JS capability needed).
+            {
+                use tauri_plugin_autostart::ManagerExt;
+                let _ = app.autolaunch().enable();
+            }
+
+            // System tray so closing the window (which only hides it) still
+            // leaves a way to restore or actually quit.
+            let show = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
+            let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&show, &quit])?;
+            TrayIconBuilder::new()
+                .icon(app.default_window_icon().unwrap().clone())
+                .tooltip("kokoro-kindle-reader")
+                .menu(&menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| match event.id().as_ref() {
+                    "show" => show_main_window(app),
+                    "quit" => app.exit(0), // the only real exit; stops the pipe
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        show_main_window(tray.app_handle());
+                    }
+                })
+                .build(app)?;
+
+            // Auto-start launches with "--hidden": boot straight to the tray.
+            // A manual launch leaves the window visible.
+            if std::env::args().any(|a| a == "--hidden") {
+                if let Some(win) = app.get_webview_window("main") {
+                    let _ = win.hide();
+                }
+            }
             Ok(())
+        })
+        // Closing the window hides it instead of exiting, so the SAPI pipe stays
+        // up and Kindle's Read Aloud doesn't fast-scroll on a mid-session
+        // disconnect. Quit is only via the tray menu.
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let _ = window.hide();
+                api.prevent_close();
+            }
         })
         .register_uri_scheme_protocol("kokoro", |ctx, request| {
             serve_model_file(ctx.app_handle(), request)

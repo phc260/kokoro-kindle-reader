@@ -14,7 +14,8 @@
       {
         "title": "kokoro-kindle-reader",
         "width": 360,
-        "height": 480
+        "height": 480,
+        "additionalBrowserArgs": "--disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows --autoplay-policy=no-user-gesture-required"
       }
     ],
     "security": {
