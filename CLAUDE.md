@@ -121,14 +121,24 @@ in Kindle (or `test-speak.ps1`).
   ordering (build DLL → `bun install` → `tauri build`) and uploads the NSIS/MSI on
   a `v*` tag. (`native.yml` still builds + uploads just the DLL for `kokoro-sapi/**`.)
 - `src-tauri/installer-hooks.nsh` (wired via `bundle.windows.nsis.installerHooks`) —
-  POSTINSTALL registers the DLL (`$WINDIR\SysWOW64\regsvr32.exe /s`, the 32-bit
-  one), then runs `kindle-voice-guard.ps1 -Set kokoro` to make Kokoro Kindle's
-  default voice (self-skips if Kindle's hive is absent); PREUNINSTALL first runs
-  `kindle-voice-guard.ps1 -Set david` (revert Kindle's default to Microsoft David
-  **before** the token is deleted, so its hive isn't left pointing `DefaultTokenId`
-  at a now-gone `KokoroTTS` token — runs while the guard still exists in
-  `resources\`), then `regsvr32 /u`. (No `models` dir / `controls.ini` seed — the
-  engine reads no on-disk settings.)
+  the installer is **`currentUser`** (per-user, out of `C:\Program Files`, runs
+  unelevated), so both hooks call **`voice-setup.ps1`**, which **self-elevates via
+  UAC** (the register/unregister write HKLM + `reg load` and need admin). POSTINSTALL
+  runs `voice-setup.ps1 -Action register`: it `regsvr32 /s`'s the DLL (32-bit
+  `$WINDIR\SysWOW64\regsvr32.exe`), then runs `kindle-voice-guard.ps1 -Set kokoro`
+  to make Kokoro Kindle's default voice (self-skips if Kindle's hive is absent);
+  PREUNINSTALL runs `voice-setup.ps1 -Action unregister`: `kindle-voice-guard.ps1
+  -Set david` first (revert Kindle's default to Microsoft David **before** the token
+  is deleted, so its hive isn't left pointing `DefaultTokenId` at a now-gone
+  `KokoroTTS` token — runs while the DLL + guard still exist in `resources\`), then
+  `regsvr32 /u`. Back in the (unelevated) uninstaller it then drops the autostart Run value
+  (`kokoro-kindle-reader`) and **offers** to delete the per-user app data — the
+  downloaded model (`$APPDATA\com.phc260.kokoro-kindle-reader`) and the WebView2
+  cache (`$LOCALAPPDATA\…\EBWebView`). That prompt **defaults to "keep"** (`/SD
+  IDNO`) precisely because Tauri's NSIS **reuses this uninstaller during an
+  upgrade**: a silent run must not wipe the hundreds-of-MB model and force a
+  re-download on every version bump; only an interactive uninstall deletes it.
+  (No `models` dir / `controls.ini` seed — the engine reads no on-disk settings.)
 
 ## Gotchas / invariants (do not rediscover these)
 
@@ -157,10 +167,21 @@ in Kindle (or `test-speak.ps1`).
   requests. (Custom `invoke` commands work without a capability; core ones don't.)
 - **Registration → `WOW6432Node`.** The 32-bit `regsvr32` writes
   `HKLM\SOFTWARE\Classes\…` into the WOW64 view — exactly what 32-bit Kindle reads.
-- **Installer must be `perMachine` (elevated).** `DllRegisterServer` writes HKLM,
-  so the NSIS hook can only register when elevated — `installMode: perMachine` in
-  `tauri.conf.json` forces that. Switch it to `currentUser` and registration
-  silently fails (no admin, no HKLM write).
+- **Installer is `currentUser`, registration self-elevates.** `installMode:
+  currentUser` (`tauri.conf.json`) keeps the app **out of `C:\Program Files`** (it
+  installs per-user into `$LOCALAPPDATA\…\Programs`) and runs the installer
+  **unelevated**. But `DllRegisterServer` writes **HKLM** (WOW6432Node) and the
+  Kindle guard does `reg load`, both of which need admin — so the hooks don't call
+  `regsvr32`/the guard directly; they invoke `voice-setup.ps1`, which **relaunches
+  itself through UAC** (`Start-Process -Verb RunAs`) and does the privileged
+  register/unregister there. So an interactive install raises **one UAC prompt**.
+  (History: this was `perMachine` ≤0.1.7 — the whole installer elevated and called
+  `regsvr32`/the guard inline. Don't "simplify" by calling them straight from the
+  hooks again: under `currentUser` they'd run unelevated and the HKLM write +
+  `reg load` would silently fail.) Caveat: if UAC is satisfied with a **different**
+  admin account, the guard's `$env:LOCALAPPDATA` points at that admin's profile and
+  it won't find the installing user's Kindle hive (logs "hive not found", skips) —
+  same limitation the old elevated installer had.
 - **Kindle (MSIX) shadows HKCU.** Its SAPI default voice (`DefaultTokenId`) comes
   from the package hive
   (`…\Packages\AMZNKindle…\SystemAppData\Helium\User.dat`), not real HKCU. Patch
