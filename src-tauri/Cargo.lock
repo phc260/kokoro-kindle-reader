@@ -1921,7 +1921,7 @@ dependencies = [
 
 [[package]]
 name = "kokoro-kindle-reader"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "futures-util",
  "reqwest 0.12.28",

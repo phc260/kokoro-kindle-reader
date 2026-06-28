@@ -113,6 +113,13 @@ in Kindle (or `test-speak.ps1`).
   **Change it in both places.**
 
 ### Packaging / installer
+- **NSIS only — never the MSI.** `bundle.targets` is `["nsis"]`, not `"all"`.
+  The SAPI registration lives **entirely** in `installer-hooks.nsh`
+  (`NSIS_HOOK_POSTINSTALL` → `voice-setup.ps1 register`); WiX/MSI runs **no hooks**,
+  so an `.msi` install copies files but **never registers `KokoroTTS`** (Kindle then
+  can't narrate) and also ignores `installMode` (installs to `C:\Program Files`).
+  The two builds are indistinguishable until runtime, so shipping the MSI just hands
+  users a silently-broken installer — don't re-add `"msi"`/`"all"`.
 - `tauri.conf.json` `bundle.resources` is a **map**: it pulls the x86 DLL straight
   from `../kokoro-sapi/build/KokoroSapi.dll` into the bundle's `resources/` (along
   with `kindle-voice-guard.ps1`), so `kokoro-sapi\build.ps1` **must run before
