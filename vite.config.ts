@@ -40,9 +40,39 @@ const ortMjsPlugin = {
   },
 };
 
+// ONNX Runtime's emscripten glue (bundled into the worker via
+// @huggingface/transformers) carries a *fallback* wasm locator:
+//   new URL("ort-wasm-simd-threaded.jsep.wasm", import.meta.url)
+// Vite treats `new URL(<literal>, import.meta.url)` as an asset reference and
+// emits the 21 MB wasm into dist/assets/ — but at runtime ORT's locateFile is
+// overridden by `wasmPaths = "/"` (see tts.worker.ts), so that emitted copy is
+// never fetched; the real wasm is the one ortMjsPlugin copies to the site root.
+// Rewrite the fallback to that same root path so Vite stops emitting the dead
+// duplicate. Must run `pre`, before Vite's built-in asset/url plugin.
+const ortDropDeadWasmPlugin = {
+  name: "ort-drop-dead-wasm",
+  enforce: "pre" as const,
+  transform(code: string, id: string) {
+    if (!id.includes("onnxruntime-web") && !id.includes("@huggingface/transformers")) return;
+    if (!code.includes('new URL("ort-wasm-simd-threaded')) return null;
+    const out = code.replace(
+      /new URL\((["'])(ort-wasm-simd-threaded[^"']*\.wasm)\1,\s*import\.meta\.url\)/g,
+      (_m, _q, file) => JSON.stringify("/" + file),
+    );
+    return out === code ? null : { code: out, map: null };
+  },
+};
+
 // https://vite.dev/config/
 export default defineConfig(async () => ({
-  plugins: [react(), ortMjsPlugin],
+  plugins: [react(), ortDropDeadWasmPlugin, ortMjsPlugin],
+
+  // The ORT glue is bundled into the TTS *web worker*, and Vite builds workers
+  // with a separate plugin pipeline that does NOT inherit `plugins` above — so
+  // the dead-wasm rewrite must be registered here too or it never runs.
+  worker: {
+    plugins: () => [ortDropDeadWasmPlugin],
+  },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
