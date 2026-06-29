@@ -179,8 +179,25 @@ function post(msg: OutMsg, transfer?: Transferable[]) {
   else self.postMessage(msg);
 }
 
+// kokoro-js caches voice `.bin` responses in CacheStorage ("kokoro-voices",
+// keyed by the hardcoded HF URL) and short-circuits to that cache *before* our
+// patched fetch runs. If an earlier launch fetched a voice before its file had
+// finished downloading, an empty 404 body gets cached and then wins on every
+// later launch — surfacing as "Tensor's size(256) does not match data length(0)"
+// at warmup. The voice files are local, so re-reading them each launch is cheap;
+// just drop that cache before loading so the correct on-disk bytes are always used.
+async function clearVoiceCache(): Promise<void> {
+  try {
+    if (typeof caches !== "undefined") await caches.delete("kokoro-voices");
+  } catch (err) {
+    console.warn("[tts] could not clear voice cache:", err);
+  }
+}
+
 // Warm up the model immediately so the first verse is fast.
-getModel().catch((err) => post({ type: "error", id: -1, message: String(err) }));
+clearVoiceCache().then(() =>
+  getModel().catch((err) => post({ type: "error", id: -1, message: String(err) })),
+);
 
 self.addEventListener("message", (event: MessageEvent<InMsg>) => {
   const msg = event.data;
