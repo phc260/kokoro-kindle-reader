@@ -17,15 +17,31 @@ on **WebGPU**, in a Tauri webview — serving two front ends:
    a named pipe to the running app, which synthesizes on the GPU and returns
    audio.
 
-```
-Kindle.exe (x86, MSIX)                         kokoro-kindle-reader app (Tauri 2, x64)
-  │ classic SAPI5 (ISpVoice)                      React UI ──┐
-  ▼  loads in-process via COM                                │ kokoro-js on WebGPU
-KokoroSapi.dll  (x86 SAPI shim, connect-only)     webview ◀──┘   (the one engine)
-  │  named pipe \\.\pipe\KokoroSapiSynth             ▲ synth-request / synth_result
-  └──────────────────────────────────────────▶ Rust pipe_server.rs
-                                                    └ also: download + serve model
-                                                      (app-data dir, kokoro:// scheme)
+```mermaid
+flowchart TB
+  subgraph K["🪟 Kindle for PC · 32-bit (x86, MSIX)"]
+    direction LR
+    RA["Read Aloud<br/>SAPI5 · ISpVoice"]
+    DLL["KokoroSapi.dll<br/>x86 COM shim · connect-only"]
+    RA -->|"in-process COM<br/>ISpTTSEngine::Speak"| DLL
+  end
+
+  subgraph A["⚙️ kokoro-kindle-reader app · 64-bit (Tauri 2, x64)"]
+    direction LR
+    PIPE["pipe_server.rs<br/>named-pipe server · owns chunking"]
+    WV["webview · kokoro-js on WebGPU<br/>★ the one synthesis engine"]
+    RUST["lib.rs<br/>model download + kokoro:// asset server"]
+    PIPE -->|"emit · synth-request"| WV
+    WV -->|"synth_result · raw PCM"| PIPE
+    RUST -.->|"model · config · voices<br/>kokoro:// scheme"| WV
+  end
+
+  DLL <==>|"named pipe · KokoroSapiSynth<br/>'S' utterance → PCM frames"| PIPE
+
+  classDef engine fill:#ff4fa3,stroke:#b30059,color:#ffffff;
+  classDef shim fill:#1f6feb,stroke:#0b3d91,color:#ffffff;
+  class WV engine
+  class DLL,PIPE shim
 ```
 
 The app's webview is the **only** place audio is produced. The Rust backend
