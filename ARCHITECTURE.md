@@ -97,7 +97,7 @@ practical tuning advice.
 | `src-tauri/model-manifest.json` | Files the app downloads from HF (paths + sizes + SHA-256); kept in sync with `src/voices.ts` |
 | `kokoro-sapi/src/` | The x86 SAPI engine: `Dll.cpp`, `KokoroTTSEngine.cpp`, `WorkerClient.cpp`, `WorkerProtocol.h` (thin COM shim + pipe client, no deps) |
 | `kokoro-sapi/build.ps1` | Builds the x86 engine (NMake via vcvarsall) |
-| `kokoro-sapi/*.ps1` | `test-speak.ps1` (SAPI smoke test), `kindle-voice-guard.ps1` (hive patch), `switch-voice.ps1` |
+| `kokoro-sapi/*.ps1` | `test-speak.ps1` (SAPI smoke test), `kindle-voice-guard.ps1` (Kindle hive patch), `voice-setup.ps1` (self-elevating register/unregister wrapper the NSIS hooks call) |
 
 ## Building from source
 

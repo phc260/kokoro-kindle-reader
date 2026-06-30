@@ -85,10 +85,11 @@ in Kindle (or `test-speak.ps1`).
   the frontend (`src/bridge.ts`) folds in the localStorage narrator/speed and
   returns PCM through `synth_result` (correlated by id, a `oneshot` map). The PCM
   is streamed back to the engine **frame by frame** (`[nSamples][gain][f32…]`, then
-  a `kStreamEnd`/`kSynthError` marker); gain (`tts-gain`) and the chunk count
-  (`tts-chunk`) are read per request from the webview via the `gain-request` /
-  `chunk-request` events. While the app runs it owns the pipe; the engine just
-  connects.
+  a `kStreamEnd`/`kSynthError` marker); gain (`tts-gain`) is read per frame via the
+  `gain-request` event, and the streaming knobs (`tts-chunk` sentence count plus the
+  `tts-lead`/`tts-subframe` pacing) via the `stream-config-request` →
+  `stream_config_result` round-trip. While the app runs it owns the pipe; the engine
+  just connects.
 
 ### SAPI engine (`kokoro-sapi/src/`) — connect-only, ~700 lines, no deps
 - `Dll.cpp` — COM class factory + `DllRegisterServer`/`Unregister` (writes the
@@ -125,8 +126,9 @@ in Kindle (or `test-speak.ps1`).
   with `kindle-voice-guard.ps1`), so `kokoro-sapi\build.ps1` **must run before
   `tauri build`** or bundling fails.
 - `.github/workflows/installer.yml` — one `windows-latest` job that enforces that
-  ordering (build DLL → `bun install` → `tauri build`) and uploads the NSIS/MSI on
-  a `v*` tag. (`native.yml` still builds + uploads just the DLL for `kokoro-sapi/**`.)
+  ordering (build DLL → `bun install` → `tauri build`) and uploads the NSIS
+  installer on a `v*` tag. (`native.yml` still builds + uploads just the DLL for
+  `kokoro-sapi/**`.)
 - `src-tauri/installer-hooks.nsh` (wired via `bundle.windows.nsis.installerHooks`) —
   the installer is **`currentUser`** (per-user, out of `C:\Program Files`, runs
   unelevated), so both hooks call **`voice-setup.ps1`**, which **self-elevates via
@@ -206,13 +208,41 @@ in Kindle (or `test-speak.ps1`).
 - **The kokoro:// scheme URL is per-platform.** macOS/Linux `kokoro://localhost/`;
   Windows/Android `http(s)://kokoro.localhost/` (WebView2 has no bare schemes).
   `tts.worker.ts` derives it from `self.location.protocol` — don't hardcode it.
+- **Voice `.bin`s are *fetched*, not loaded from `node_modules` — and `tts.worker.ts`
+  both redirects and de-poisons that fetch.** kokoro-js hardcodes voice downloads
+  from a HuggingFace URL; in the browser it resolves them `caches` → `fetch` (its
+  Node `fs.readFile("../voices/*.bin")` branch is dead in the webview, so the
+  bundled `node_modules/kokoro-js/voices` is **never** used — runtime voices come
+  from `$APPDATA\…\voices\*.bin`). So the worker (1) patches `fetch` to rewrite that
+  HF URL to the local `kokoro://…/voices/*.bin` (this is what makes synthesis
+  offline), and (2) calls `caches.delete("kokoro-voices")` on startup. (2) is
+  load-bearing: kokoro-js caches voice responses in CacheStorage keyed by the HF URL
+  and short-circuits to that cache *before* the patched fetch — so an empty 404 body
+  cached during the first-run download race wins every later launch, surfacing as
+  `Tensor's size(256) does not match data length(0)` at warmup. Clearing it forces a
+  re-read of the correct on-disk bytes each launch.
+- **ORT wasm is served from `/`, `@huggingface/transformers` is pinned, and a Vite
+  plugin drops a dead wasm copy.** `tts.worker.ts` sets `wasmPaths = "/"`, so
+  `vite.config.ts` serves/copies onnxruntime-web's
+  `ort-wasm-simd-threaded[.jsep].{mjs,wasm}` to the site root (dev middleware +
+  build-time copy). Two traps: (a) the **direct** transformers dep is pinned to
+  `3.8.1` — kokoro-js bundles its own `transformers@^3.5.1` (→3.8.1, ORT 1.22), so
+  floating ours to 4.x (which `bun update` will do) pulls ORT 1.26, **both** bloating
+  the wasm and skewing the served wasm against the loader kokoro-js actually runs;
+  keep the two equal. (b) ORT's emscripten glue carries a
+  `new URL("…jsep.wasm", import.meta.url)` *fallback* that Vite would otherwise emit
+  as a never-fetched ~21 MB hashed asset — `ortDropDeadWasmPlugin` (registered in
+  both `plugins` **and** `worker.plugins`, since the glue bundles into the TTS
+  worker) rewrites it to the root path so only the two real wasm files ship.
 - **App ↔ engine settings live in webview `localStorage`, not a file.** The
   engine sends only the host's rate-derived `rate` over the pipe; the webview owns
   the narrator (`tts-voice`), speed (`tts-speed`), gain (`tts-gain`), per-chunk
-  sentence count (`tts-chunk`) and the `kindle-agency` record. The webview reads
-  these per request via three event handlers in `bridge.ts`: `synth-request` folds
-  `rate × tts-speed` into the synthesis speed and returns **raw** PCM; `gain-request`
-  reports `tts-gain`; `chunk-request` reports `tts-chunk`. Gain rides back to the
+  sentence count (`tts-chunk`), the Kindle-path pacing knobs (`tts-lead`/`tts-subframe`)
+  and the `kindle-agency` record. The webview reads these per request via three event
+  handlers in `bridge.ts`: `synth-request` folds `rate × tts-speed` into the synthesis
+  speed and returns **raw** PCM; `gain-request` reports `tts-gain`;
+  `stream-config-request` reports the streaming knobs (`tts-chunk` + `tts-lead` +
+  `tts-subframe`) via `stream_config_result`. Gain rides back to the
   engine **in each PCM frame** and the engine applies it × the host's volume slider
   when it converts to int16 (so a slider move lands within the playing chunk, not
   frozen into prefetched samples); `tts-chunk` drives `split_text` in

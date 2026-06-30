@@ -55,8 +55,8 @@ jobs:
         run: bun install --frozen-lockfile
 
       # Runs beforeBuildCommand (bun run build -> tsc + vite), bundles the
-      # NSIS/MSI installers (embedding KokoroSapi.dll), then
-      # uploads them to a draft GitHub Release. On a tag push the release uses
+      # NSIS installer (embedding KokoroSapi.dll; bundle.targets is nsis-only), then
+      # uploads it to a draft GitHub Release. On a tag push the release uses
       # that tag; a manual run derives the tag from the version (__VERSION__).
       - name: Build and publish release
         uses: tauri-apps/tauri-action@v0
@@ -67,7 +67,7 @@ jobs:
           releaseName: kokoro-kindle-reader ${{ github.ref_type == 'tag' && github.ref_name || 'v__VERSION__' }}
           releaseBody: |
             Local, offline Kokoro-82M text-to-speech — Windows installer
-            (.msi / NSIS .exe). Bundles the "Kokoro (SAPI5)" voice engine so
+            (NSIS `_x64-setup.exe`). Bundles the "Kokoro (SAPI5)" voice engine so
             32-bit hosts like Kindle for PC Read Aloud can narrate with Kokoro.
 
             The app downloads the Kokoro model on first launch; it is not

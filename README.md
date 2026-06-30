@@ -1,9 +1,21 @@
+<div align="center">
+
+<img src="src-tauri/icons/128x128@2x.png" alt="Kokoro Kindle Reader" width="120" height="120">
+
 # Kokoro Kindle Reader
 
-Local, offline text-to-speech for Windows, powered by
-[Kokoro-82M](https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX) running
-on your GPU. Nothing is sent to the cloud — the model runs entirely on your
-machine. kokoro-kindle-reader is two things in one app:
+**Give Kindle for PC a natural voice — local, offline Kokoro-82M text-to-speech, running on your own GPU.**
+
+[![Platform: Windows](https://img.shields.io/badge/platform-Windows-0078D6?logo=windows&logoColor=white)](#install)
+[![TTS: Kokoro-82M](https://img.shields.io/badge/TTS-Kokoro--82M-ff69b4)](https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX)
+[![100% Offline](https://img.shields.io/badge/100%25-offline-2ea44f)](#)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Latest release](https://img.shields.io/github/v/release/phc260/kokoro-kindle-reader?include_prereleases&label=release)](https://github.com/phc260/kokoro-kindle-reader/releases)
+
+</div>
+
+Nothing is sent to the cloud — [Kokoro-82M](https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX)
+runs entirely on your machine. kokoro-kindle-reader is two things in one app:
 
 1. **A voice control panel** — choose your narrator and tune speed and volume,
    with a **Preview** button to hear how it sounds.
@@ -19,10 +31,10 @@ machine. kokoro-kindle-reader is two things in one app:
 
 1. Download the latest installer from the
    [**Releases**](https://github.com/phc260/kokoro-kindle-reader/releases) page (the
-   `.exe` / `.msi` under the newest version).
-2. Run it. Installation needs administrator rights — it registers the Kokoro
-   voice with Windows and (if Kindle is installed) sets Kokoro as Kindle's Read
-   Aloud voice automatically.
+   `_x64-setup.exe` under the newest version).
+2. Run it. It installs just for you (no machine-wide changes), then raises a single
+   Windows UAC prompt to register the Kokoro voice and — if Kindle is installed —
+   set Kokoro as Kindle's Read Aloud voice automatically.
 3. Launch **kokoro-kindle-reader**. On first run it downloads the voice model
    (~430 MB) — a one-time setup wizard walks you through it. After that it works
    fully offline.
