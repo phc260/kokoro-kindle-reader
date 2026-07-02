@@ -448,7 +448,7 @@ pub fn run() {
             let menu = Menu::with_items(app, &[&show, &quit])?;
             TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
-                .tooltip("kokoro-kindle-reader")
+                .tooltip("Kokoro Kindle Reader")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id().as_ref() {
