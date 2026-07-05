@@ -1,0 +1,90 @@
+name: Headless installer (kokoro-host + panel)
+
+# Builds the WebView2-free edition's installer: the tray host (kokoro-host) + the
+# Slint settings panel (kokoro-panel) + the native Dawn WebGPU runtime + the
+# unchanged x86 KokoroSapi.dll, packaged by packaging/build-installer.ps1 (makensis).
+#
+# Separate from installer.yml (the Tauri/WebView2 edition) so `main` keeps shipping
+# that while this edition matures on the headless-tray branch. Windows-only.
+#
+# NOTE: not yet validated on a real runner — the kokoro-worker C++ deps are
+# provisioned here by fetch-deps.ps1 (ORT release zip + onnxruntime-webgpu wheel +
+# an espeak-ng x64 build), which was verified locally but not end-to-end in CI.
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['headless-v*']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: headless-installer-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build headless installer
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          lfs: true # src-tauri/icons/icon.ico is in Git LFS (bundled + shortcut icon)
+
+      - name: Set up Python (for the onnxruntime-webgpu wheel)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            kokoro-host
+            kokoro-panel
+
+      - name: Install NSIS
+        run: choco install nsis -y --no-progress
+
+      # Provision kokoro-worker/third_party (ORT headers/lib + Dawn runtime DLLs +
+      # espeak-ng x64). Downloads + an espeak build; the slowest step.
+      - name: Provision native deps (ORT + espeak)
+        shell: pwsh
+        run: ./kokoro-worker/tools/fetch-deps.ps1
+
+      # x86 SAPI engine (separate MSVC x86 toolchain, in its own cmd subshell).
+      - name: Build SAPI engine (x86)
+        shell: pwsh
+        run: ./kokoro-sapi/build.ps1
+
+      # Release-build both crates, stage the bundle, run makensis.
+      - name: Build installer
+        shell: pwsh
+        run: ./packaging/build-installer.ps1
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: kokoro-kindle-reader-headless-setup
+          path: packaging/*-setup.exe
+          if-no-files-found: error
+
+      # On a headless-v* tag, also publish a draft GitHub Release.
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/headless-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: packaging/*-setup.exe
+          draft: true
+          name: ${{ github.ref_name }} (headless)
+          body: |
+            WebView2-free edition of Kokoro Kindle Reader — a headless tray host
+            (native Dawn WebGPU synthesis) + a native Slint settings panel.
+            Bundles the "Kokoro (SAPI5)" x86 engine so Kindle for PC can narrate.
+
+            The Kokoro model downloads on first run (open Settings from the tray).
+            The app must stay running (tray) for Kindle to speak.
