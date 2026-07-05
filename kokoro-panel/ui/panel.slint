@@ -1,4 +1,4 @@
-import { Button, ComboBox, Slider, CheckBox, ProgressIndicator } from "std-widgets.slint";
+import { Button, ComboBox, Slider, CheckBox, ProgressIndicator, Palette } from "std-widgets.slint";
 
 // A labelled slider row: title on the left, live value on the right, slider below.
 component SliderRow inherits VerticalLayout {
@@ -6,6 +6,7 @@ component SliderRow inherits VerticalLayout {
     in property <string> value-text;
     in property <float> minimum;
     in property <float> maximum;
+    in property <float> step;
     in-out property <float> value;
     callback changed(float);
     spacing: 3px;
@@ -17,20 +18,61 @@ component SliderRow inherits VerticalLayout {
     Slider {
         minimum: root.minimum;
         maximum: root.maximum;
+        step: root.step;
         value: root.value;
-        changed(v) => { root.value = v; root.changed(v); }
+        // Slint's `step` only affects keyboard/scroll, not mouse drag — snap the
+        // dragged value to the nearest step (relative to minimum) ourselves.
+        changed(v) => {
+            root.value = root.step > 0
+                ? root.minimum + Math.round((v - root.minimum) / root.step) * root.step
+                : v;
+            root.changed(root.value);
+        }
+    }
+}
+
+// A tiny animated voice meter: six rounded bars that ripple up and down like an
+// audio equalizer. Driven by `animation-tick()`, so it animates only while it's on
+// screen (the "ready" state) and costs nothing otherwise. Each bar is phase-offset
+// from its neighbour, giving a travelling-wave look.
+component Waveform inherits Rectangle {
+    min-width: 46px;
+    max-width: 46px;
+    min-height: 20px;
+    max-height: 20px;
+    // Bar colour follows its height: a short bar sits at the base green, a tall one
+    // lifts toward a light green (mix factor = weight of `lo`, so 1 = short/lo).
+    property <color> lo: #2e8b40;
+    property <color> hi: #7cfc00; // Lawn Green
+    for _bar[i] in [0, 1, 2, 3, 4, 5]: Rectangle {
+        width: 4px;
+        x: i * 7px;
+        // 1.3 cycles/sec, each bar 52° behind the last → a rolling wave.
+        height: 5px + 13px * (1 + Math.sin(animation-tick() / 1s * 468deg + i * 52deg)) / 2;
+        y: parent.height - self.height;
+        border-radius: 2px;
+        background: root.lo.mix(root.hi, 1.0 - (self.height - 5px) / 13px);
     }
 }
 
 export component AppWindow inherits Window {
     title: "Kokoro Kindle Reader — Settings";
-    preferred-width: 430px;
+    icon: @image-url("../../src-tauri/icons/128x128.png");
+    preferred-width: 360px;
     preferred-height: 600px;
-    min-width: 380px;
+    // Floor of the narrator row: accent (100, fits "American") + gender (90,
+    // fits "Female") + name (~120 min before its chevron clips) + 16 spacing +
+    // 40 padding (symmetric 20px each side). Narrower and the chevron spills.
+    min-width: 360px;
 
     // --- state (set from Rust) ---
-    in property <[string]> voices;
-    in-out property <int> voice-index;
+    // Narrator as three cascading dropdowns: accent x gender selects the name list.
+    in property <[string]> accents;
+    in property <[string]> genders;
+    in property <[string]> names;
+    in-out property <int> accent-index;
+    in-out property <int> gender-index;
+    in-out property <int> name-index;
     in-out property <float> speed;
     in-out property <float> gain;
     in-out property <float> chunk;
@@ -40,17 +82,19 @@ export component AppWindow inherits Window {
     in property <float> download-frac;
     in property <string> download-label;
     in property <bool> verifying;
+    in property <float> verify-frac;
     in property <bool> previewing;
     in property <bool> kindle-busy;
     in property <string> status;
 
     // --- events (handled in Rust) ---
-    callback narrator-changed(int);
+    callback accent-changed(int);
+    callback gender-changed(int);
+    callback name-changed(int);
     callback speed-changed(float);
     callback gain-changed(float);
     callback chunk-changed(float);
     callback download-clicked();
-    callback verify-clicked();
     callback kindle-toggled(bool);
     callback preview-clicked();
 
@@ -59,21 +103,13 @@ export component AppWindow inherits Window {
         spacing: 16px;
         alignment: start;
 
-        // Header
-        VerticalLayout {
-            spacing: 3px;
-            Text { text: "Kokoro Kindle Reader"; font-size: 22px; font-weight: 800; }
-            Text {
-                text: "Local, offline narration for Kindle.";
-                font-size: 12px;
-                color: #8a8a8a;
-            }
-        }
-
-        // Model status card
+        // Model status card — a subtle surface that adapts to the light/dark theme
+        // (a faint tint of the foreground over the window background).
         Rectangle {
-            background: #f4f4f6;
-            border-radius: 10px;
+            background: Palette.foreground.transparentize(0.94);
+            border-radius: 2px;
+            border-width: 1px;
+            border-color: Palette.border;
             VerticalLayout {
                 padding: 14px;
                 spacing: 8px;
@@ -82,7 +118,17 @@ export component AppWindow inherits Window {
                     Text { text: root.download-label; font-size: 12px; }
                     ProgressIndicator { progress: root.download-frac; height: 6px; }
                 }
-                if !root.downloading && !root.model-ready: HorizontalLayout {
+                // Startup integrity check: a determinate bar of how much of the
+                // model/voice data has been hashed so far.
+                if !root.downloading && root.verifying: VerticalLayout {
+                    spacing: 8px;
+                    Text {
+                        text: "Checking model files — \{Math.round(root.verify-frac * 100)}%";
+                        font-size: 12px;
+                    }
+                    ProgressIndicator { progress: root.verify-frac; height: 6px; }
+                }
+                if !root.downloading && !root.verifying && !root.model-ready: HorizontalLayout {
                     spacing: 10px;
                     Text {
                         text: "Model not downloaded (~420 MB).";
@@ -92,40 +138,57 @@ export component AppWindow inherits Window {
                     }
                     Button { text: "Download"; primary: true; clicked => { root.download-clicked(); } }
                 }
-                if !root.downloading && root.model-ready: HorizontalLayout {
+                if !root.downloading && !root.verifying && root.model-ready: HorizontalLayout {
                     spacing: 10px;
+                    alignment: start;
+                    Waveform { }
                     Text {
-                        text: "● Model ready";
-                        color: #2e8b40;
+                        text: "Voice Engine Ready";
+                        color: #7cfc00; // Lawn Green
+                        font-weight: 600;
                         vertical-alignment: center;
-                        horizontal-stretch: 1;
-                    }
-                    Button {
-                        text: root.verifying ? "Verifying…" : "Verify";
-                        enabled: !root.verifying;
-                        clicked => { root.verify-clicked(); }
                     }
                 }
             }
         }
 
-        // Narrator
+        // Narrator: accent x gender -> name, all three on one row.
         VerticalLayout {
-            spacing: 4px;
-            Text { text: "NARRATOR"; font-size: 11px; font-weight: 700; color: #9a9a9a; }
-            ComboBox {
-                model: root.voices;
-                current-index <=> root.voice-index;
-                selected => { root.narrator-changed(self.current-index); }
+            spacing: 6px;
+            Text { text: "Narrator"; font-size: 13px; vertical-alignment: center; }
+            HorizontalLayout {
+                spacing: 8px;
+                // Accent / gender are short — size them to content; the name list
+                // takes the remaining width.
+                ComboBox {
+                    model: root.accents;
+                    current-index <=> root.accent-index;
+                    width: 100px;
+                    selected => { root.accent-changed(self.current-index); }
+                }
+                ComboBox {
+                    model: root.genders;
+                    current-index <=> root.gender-index;
+                    width: 90px;
+                    selected => { root.gender-changed(self.current-index); }
+                }
+                ComboBox {
+                    model: root.names;
+                    current-index <=> root.name-index;
+                    horizontal-stretch: 1;
+min-width: 100px;
+                    selected => { root.name-changed(self.current-index); }
+                }
             }
         }
 
         // Sliders
         SliderRow {
             label: "Speed";
-            value-text: "\{Math.round(root.speed * 100) / 100}×";
+            value-text: "\{Math.round(root.speed * 100)}%";
             minimum: 0.5;
             maximum: 2.0;
+            step: 0.05; // 5% increments
             value <=> root.speed;
             changed(v) => { root.speed-changed(v); }
         }
@@ -134,6 +197,7 @@ export component AppWindow inherits Window {
             value-text: "\{Math.round(root.gain * 100)}%";
             minimum: 0.0;
             maximum: 2.0;
+            step: 0.05; // 5% increments
             value <=> root.gain;
             changed(v) => { root.gain-changed(v); }
         }
@@ -142,6 +206,7 @@ export component AppWindow inherits Window {
             value-text: "\{Math.round(root.chunk)}";
             minimum: 1.0;
             maximum: 8.0;
+            step: 1.0;
             value <=> root.chunk;
             changed(v) => { root.chunk-changed(v); }
         }
@@ -156,7 +221,9 @@ export component AppWindow inherits Window {
         // Preview
         HorizontalLayout {
             Button {
-                text: root.previewing ? "Synthesizing…" : "▶  Preview voice";
+                text: root.previewing ? "Synthesizing…" : "Preview voice";
+                icon: @image-url("play-circle.svg");
+                colorize-icon: true;
                 enabled: !root.previewing && root.model-ready;
                 clicked => { root.preview-clicked(); }
             }

@@ -117,6 +117,63 @@ fn intro_for(voice: &str, voices: &[Voice]) -> String {
     }
 }
 
+// --- narrator cascading-dropdown helpers ------------------------------------
+
+/// A Slint string model from &str slices (for the accent/gender lists).
+fn str_model(items: &[&str]) -> slint::ModelRc<slint::SharedString> {
+    let v: Vec<slint::SharedString> = items.iter().map(|s| (*s).into()).collect();
+    slint::ModelRc::new(slint::VecModel::from(v))
+}
+
+/// Accent index from an id's first char: American (a) = 0, British (b) = 1.
+fn accent_idx(id: &str) -> i32 {
+    if id.as_bytes().first() == Some(&b'b') { 1 } else { 0 }
+}
+
+/// Gender index from an id's second char: Female (f) = 0, Male (m) = 1.
+fn gender_idx(id: &str) -> i32 {
+    if id.as_bytes().get(1) == Some(&b'm') { 1 } else { 0 }
+}
+
+/// Voices matching the currently-selected accent + gender, in manifest order.
+fn filtered_voices<'a>(ui: &AppWindow, voices: &'a [Voice]) -> Vec<&'a Voice> {
+    let a = ui.get_accent_index();
+    let g = ui.get_gender_index();
+    voices
+        .iter()
+        .filter(|v| accent_idx(&v.id) == a && gender_idx(&v.id) == g)
+        .collect()
+}
+
+/// Rebuild the name dropdown for the current accent + gender. `keep` selects that
+/// voice if it's in the new list, else the first entry.
+fn refilter(ui: &AppWindow, voices: &[Voice], keep: Option<&str>) {
+    let f = filtered_voices(ui, voices);
+    let names: Vec<slint::SharedString> = f.iter().map(|v| v.name.clone().into()).collect();
+    ui.set_names(slint::ModelRc::new(slint::VecModel::from(names)));
+    let ni = keep
+        .and_then(|k| f.iter().position(|v| v.id == k))
+        .unwrap_or(0) as i32;
+    ui.set_name_index(ni);
+}
+
+/// The voice id currently selected by the three dropdowns (if any).
+fn current_voice_id(ui: &AppWindow, voices: &[Voice]) -> Option<String> {
+    let n = ui.get_name_index();
+    filtered_voices(ui, voices)
+        .get(n as usize)
+        .map(|v| v.id.clone())
+}
+
+/// Persist the currently-selected voice to controls.json.
+fn commit_voice(ui: &AppWindow, voices: &[Voice], controls: &Arc<Mutex<Controls>>) {
+    if let Some(id) = current_voice_id(ui, voices) {
+        let mut c = controls.lock().unwrap();
+        c.voice = id;
+        c.save();
+    }
+}
+
 /// The persisted settings (controls.json).
 struct Controls {
     voice: String,
@@ -185,18 +242,19 @@ fn main() -> Result<(), slint::PlatformError> {
 
     let ui = AppWindow::new()?;
 
-    // Populate the narrator list + initial values.
-    let display: Vec<slint::SharedString> = voices
-        .iter()
-        .map(|v| slint::SharedString::from(format!("{}  ·  {}", v.name, v.group)))
-        .collect();
-    ui.set_voices(slint::ModelRc::new(slint::VecModel::from(display)));
+    // Narrator: three cascading dropdowns (accent x gender -> name), seeded from the
+    // saved voice.
+    ui.set_accents(str_model(&["American", "British"]));
+    ui.set_genders(str_model(&["Female", "Male"]));
+    let cur_voice = controls.lock().unwrap().voice.clone();
+    ui.set_accent_index(accent_idx(&cur_voice));
+    ui.set_gender_index(gender_idx(&cur_voice));
+    refilter(&ui, &voices, Some(&cur_voice));
     {
         let c = controls.lock().unwrap();
-        let idx = voices.iter().position(|v| v.id == c.voice).unwrap_or(0) as i32;
-        ui.set_voice_index(idx);
-        ui.set_speed(c.speed);
-        ui.set_gain(c.gain);
+        // Snap to 5% so the initial readout is a multiple of 5 (matches the sliders).
+        ui.set_speed((c.speed / 0.05).round() * 0.05);
+        ui.set_gain((c.gain / 0.05).round() * 0.05);
         ui.set_chunk(c.chunk as f32);
         ui.set_kindle_kokoro(c.kindle_kokoro);
     }
@@ -209,14 +267,37 @@ fn main() -> Result<(), slint::PlatformError> {
     let kindle_running = Arc::new(AtomicBool::new(false));
 
     // --- controls callbacks (UI thread) ---
+    // Narrator: accent/gender re-filter the name list (reset to its first entry);
+    // any of the three commits the resulting voice to controls.json.
     {
-        let controls = controls.clone();
+        let weak = ui.as_weak();
         let voices = voices.clone();
-        ui.on_narrator_changed(move |i| {
-            if let Some(v) = voices.get(i as usize) {
-                let mut c = controls.lock().unwrap();
-                c.voice = v.id.clone();
-                c.save();
+        let controls = controls.clone();
+        ui.on_accent_changed(move |_| {
+            if let Some(ui) = weak.upgrade() {
+                refilter(&ui, &voices, None);
+                commit_voice(&ui, &voices, &controls);
+            }
+        });
+    }
+    {
+        let weak = ui.as_weak();
+        let voices = voices.clone();
+        let controls = controls.clone();
+        ui.on_gender_changed(move |_| {
+            if let Some(ui) = weak.upgrade() {
+                refilter(&ui, &voices, None);
+                commit_voice(&ui, &voices, &controls);
+            }
+        });
+    }
+    {
+        let weak = ui.as_weak();
+        let voices = voices.clone();
+        let controls = controls.clone();
+        ui.on_name_changed(move |_| {
+            if let Some(ui) = weak.upgrade() {
+                commit_voice(&ui, &voices, &controls);
             }
         });
     }
@@ -295,38 +376,42 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     }
 
-    // --- verify ---
-    {
-        let ui_weak = ui.as_weak();
-        let app_data = app_data.clone();
-        let verify_running = verify_running.clone();
-        ui.on_verify_clicked(move || {
-            if verify_running.swap(true, Ordering::SeqCst) {
-                return;
-            }
-            if let Some(ui) = ui_weak.upgrade() {
-                ui.set_verifying(true);
-            }
-            let app_data = app_data.clone();
-            let weak = ui_weak.clone();
-            let running = verify_running.clone();
-            std::thread::spawn(move || {
-                let (checked, repaired) = download::verify(&app_data);
-                running.store(false, Ordering::SeqCst);
-                let _ = weak.upgrade_in_event_loop(move |ui| {
-                    ui.set_verifying(false);
-                    ui.set_model_ready(download::model_complete(&app_data));
+    // --- auto-verify at startup (no button) ---
+    // If the model is present, hash it against the manifest in the background,
+    // driving a determinate progress bar (verify-frac) as the data is checked, and
+    // repair-flag any corrupt files. Success is silent (the card returns to "Model
+    // ready"); only a repair surfaces a status line.
+    if download::model_complete(&app_data) {
+        verify_running.store(true, Ordering::SeqCst);
+        ui.set_verifying(true);
+        ui.set_verify_frac(0.0);
+        let app_data_r = app_data.clone();
+        let weak = ui.as_weak();
+        let running = verify_running.clone();
+        std::thread::spawn(move || {
+            // Push a frame only when the whole-percent changes — hashing reports
+            // every 64 KB, far more often than the UI needs to repaint.
+            let mut last_pct: i32 = -1;
+            let (checked, repaired) = download::verify(&app_data_r, |done, total| {
+                let pct = if total > 0 { (done * 100 / total) as i32 } else { 100 };
+                if pct != last_pct {
+                    last_pct = pct;
+                    let frac = done as f32 / total.max(1) as f32;
+                    let _ = weak.upgrade_in_event_loop(move |ui| ui.set_verify_frac(frac));
+                }
+            });
+            running.store(false, Ordering::SeqCst);
+            let _ = weak.upgrade_in_event_loop(move |ui| {
+                ui.set_verifying(false);
+                ui.set_model_ready(download::model_complete(&app_data_r));
+                if repaired > 0 {
                     ui.set_status(
-                        if repaired == 0 {
-                            format!("All {checked} files verified OK.")
-                        } else {
-                            format!(
-                                "{repaired} of {checked} files were bad and removed — click Download to repair."
-                            )
-                        }
+                        format!(
+                            "{repaired} of {checked} model files were corrupt and removed — click Download to repair."
+                        )
                         .into(),
                     );
-                });
+                }
             });
         });
     }

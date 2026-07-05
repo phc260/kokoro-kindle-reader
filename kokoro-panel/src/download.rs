@@ -58,7 +58,17 @@ fn hex(digest: impl AsRef<[u8]>) -> String {
     digest.as_ref().iter().map(|b| format!("{b:02x}")).collect()
 }
 
-fn valid(path: &Path, size: u64, sha256: &str) -> bool {
+/// Hash `path` and compare to `sha256`, reporting cumulative bytes read via
+/// `on_progress(done, total)` where `base` is the bytes already accounted for by
+/// earlier files. Progress is reported even on a short read so the bar keeps moving.
+fn valid_with_progress(
+    path: &Path,
+    size: u64,
+    sha256: &str,
+    base: u64,
+    total: u64,
+    on_progress: &mut impl FnMut(u64, u64),
+) -> bool {
     if !present(path, size) {
         return false;
     }
@@ -67,10 +77,15 @@ fn valid(path: &Path, size: u64, sha256: &str) -> bool {
     };
     let mut hasher = Sha256::new();
     let mut buf = [0u8; 64 * 1024];
+    let mut read: u64 = 0;
     loop {
         match f.read(&mut buf) {
             Ok(0) => break,
-            Ok(n) => hasher.update(&buf[..n]),
+            Ok(n) => {
+                hasher.update(&buf[..n]);
+                read += n as u64;
+                on_progress(base + read, total);
+            }
             Err(_) => return false,
         }
     }
@@ -201,16 +216,23 @@ fn download(
 
 /// Verify every model file against its manifest SHA-256, deleting any that are
 /// missing/corrupt so a follow-up download re-fetches just those. Blocking; run on a
-/// thread. Returns (checked, repaired-count).
-pub fn verify(app_data: &Path) -> (usize, usize) {
+/// thread. `on_progress(done_bytes, total_bytes)` is called continuously as files are
+/// hashed (weighted by size, so the bar tracks real work). Returns (checked,
+/// repaired-count).
+pub fn verify(app_data: &Path, mut on_progress: impl FnMut(u64, u64)) -> (usize, usize) {
     let m = load_manifest();
+    let total: u64 = m.files.iter().map(|f| f.size).sum();
+    let mut base: u64 = 0;
     let mut repaired = 0;
     for f in &m.files {
         let path = file_path(app_data, &m.model_id, &f.path);
-        if !valid(&path, f.size, &f.sha256) {
+        if !valid_with_progress(&path, f.size, &f.sha256, base, total, &mut on_progress) {
             let _ = std::fs::remove_file(&path);
             repaired += 1;
         }
+        // Snap to this file's end even if it was missing/short (kept the bar honest).
+        base += f.size;
+        on_progress(base, total);
     }
     (m.files.len(), repaired)
 }
