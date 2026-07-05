@@ -110,6 +110,32 @@ fn enable_autostart() {
     }
 }
 
+/// Locate the settings panel exe: next to the host exe (bundle layout), else the
+/// sibling crate's dev build.
+fn panel_exe_path() -> PathBuf {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let p = dir.join("kokoro-panel.exe");
+            if p.exists() {
+                return p;
+            }
+        }
+    }
+    #[cfg(debug_assertions)]
+    {
+        let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("kokoro-panel")
+            .join("target")
+            .join("debug")
+            .join("kokoro-panel.exe");
+        if dev.exists() {
+            return dev;
+        }
+    }
+    PathBuf::from("kokoro-panel.exe")
+}
+
 fn load_tray_icon() -> tray_icon::Icon {
     let bytes = include_bytes!("../../src-tauri/icons/32x32.png");
     let img = image::load_from_memory(bytes)
@@ -134,9 +160,16 @@ fn main() {
     }));
 
     let menu = Menu::new();
+    let settings_i = MenuItem::new("Settings…", true, None);
     let quit_i = MenuItem::new("Quit", true, None);
+    menu.append(&settings_i).expect("append settings");
+    menu.append(&tray_icon::menu::PredefinedMenuItem::separator())
+        .expect("append separator");
     menu.append(&quit_i).expect("append quit");
+    let settings_id = settings_i.id().clone();
     let quit_id = quit_i.id().clone();
+    // Track the panel child so a second Settings click doesn't pile up windows.
+    let mut panel_child: Option<std::process::Child> = None;
 
     // Build the tray after the event loop exists (its message-only window needs the
     // loop's thread). Kept alive by moving into the run closure.
@@ -155,7 +188,23 @@ fn main() {
         let _ = &tray;
         match event {
             Event::UserEvent(menu_event) => {
-                if menu_event.id == quit_id {
+                if menu_event.id == settings_id {
+                    // Spawn the panel unless one is already open (try_wait -> None
+                    // means still running).
+                    let alive = panel_child
+                        .as_mut()
+                        .map(|c| matches!(c.try_wait(), Ok(None)))
+                        .unwrap_or(false);
+                    if !alive {
+                        let path = panel_exe_path();
+                        match std::process::Command::new(&path).spawn() {
+                            Ok(child) => panel_child = Some(child),
+                            Err(e) => {
+                                eprintln!("[host] failed to launch panel {}: {e}", path.display())
+                            }
+                        }
+                    }
+                } else if menu_event.id == quit_id {
                     // The pipe thread is a daemon; exiting the process stops it and
                     // frees the pipe so Kindle's next Speak fails fast (page-done).
                     *control_flow = ControlFlow::Exit;

@@ -1,0 +1,18 @@
+[package]
+name = "kokoro-panel"
+version = "0.1.0"
+edition = "2021"
+description = "Native settings panel for Kokoro Kindle Reader (egui)"
+
+# Separate from the headless host so eframe/egui/winit don't bloat the always-on
+# tray host. The tray spawns this on demand; it reads/writes the same controls.json
+# the host reads per utterance, so changes land on Kindle's next page. Preview
+# synthesizes via the host's pipe (same engine as Kindle).
+
+[[bin]]
+name = "kokoro-panel"
+path = "src/main.rs"
+
+[dependencies]
+eframe = "0.29"
+serde_json = "1"
