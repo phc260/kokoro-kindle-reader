@@ -8,6 +8,8 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{AppHandle, Emitter, Manager};
 
 mod pipe_server;
+// Sentence-chunk splitter, in its own module so the headless host shares it.
+mod split_text;
 
 // Native Dawn WebGPU synthesis for the Kindle pipe path (replaces the webview as
 // the pipe's synthesizer). Off unless built with `--features native-synth`.

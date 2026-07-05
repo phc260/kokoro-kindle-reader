@@ -1,0 +1,22 @@
+[package]
+name = "kokoro-host"
+version = "0.1.0"
+edition = "2021"
+description = "Headless synthesis host for Kokoro Kindle Reader (no WebView2)"
+
+# Standalone crate (own target dir), not a workspace member — keeps it isolated
+# from the Tauri app's build. Reuses kokoro-worker's C++ synth core + src-tauri's
+# native_synth.rs / split_text.rs via build.rs + `#[path]` includes (see main.rs).
+
+[[bin]]
+name = "kokoro-host"
+path = "src/main.rs"
+
+[build-dependencies]
+cc = "1"
+
+[dependencies]
+# Named-pipe server + async streaming/pacing (the Tauri-free pipe path).
+tokio = { version = "1", features = ["net", "io-util", "rt", "rt-multi-thread", "sync", "time", "macros"] }
+# controls.json parsing (shared with native_synth.rs::read_controls).
+serde_json = "1"
