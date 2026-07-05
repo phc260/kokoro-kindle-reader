@@ -1,0 +1,2 @@
+# Build output (NMake; produced by build.ps1 / cmake --build)
+build/

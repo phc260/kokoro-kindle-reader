@@ -1,0 +1,5 @@
+# Downloaded / built third-party artifacts + staged runtime DLLs
+# (all re-created by tools/*.ps1 and the staging step).
+third_party/
+# Build output
+build/

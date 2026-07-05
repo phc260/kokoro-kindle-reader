@@ -1,0 +1,12 @@
+# Logs
+*.log
+
+# Rust build output (each crate also ignores its own target/)
+target/
+
+# Editor / OS
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.sw?

@@ -1,0 +1,9 @@
+; Export the COM entry points under their undecorated names. On x86, STDAPI
+; (__stdcall) would otherwise decorate them as _DllRegisterServer@0 etc., and
+; regsvr32 / COM look them up undecorated. This .def is what makes that work.
+LIBRARY
+EXPORTS
+    DllGetClassObject       PRIVATE
+    DllCanUnloadNow         PRIVATE
+    DllRegisterServer       PRIVATE
+    DllUnregisterServer     PRIVATE
