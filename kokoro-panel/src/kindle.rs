@@ -1,7 +1,7 @@
 // Switch Kindle's default SAPI voice between Kokoro and Microsoft David by running
 // kindle-voice-guard.ps1 one-shot (-Set kokoro|david). The guard reg-loads Kindle's
 // MSIX hive, which needs admin, so we relaunch it elevated via Start-Process -Verb
-// RunAs (raises a UAC prompt). Ported from src-tauri/src/lib.rs `set_kindle_voice`.
+// RunAs (raises a UAC prompt).
 // Blocking (waits on the UAC'd child) — run on a background thread.
 
 use std::path::PathBuf;

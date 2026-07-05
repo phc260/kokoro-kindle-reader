@@ -1,6 +1,5 @@
 // Named-pipe server bridging the SAPI engine (running inside Kindle) to the native
-// Dawn WebGPU synth — the Tauri-free twin of src-tauri/src/pipe_server.rs's
-// `native-synth` path. The x86 KokoroSapi.dll connects to \\.\pipe\KokoroSapiSynth
+// Dawn WebGPU synth. The x86 KokoroSapi.dll connects to \\.\pipe\KokoroSapiSynth
 // and speaks the WorkerProtocol.h wire format ('S' = synth whole utterance, 'I' =
 // info).
 //

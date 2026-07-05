@@ -1,6 +1,5 @@
-// Native Dawn WebGPU synthesis for the Kindle pipe path (feature `native-synth`).
-// pipe_server.rs calls this instead of emitting `synth-request` to the webview, so
-// Kindle can be narrated without WebView2 doing the synthesis.
+// Native Dawn WebGPU synthesis for the Kindle pipe path. pipe.rs calls this to
+// synthesize each chunk natively, so Kindle can be narrated with no WebView2.
 //
 // The C++ core (kokoro-worker/src, linked via build.rs) owns the ORT/WebGPU session
 // + espeak. espeak keeps global state and a temp-file phoneme trace, so it is NOT
@@ -8,7 +7,7 @@
 // owns the KokoroWorker for the process lifetime. Requests arrive over an mpsc
 // channel; each reply comes back on a tokio oneshot so the async pipe tasks await
 // without blocking. Settings (narrator/speed/gain/chunk) come from controls.json in
-// the app-data dir, replacing the webview localStorage round-trips.
+// the app-data dir.
 
 use std::ffi::CString;
 use std::os::raw::{c_char, c_int};

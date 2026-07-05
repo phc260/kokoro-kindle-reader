@@ -22,7 +22,6 @@ fn embed_version_info() {
     let icon = manifest
         .parent()
         .unwrap()
-        .join("src-tauri")
         .join("icons")
         .join("icon.ico");
     let mut res = winresource::WindowsResource::new();

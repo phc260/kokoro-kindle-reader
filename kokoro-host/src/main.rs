@@ -15,11 +15,8 @@
 
 use std::path::PathBuf;
 
-// Shared, Tauri-free modules pulled from the Tauri crate's src/ (single source of
-// truth). native_synth's `extern "C"` symbols resolve to the C++ compiled in build.rs.
-#[path = "../../src-tauri/src/native_synth.rs"]
+// native_synth's `extern "C"` symbols resolve to the C++ compiled in build.rs.
 mod native_synth;
-#[path = "../../src-tauri/src/split_text.rs"]
 mod split_text;
 
 mod pipe;
@@ -29,10 +26,10 @@ use tao::event_loop::{ControlFlow, EventLoopBuilder};
 use tray_icon::menu::{Menu, MenuEvent, MenuItem};
 use tray_icon::{TrayIconBuilder, TrayIconEvent};
 
-// Must match src-tauri/tauri.conf.json `identifier` — Tauri stores the model +
-// controls.json under %APPDATA%\<identifier> on Windows, and we read the same dir.
+// The app identifier — the model + controls.json live under %APPDATA%\<identifier>
+// on Windows (unchanged from the original Tauri app, so existing data is reused).
 const APP_IDENTIFIER: &str = "com.phc260.kokoro-kindle-reader";
-// The pinned model's repo id (from src-tauri/model-manifest.json); the model files
+// The pinned model's repo id (from model-manifest.json); the model files
 // live under <app_data>/<MODEL_ID>/. Embedded so we don't parse the manifest at
 // runtime just for this one string.
 const MODEL_ID: &str = "onnx-community/Kokoro-82M-v1.0-ONNX";
@@ -137,7 +134,7 @@ fn panel_exe_path() -> PathBuf {
 }
 
 fn load_tray_icon() -> tray_icon::Icon {
-    let bytes = include_bytes!("../../src-tauri/icons/32x32.png");
+    let bytes = include_bytes!("../../icons/32x32.png");
     let img = image::load_from_memory(bytes)
         .expect("decode tray icon")
         .to_rgba8();

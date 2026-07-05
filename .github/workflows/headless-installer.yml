@@ -30,7 +30,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          lfs: true # src-tauri/icons/icon.ico is in Git LFS (bundled + shortcut icon)
+          lfs: true # icons/icon.ico is in Git LFS (bundled + shortcut icon)
 
       - name: Set up Python (for the onnxruntime-webgpu wheel)
         uses: actions/setup-python@v5

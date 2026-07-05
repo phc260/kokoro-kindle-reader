@@ -40,7 +40,7 @@ foreach ($d in 'onnxruntime.dll', 'onnxruntime_providers_shared.dll', 'dxcompile
     Copy-Item (Join-Path $hostRel $d) $stage
 }
 Copy-Item -Recurse (Join-Path $hostRel 'espeak-ng-data') $stage
-Copy-Item (Join-Path $root 'src-tauri\icons\icon.ico') (Join-Path $stage 'icon.ico')
+Copy-Item (Join-Path $root 'icons\icon.ico') (Join-Path $stage 'icon.ico')
 
 $res = Join-Path $stage 'resources'
 Copy-Item (Join-Path $sapi 'build\KokoroSapi.dll') $res

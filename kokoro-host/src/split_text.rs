@@ -1,6 +1,6 @@
-// Utterance → sentence-chunk splitter, shared by the Tauri app's pipe_server and
-// the headless host (kokoro-host) via `#[path]` include so the correctness-
-// critical chunking has ONE source of truth. Pure (no Tauri/tokio deps).
+// Utterance → sentence-chunk splitter for the headless host's pipe path. The
+// correctness-critical chunking; mirrored 1:1 by the C++ chunker in
+// kokoro-worker/src/KokoroSynth.cpp. Pure (no external deps).
 
 /// Split an utterance into sentence chunks for streaming. We ramp up: the FIRST
 /// chunk is a single sentence (so audio starts quickly), then chunks coalesce

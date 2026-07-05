@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="src-tauri/icons/128x128@2x.png" alt="Kokoro Kindle Reader" width="120" height="120">
+<img src="icons/128x128@2x.png" alt="Kokoro Kindle Reader" width="120" height="120">
 
 # Kokoro Kindle Reader
 

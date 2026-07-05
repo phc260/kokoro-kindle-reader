@@ -1,8 +1,8 @@
-// Model download + integrity verify, ported from src-tauri/src/lib.rs to a blocking
-// reqwest client (run on a background thread). Files stream from HuggingFace per the
-// embedded model-manifest.json into <app_data>/<model_id>/<path>; each is SHA-256-
-// verified before being committed (renamed into place), so the download is resumable
-// and a corrupt file is never left behind. The host reads these files; no webview.
+// Model download + integrity verify on a blocking reqwest client (run on a
+// background thread). Files stream from HuggingFace per the embedded
+// model-manifest.json into <app_data>/<model_id>/<path>; each is SHA-256-verified
+// before being committed (renamed into place), so the download is resumable and a
+// corrupt file is never left behind. The host reads these files; no webview.
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};

@@ -71,7 +71,7 @@ void EncodeAppend(string& out, char32_t cp) {
     else { out += char(0xF0 | (cp >> 18)); out += char(0x80 | ((cp >> 12) & 0x3F)); out += char(0x80 | ((cp >> 6) & 0x3F)); out += char(0x80 | (cp & 0x3F)); }
 }
 
-// ---- sentence chunker: 1:1 port of split_text in src-tauri/src/pipe_server.rs ----
+// ---- sentence chunker: 1:1 port of split_text in kokoro-host/src/split_text.rs ----
 std::vector<string> SplitText(const string& text, int sentencesPerChunk) {
     const int FIRST = 1;
     const int k = sentencesPerChunk < 1 ? 1 : sentencesPerChunk;

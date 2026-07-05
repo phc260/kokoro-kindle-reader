@@ -25,7 +25,7 @@ slint::include_modules!();
 // %APPDATA%\<identifier>.
 const APP_IDENTIFIER: &str = "com.phc260.kokoro-kindle-reader";
 // Embedded so the narrator list stays in sync with what actually downloads.
-const MANIFEST_JSON: &str = include_str!("../../src-tauri/model-manifest.json");
+const MANIFEST_JSON: &str = include_str!("../../model-manifest.json");
 const DEFAULT_VOICE: &str = "af_heart";
 
 fn app_data_dir() -> PathBuf {

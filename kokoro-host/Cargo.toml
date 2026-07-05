@@ -4,9 +4,8 @@ version = "0.1.0"
 edition = "2021"
 description = "Headless synthesis host for Kokoro Kindle Reader (no WebView2)"
 
-# Standalone crate (own target dir), not a workspace member — keeps it isolated
-# from the Tauri app's build. Reuses kokoro-worker's C++ synth core + src-tauri's
-# native_synth.rs / split_text.rs via build.rs + `#[path]` includes (see main.rs).
+# Standalone crate (own target dir), not a workspace member. build.rs compiles
+# kokoro-worker's C++ synth core; native_synth.rs / split_text.rs live in src/.
 
 [[bin]]
 name = "kokoro-host"

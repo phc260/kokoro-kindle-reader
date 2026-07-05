@@ -1,8 +1,7 @@
 // Compile the kokoro-worker C++ synth core (KokoroSynth WebGPU + espeak) into the
 // headless host and link the prebuilt ORT + espeak import libs, so native_synth.rs
-// (included from ../src-tauri/src) can synthesize natively. Runtime DLLs +
-// espeak-ng-data are staged next to the host exe. This is the always-on twin of
-// src-tauri/build.rs's `build_native_synth` (the host is native-only).
+// can synthesize natively. Runtime DLLs + espeak-ng-data are staged next to the
+// host exe.
 
 use std::env;
 use std::path::{Path, PathBuf};
@@ -86,7 +85,7 @@ fn main() {
 
 /// Embed a Windows version resource (FileDescription/ProductName/FileVersion +
 /// the app icon) so the exe isn't just a bare filename in Task Manager / Explorer.
-/// No-op off Windows. The icon is the shared app icon under src-tauri/icons/.
+/// No-op off Windows. The icon is the shared app icon under the repo's icons/.
 fn embed_version_info(manifest: &Path, description: &str) {
     if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;
@@ -94,7 +93,6 @@ fn embed_version_info(manifest: &Path, description: &str) {
     let icon = manifest
         .parent()
         .unwrap()
-        .join("src-tauri")
         .join("icons")
         .join("icon.ico");
     let mut res = winresource::WindowsResource::new();
