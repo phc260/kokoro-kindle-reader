@@ -34,8 +34,8 @@ fn main() {
     for p in [&ort_inc, &ort_lib, &espk_inc, &espk_lib, &runtime, &espk_data] {
         if !p.exists() {
             panic!(
-                "kokoro-host: missing {} — run kokoro-worker/tools/build-espeak.ps1 \
-                 and build-test.ps1 (which download/build the ORT + espeak artifacts) first",
+                "kokoro-host: missing {} — run kokoro-worker/tools/fetch-deps.ps1 \
+                 (which downloads the ORT/Dawn runtime and builds the espeak artifacts) first",
                 p.display()
             );
         }
