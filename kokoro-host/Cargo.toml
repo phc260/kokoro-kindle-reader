@@ -20,3 +20,14 @@ cc = "1"
 tokio = { version = "1", features = ["net", "io-util", "rt", "rt-multi-thread", "sync", "time", "macros"] }
 # controls.json parsing (shared with native_synth.rs::read_controls).
 serde_json = "1"
+# System tray + its event loop. tao (Tauri's windowing lib) hosts a windowless
+# message loop; tray-icon adds the tray + menu. No webview — this is the whole GUI
+# surface of the host (the settings panel is a separate process, M3).
+tao = "0.30"
+tray-icon = "0.19"
+# Register the host to auto-start hidden at login (HKCU Run on Windows), so Kindle
+# always has its synthesis host. Mirrors the Tauri app's `kokoro-kindle-reader`
+# Run value so the two don't double-register.
+auto-launch = "0.5"
+# Decode the bundled PNG into RGBA for the tray icon (png only — keep it light).
+image = { version = "0.25", default-features = false, features = ["png"] }
