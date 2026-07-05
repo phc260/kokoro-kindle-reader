@@ -16,3 +16,6 @@ path = "src/main.rs"
 [dependencies]
 eframe = "0.29"
 serde_json = "1"
+# Preview playback. The panel synthesizes a per-voice intro through the host's pipe
+# (same engine + controls.json as Kindle) and plays the returned PCM with rodio.
+rodio = { version = "0.19", default-features = false }

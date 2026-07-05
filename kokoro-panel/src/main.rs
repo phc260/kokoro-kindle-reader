@@ -7,8 +7,12 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use eframe::egui;
+
+mod preview;
 
 // Same identifier as the host / Tauri app: controls.json lives under
 // %APPDATA%\<identifier>.
@@ -148,11 +152,36 @@ impl Controls {
     }
 }
 
+/// A short self-introduction spoken as the preview sample (mirrors voiceIntro in
+/// src/voices.ts).
+fn intro_for(voice: &str, voices: &[Voice]) -> String {
+    match voices.iter().find(|v| v.id == voice) {
+        Some(v) => {
+            let accent = if v.group.starts_with("American") {
+                "American"
+            } else if v.group.starts_with("British") {
+                "British"
+            } else {
+                "Kokoro"
+            };
+            format!(
+                "Hi, I'm {}, your {} narrator. I'd be glad to read your text aloud.",
+                v.name, accent
+            )
+        }
+        None => "Hi, I'd be glad to read your text aloud.".to_string(),
+    }
+}
+
 struct PanelApp {
     voices: Vec<Voice>,
     controls: Controls,
     dirty: bool,
     status: String,
+    // Preview runs on a background thread (pipe client + rodio); these are shared
+    // with it so the UI can disable the button and surface any error.
+    preview_running: Arc<AtomicBool>,
+    preview_msg: Arc<Mutex<String>>,
 }
 
 impl PanelApp {
@@ -163,6 +192,8 @@ impl PanelApp {
             controls,
             dirty: false,
             status: String::new(),
+            preview_running: Arc::new(AtomicBool::new(false)),
+            preview_msg: Arc::new(Mutex::new(String::new())),
         }
     }
 
@@ -172,6 +203,27 @@ impl PanelApp {
             .find(|v| v.id == self.controls.voice)
             .map(|v| format!("{} ({})", v.name, v.group))
             .unwrap_or_else(|| self.controls.voice.clone())
+    }
+
+    /// Kick off a preview on a background thread: synth the current voice's intro
+    /// through the host pipe and play it. Errors surface in preview_msg.
+    fn start_preview(&self, ctx: egui::Context) {
+        if self.preview_running.swap(true, Ordering::SeqCst) {
+            return; // already running
+        }
+        let text = intro_for(&self.controls.voice, &self.voices);
+        let running = self.preview_running.clone();
+        let msg = self.preview_msg.clone();
+        *msg.lock().unwrap() = String::new();
+        std::thread::spawn(move || {
+            let result = preview::play(&text);
+            *msg.lock().unwrap() = match result {
+                Ok(()) => String::new(),
+                Err(e) => e,
+            };
+            running.store(false, Ordering::SeqCst);
+            ctx.request_repaint(); // wake the UI to re-enable the button
+        });
     }
 }
 
@@ -235,13 +287,31 @@ impl eframe::App for PanelApp {
             }
 
             ui.add_space(10.0);
+            // Preview — synthesize this voice's intro through the host (WYSIWYG).
+            let running = self.preview_running.load(Ordering::Relaxed);
+            ui.horizontal(|ui| {
+                ui.add_enabled_ui(!running, |ui| {
+                    if ui.button("▶  Preview voice").clicked() {
+                        self.start_preview(ctx.clone());
+                    }
+                });
+                if running {
+                    ui.spinner();
+                    ui.label("Synthesizing…");
+                    ctx.request_repaint();
+                }
+            });
+            let pmsg = self.preview_msg.lock().unwrap().clone();
+            if !pmsg.is_empty() {
+                ui.colored_label(egui::Color32::from_rgb(0xd0, 0x60, 0x60), pmsg);
+            }
+
+            ui.add_space(10.0);
             ui.separator();
             ui.label(
-                egui::RichText::new(
-                    "Model download, Kindle-voice toggle, and Preview coming next.",
-                )
-                .small()
-                .weak(),
+                egui::RichText::new("Model download and Kindle-voice toggle coming next.")
+                    .small()
+                    .weak(),
             );
 
             if !self.status.is_empty() {
