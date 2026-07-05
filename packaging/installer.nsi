@@ -20,8 +20,11 @@ Unicode true
 
 Name "${APPNAME}"
 OutFile "kokoro-kindle-reader-${VERSION}-setup.exe"
-InstallDir "$LOCALAPPDATA\Programs\${APPNAME}"
-InstallDirRegKey HKCU "${UNINSTKEY}" "InstallLocation"
+; Fixed install path — the same per-user folder the original app used
+; ($LOCALAPPDATA\kokoro-kindle-reader), so this edition installs in place rather
+; than a second location. Not overridable (no directory page, no reg override), so
+; the path stays consistent across versions/reinstalls.
+InstallDir "$LOCALAPPDATA\kokoro-kindle-reader"
 RequestExecutionLevel user
 SetCompressor /SOLID lzma
 
@@ -39,7 +42,6 @@ VIAddVersionKey "FileDescription" "${APPNAME} installer"
 !define MUI_FINISHPAGE_RUN_TEXT "Start Kokoro Kindle Reader (runs in the system tray)"
 
 !insertmacro MUI_PAGE_WELCOME
-!insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
 !insertmacro MUI_UNPAGE_CONFIRM
@@ -51,6 +53,10 @@ Section "Install"
   ; overwrite them (a fresh install just no-ops these).
   nsExec::ExecToLog 'taskkill /IM kokoro-panel.exe /F'
   nsExec::ExecToLog 'taskkill /IM kokoro-host.exe /F'
+
+  ; Migrate away from the previous parallel location this edition used
+  ; ($LOCALAPPDATA\Programs\${APPNAME}); everything now lives in $INSTDIR.
+  RMDir /r "$LOCALAPPDATA\Programs\${APPNAME}"
 
   SetOutPath "$INSTDIR"
   File "${STAGING}\kokoro-host.exe"
