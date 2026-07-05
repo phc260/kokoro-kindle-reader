@@ -14,8 +14,17 @@ edition = "2021"
 name = "kokoro_kindle_reader_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+# Synthesize on the native Dawn WebGPU EP (C++ KokoroSynth via FFI) instead of the
+# webview. Requires the kokoro-worker C++ toolchain artifacts (headers/import libs +
+# staged runtime DLLs under ../kokoro-worker/third_party). Off by default so the
+# stock WebView2 build needs no C++/ORT/espeak. See kokoro-worker/ + pipe_server.rs.
+native-synth = []
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+# Only used when the `native-synth` feature compiles the C++ synth core.
+cc = "1"
 
 [dependencies]
 tauri = { version = "2", features = ["tray-icon"] }

@@ -9,6 +9,11 @@ use tauri::{AppHandle, Emitter, Manager};
 
 mod pipe_server;
 
+// Native Dawn WebGPU synthesis for the Kindle pipe path (replaces the webview as
+// the pipe's synthesizer). Off unless built with `--features native-synth`.
+#[cfg(feature = "native-synth")]
+mod native_synth;
+
 // ---------------------------------------------------------------------------
 // Kokoro TTS model: downloaded into the app data dir on first run, then served
 // to the webview worker through the `kokoro://` URI scheme (see `run`). The
@@ -432,10 +437,31 @@ pub fn run() {
         // webview WebGPU synthesis (see pipe_server.rs).
         .manage(std::sync::Arc::new(pipe_server::Bridge::default()))
         .setup(|app| {
+            // Native WebGPU synth worker for the pipe path: spawn the serialized
+            // C++ synth thread and share it so pipe_server uses it instead of the
+            // webview. Paths: the downloaded model dir + the staged espeak-ng-data.
+            #[cfg(feature = "native-synth")]
+            {
+                let h = app.handle().clone();
+                if let (Ok(dir), Ok(manifest)) = (model_dir(&h), load_manifest()) {
+                    let base = dir.join(&manifest.model_id);
+                    let espeak = std::env::current_exe()
+                        .ok()
+                        .and_then(|e| e.parent().map(Path::to_path_buf))
+                        .unwrap_or_default()
+                        .join("espeak-ng-data");
+                    app.manage(native_synth::NativeSynth::spawn(base, espeak));
+                }
+            }
+
             pipe_server::start(app.handle().clone());
 
             // Always-on synthesis host for Kindle: register to auto-start at
-            // login (idempotent; Rust-side, so no JS capability needed).
+            // login (idempotent; Rust-side, so no JS capability needed). Skipped
+            // for debug builds so a dev run doesn't hijack the installed app's
+            // login autostart entry (both write the same `kokoro-kindle-reader`
+            // Run value).
+            #[cfg(not(debug_assertions))]
             {
                 use tauri_plugin_autostart::ManagerExt;
                 let _ = app.autolaunch().enable();

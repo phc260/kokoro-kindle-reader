@@ -22,7 +22,12 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
+// `emit` is only used by the webview synth path.
+#[cfg(not(feature = "native-synth"))]
+use tauri::Emitter;
+#[cfg(feature = "native-synth")]
+use crate::native_synth::{self, NativeSynth};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
 use tokio::sync::oneshot;
@@ -341,6 +346,7 @@ fn split_text(text: &str, sentences_per_chunk: usize) -> Vec<String> {
 /// back to the default so a slow/absent frontend doesn't stall the start of
 /// synthesis. Returns (sentences 1..=8, pacing lead in seconds, sub-frame size in
 /// samples), reading "tts-chunk" / "tts-lead" / "tts-subframe" from the webview.
+#[cfg(not(feature = "native-synth"))]
 async fn query_stream_config(app: &AppHandle, bridge: &Arc<Bridge>) -> (usize, f64, usize) {
     let (id, rx) = bridge.register_config();
     let _ = app.emit("stream-config-request", StreamConfigRequest { id });
@@ -362,8 +368,27 @@ async fn query_stream_config(app: &AppHandle, bridge: &Arc<Bridge>) -> (usize, f
     (sentences, lead_secs, subframe_samples)
 }
 
+/// Native path: the per-chunk sentence count comes from controls.json ("chunk");
+/// pacing lead / sub-frame size use the built-in defaults (controls.json doesn't
+/// carry them). No webview round-trip.
+#[cfg(feature = "native-synth")]
+async fn query_stream_config(app: &AppHandle, _bridge: &Arc<Bridge>) -> (usize, f64, usize) {
+    let (_voice, c) = native_synth::read_controls(&app_data(app));
+    let sentences = (c.chunk as usize).clamp(1, 8);
+    let lead_secs = DEFAULT_LEAD_MS as f64 / 1000.0;
+    let subframe_samples = (DEFAULT_SUBFRAME_MS as f64 * SAMPLE_RATE / 1000.0) as usize;
+    (sentences, lead_secs, subframe_samples)
+}
+
+/// App-data dir (holds controls.json), for the native settings reads.
+#[cfg(feature = "native-synth")]
+fn app_data(app: &AppHandle) -> std::path::PathBuf {
+    app.path().app_data_dir().unwrap_or_default()
+}
+
 /// Ask the webview for the user's current gain ("tts-gain"); unity on miss. Read
 /// fresh per chunk so a slider move lands within the playing chunk.
+#[cfg(not(feature = "native-synth"))]
 async fn query_gain(app: &AppHandle, bridge: &Arc<Bridge>) -> f32 {
     let (id, rx) = bridge.register_gain();
     let _ = app.emit("gain-request", GainRequest { id });
@@ -376,10 +401,18 @@ async fn query_gain(app: &AppHandle, bridge: &Arc<Bridge>) -> f32 {
     }
 }
 
+/// Native path: gain comes from controls.json ("gain"), read fresh per sub-frame so
+/// a volume change lands within the playing chunk (same behavior as the webview).
+#[cfg(feature = "native-synth")]
+async fn query_gain(app: &AppHandle, _bridge: &Arc<Bridge>) -> f32 {
+    native_synth::read_controls(&app_data(app)).1.gain
+}
+
 /// Synthesize one chunk in the webview, as a detached task so it overlaps the
 /// (backpressured) write of the previous chunk's frame — that's the depth-1
 /// prefetch the engine used to do. Returns the raw f32 PCM bytes, or None on
 /// timeout/failure.
+#[cfg(not(feature = "native-synth"))]
 fn spawn_synth(
     app: AppHandle,
     bridge: Arc<Bridge>,
@@ -397,6 +430,27 @@ fn spawn_synth(
             }
         }
     })
+}
+
+/// Native path: synthesize one chunk on the serialized C++ WebGPU worker. Narrator
+/// + speed come from controls.json (speed = host `rate` × controls speed), matching
+/// the webview's rate×tts-speed fold. Same detached-task shape as the webview
+/// version so the depth-1 prefetch in serve_client is unchanged; the worker itself
+/// serializes overlapping requests (espeak isn't thread-safe).
+#[cfg(feature = "native-synth")]
+fn spawn_synth(
+    app: AppHandle,
+    _bridge: Arc<Bridge>,
+    text: String,
+    rate: f32,
+) -> tauri::async_runtime::JoinHandle<Option<Vec<u8>>> {
+    let (voice, controls) = native_synth::read_controls(&app_data(&app));
+    let speed = rate * controls.speed;
+    let Some(native) = app.try_state::<NativeSynth>() else {
+        return tauri::async_runtime::spawn(async { None });
+    };
+    let native = native.inner().clone();
+    tauri::async_runtime::spawn(async move { native.synth(text, speed, voice).await })
 }
 
 /// Spawn the pipe server on the async runtime. Call once from `setup`.
