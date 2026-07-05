@@ -32,7 +32,7 @@ VIProductVersion "0.2.0.0"
 VIAddVersionKey "ProductName" "${APPNAME}"
 VIAddVersionKey "FileVersion" "${VERSION}"
 VIAddVersionKey "CompanyName" "${COMPANY}"
-VIAddVersionKey "LegalCopyright" "Apache-2.0"
+VIAddVersionKey "LegalCopyright" "MIT License"
 VIAddVersionKey "FileDescription" "${APPNAME} installer"
 
 !define MUI_ICON "${STAGING}\icon.ico"

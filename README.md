@@ -31,7 +31,7 @@ runs entirely on your machine. kokoro-kindle-reader is two things in one app:
 
 1. Download the latest installer from the
    [**Releases**](https://github.com/phc260/kokoro-kindle-reader/releases) page (the
-   `_x64-setup.exe` under the newest version).
+   `-setup.exe` under the newest version).
 2. Run it. It installs just for you (no machine-wide changes), then raises a single
    Windows UAC prompt to register the Kokoro voice and — if Kindle is installed —
    set Kokoro as Kindle's Read Aloud voice automatically.
@@ -39,54 +39,44 @@ runs entirely on your machine. kokoro-kindle-reader is two things in one app:
    (~430 MB) — a one-time setup wizard walks you through it. After that it works
    fully offline.
 
-A modern GPU is recommended (the app uses WebGPU). On machines without it, it
-falls back to a slower CPU mode automatically.
+The app synthesizes on your GPU via WebGPU, so a reasonably modern GPU gives the
+best results.
 
 ## Using the app
 
-The kokoro-kindle-reader window is a **control panel** for the Kokoro voice — it's where
-you choose and audition the voice, not a place to paste text. Whatever you set
-here is exactly what Kindle (and the SAPI voice) uses when it reads.
+kokoro-kindle-reader runs in the **system tray**. Right-click the tray icon and choose
+**Settings** to open the control panel — it's where you choose and audition the
+voice, not a place to paste text. Whatever you set here is exactly what Kindle (and
+the SAPI voice) uses when it reads.
 
-1. **Voice Mode** — set the toggle at the top to **Kokoro**. This makes Kokoro the
-   active voice and enables the controls below. (Switching to Kokoro asks for
-   administrator rights — Windows requires that to change Kindle's voice.) Set it
-   back to **Microsoft** to hand Kindle its built-in voice.
-2. Pick a **Narrator** from the dropdown (different accents and voices).
-3. Adjust **Speed** and **Volume**. Click the **volume icon** to mute/unmute
-   instantly.
-4. Click **Preview** to hear the selected narrator read a short sample line; click
-   **Stop** to halt it.
+1. Pick a **Narrator** with the three dropdowns (accent, gender, and name).
+2. Adjust **Speed** and **Volume**, and **Sentences per chunk** if you want.
+3. Tick **Use Kokoro as Kindle's default voice** to make Kindle read with Kokoro
+   (this asks for administrator rights — Windows requires that to change Kindle's
+   voice); untick it to hand Kindle back its built-in Microsoft voice.
+4. Click **Preview** to hear the selected narrator read a short sample line.
 
-Your narrator, speed, and volume choices are remembered between sessions.
+Your choices are saved and applied to Kindle's **next page** automatically — no
+restart needed.
 
 ## Reading Kindle books with Kokoro
 
 1. Make sure **kokoro-kindle-reader is running** (it's the voice engine — no app, no
-   sound).
-2. Set the **Voice Mode** toggle to **Kokoro** if it isn't already (see above).
-   Switch back to **Microsoft** anytime to restore Kindle's built-in voice.
+   sound). It lives in the system tray and auto-starts at login.
+2. Tick **Use Kokoro as Kindle's default voice** in Settings if it isn't already
+   (see above). Untick it anytime to restore Kindle's built-in voice.
 3. **Reopen Kindle** after switching so it picks up the new voice.
 4. In Kindle, start **Read Aloud** as usual — it now speaks with Kokoro, using the
    narrator, speed, and volume you set in the app.
 
-The installer sets this up for you the first time; the in-app toggle is for
+The installer sets this up for you the first time; the in-app checkbox is for
 switching back and forth later.
 
 ### Tuning Kindle playback
 
-The app exposes a few sliders that affect how Kindle narration streams. Sensible
-defaults are set, but if you want to tune:
-
-- **Sentences per chunk** — higher is smoother but takes slightly longer to start
-  each chunk.
-- **Pacing lead** — how much audio stays buffered ahead. **Lower = volume/mute
-  changes take effect faster**, but set it too low and you may hear gaps or
-  stutter. Lower it until you hear gaps, then back off a notch. The right value
-  depends on how fast your machine synthesizes.
-- **Sub-frame size** — how finely volume is re-checked. Smaller = slightly snappier
-  volume response, but going much smaller than the pacing lead just adds overhead
-  for no real benefit.
+**Sentences per chunk** controls how Kindle narration streams: higher is smoother but
+takes slightly longer to start each chunk. Sensible defaults are set, so you usually
+don't need to touch it.
 
 ## Troubleshooting
 
@@ -104,8 +94,8 @@ defaults are set, but if you want to tune:
 
 The interesting part is letting 32-bit Kindle narrate with GPU TTS that lives in
 a separate 64-bit process: a thin x86 COM voice plugin loads inside Kindle and
-forwards each utterance over a named pipe to the kokoro-kindle-reader app, which
-synthesizes on WebGPU and streams the audio back.
+forwards each utterance over a named pipe to the kokoro-kindle-reader tray app, which
+synthesizes natively on your GPU (Dawn WebGPU) and streams the audio back.
 
 If you're curious about the engine chain, the wire protocol, the Kindle voice
 registry/hive details, or want to **build from source**, see
