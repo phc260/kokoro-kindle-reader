@@ -103,7 +103,7 @@ fn embed_version_info(manifest: &Path, description: &str) {
     res.set("ProductName", "Kokoro Kindle Reader");
     res.set("FileVersion", "0.2.0.0");
     res.set("ProductVersion", "0.2.0.0");
-    res.set("LegalCopyright", "Apache-2.0 licensed");
+    res.set("LegalCopyright", "MIT licensed");
     if let Err(e) = res.compile() {
         println!("cargo:warning=winresource (host): {e}");
     }
