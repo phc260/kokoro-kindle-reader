@@ -1,0 +1,182 @@
+import { Button, ComboBox, Slider, CheckBox, ProgressIndicator } from "std-widgets.slint";
+
+// A labelled slider row: title on the left, live value on the right, slider below.
+component SliderRow inherits VerticalLayout {
+    in property <string> label;
+    in property <string> value-text;
+    in property <float> minimum;
+    in property <float> maximum;
+    in-out property <float> value;
+    callback changed(float);
+    spacing: 3px;
+    HorizontalLayout {
+        Text { text: root.label; font-size: 13px; vertical-alignment: center; }
+        Rectangle { horizontal-stretch: 1; }
+        Text { text: root.value-text; font-size: 13px; color: #7a7a7a; vertical-alignment: center; }
+    }
+    Slider {
+        minimum: root.minimum;
+        maximum: root.maximum;
+        value: root.value;
+        changed(v) => { root.value = v; root.changed(v); }
+    }
+}
+
+export component AppWindow inherits Window {
+    title: "Kokoro Kindle Reader — Settings";
+    preferred-width: 430px;
+    preferred-height: 600px;
+    min-width: 380px;
+
+    // --- state (set from Rust) ---
+    in property <[string]> voices;
+    in-out property <int> voice-index;
+    in-out property <float> speed;
+    in-out property <float> gain;
+    in-out property <float> chunk;
+    in-out property <bool> kindle-kokoro;
+    in property <bool> model-ready;
+    in property <bool> downloading;
+    in property <float> download-frac;
+    in property <string> download-label;
+    in property <bool> verifying;
+    in property <bool> previewing;
+    in property <bool> kindle-busy;
+    in property <string> status;
+
+    // --- events (handled in Rust) ---
+    callback narrator-changed(int);
+    callback speed-changed(float);
+    callback gain-changed(float);
+    callback chunk-changed(float);
+    callback download-clicked();
+    callback verify-clicked();
+    callback kindle-toggled(bool);
+    callback preview-clicked();
+
+    VerticalLayout {
+        padding: 20px;
+        spacing: 16px;
+        alignment: start;
+
+        // Header
+        VerticalLayout {
+            spacing: 3px;
+            Text { text: "Kokoro Kindle Reader"; font-size: 22px; font-weight: 800; }
+            Text {
+                text: "Local, offline narration for Kindle.";
+                font-size: 12px;
+                color: #8a8a8a;
+            }
+        }
+
+        // Model status card
+        Rectangle {
+            background: #f4f4f6;
+            border-radius: 10px;
+            VerticalLayout {
+                padding: 14px;
+                spacing: 8px;
+                if root.downloading: VerticalLayout {
+                    spacing: 8px;
+                    Text { text: root.download-label; font-size: 12px; }
+                    ProgressIndicator { progress: root.download-frac; height: 6px; }
+                }
+                if !root.downloading && !root.model-ready: HorizontalLayout {
+                    spacing: 10px;
+                    Text {
+                        text: "Model not downloaded (~420 MB).";
+                        color: #b0701a;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                    }
+                    Button { text: "Download"; primary: true; clicked => { root.download-clicked(); } }
+                }
+                if !root.downloading && root.model-ready: HorizontalLayout {
+                    spacing: 10px;
+                    Text {
+                        text: "● Model ready";
+                        color: #2e8b40;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                    }
+                    Button {
+                        text: root.verifying ? "Verifying…" : "Verify";
+                        enabled: !root.verifying;
+                        clicked => { root.verify-clicked(); }
+                    }
+                }
+            }
+        }
+
+        // Narrator
+        VerticalLayout {
+            spacing: 4px;
+            Text { text: "NARRATOR"; font-size: 11px; font-weight: 700; color: #9a9a9a; }
+            ComboBox {
+                model: root.voices;
+                current-index <=> root.voice-index;
+                selected => { root.narrator-changed(self.current-index); }
+            }
+        }
+
+        // Sliders
+        SliderRow {
+            label: "Speed";
+            value-text: "\{Math.round(root.speed * 100) / 100}×";
+            minimum: 0.5;
+            maximum: 2.0;
+            value <=> root.speed;
+            changed(v) => { root.speed-changed(v); }
+        }
+        SliderRow {
+            label: "Volume";
+            value-text: "\{Math.round(root.gain * 100)}%";
+            minimum: 0.0;
+            maximum: 2.0;
+            value <=> root.gain;
+            changed(v) => { root.gain-changed(v); }
+        }
+        SliderRow {
+            label: "Sentences per chunk";
+            value-text: "\{Math.round(root.chunk)}";
+            minimum: 1.0;
+            maximum: 8.0;
+            value <=> root.chunk;
+            changed(v) => { root.chunk-changed(v); }
+        }
+
+        CheckBox {
+            text: "Use Kokoro as Kindle's default voice";
+            checked: root.kindle-kokoro;
+            enabled: !root.kindle-busy;
+            toggled => { root.kindle-toggled(self.checked); }
+        }
+
+        // Preview
+        HorizontalLayout {
+            Button {
+                text: root.previewing ? "Synthesizing…" : "▶  Preview voice";
+                enabled: !root.previewing && root.model-ready;
+                clicked => { root.preview-clicked(); }
+            }
+            Rectangle { horizontal-stretch: 1; }
+        }
+
+        Rectangle { vertical-stretch: 1; }
+
+        if root.status != "": Text {
+            text: root.status;
+            font-size: 12px;
+            color: #5a5a5a;
+            wrap: word-wrap;
+        }
+
+        Text {
+            text: "Keep Kokoro Kindle Reader running (tray) for Kindle to narrate.";
+            font-size: 11px;
+            color: #a0a0a0;
+            wrap: word-wrap;
+        }
+    }
+}

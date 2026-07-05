@@ -2,19 +2,23 @@
 name = "kokoro-panel"
 version = "0.1.0"
 edition = "2021"
-description = "Native settings panel for Kokoro Kindle Reader (egui)"
+description = "Native settings panel for Kokoro Kindle Reader (Slint)"
 
-# Separate from the headless host so eframe/egui/winit don't bloat the always-on
-# tray host. The tray spawns this on demand; it reads/writes the same controls.json
-# the host reads per utterance, so changes land on Kindle's next page. Preview
-# synthesizes via the host's pipe (same engine as Kindle).
+# Separate from the headless host so the GUI toolkit doesn't bloat the always-on
+# tray binary. The tray spawns this on demand; it reads/writes the same
+# controls.json the host reads per utterance, so changes land on Kindle's next
+# page. Preview synthesizes via the host's pipe (same engine as Kindle).
 
 [[bin]]
 name = "kokoro-panel"
 path = "src/main.rs"
 
+[build-dependencies]
+# Compiles ui/panel.slint into Rust (styled with the Fluent theme).
+slint-build = "1"
+
 [dependencies]
-eframe = "0.29"
+slint = "1"
 serde_json = "1"
 # Preview playback. The panel synthesizes a per-voice intro through the host's pipe
 # (same engine + controls.json as Kindle) and plays the returned PCM with rodio.
