@@ -14,6 +14,9 @@ path = "src/main.rs"
 
 [build-dependencies]
 cc = "1"
+# Embed a Windows version resource (FileDescription/ProductName/icon) so the exe
+# shows a friendly name + icon in Task Manager / Explorer instead of the bare file.
+winresource = "0.1"
 
 [dependencies]
 # Named-pipe server + async streaming/pacing (the Tauri-free pipe path).

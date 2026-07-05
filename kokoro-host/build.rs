@@ -5,10 +5,14 @@
 // src-tauri/build.rs's `build_native_synth` (the host is native-only).
 
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 fn main() {
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+
+    // Give the exe a friendly name + icon in Task Manager / Explorer.
+    embed_version_info(&manifest, "Kokoro Kindle Reader");
+
     // kokoro-host and kokoro-worker are both direct children of the repo root.
     let worker = manifest.parent().unwrap().join("kokoro-worker");
     let src = worker.join("src");
@@ -77,6 +81,33 @@ fn main() {
         "kokoro_ffi.h",
     ] {
         println!("cargo:rerun-if-changed={}", src.join(f).display());
+    }
+}
+
+/// Embed a Windows version resource (FileDescription/ProductName/FileVersion +
+/// the app icon) so the exe isn't just a bare filename in Task Manager / Explorer.
+/// No-op off Windows. The icon is the shared app icon under src-tauri/icons/.
+fn embed_version_info(manifest: &Path, description: &str) {
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
+        return;
+    }
+    let icon = manifest
+        .parent()
+        .unwrap()
+        .join("src-tauri")
+        .join("icons")
+        .join("icon.ico");
+    let mut res = winresource::WindowsResource::new();
+    if icon.exists() {
+        res.set_icon(icon.to_str().unwrap());
+    }
+    res.set("FileDescription", description);
+    res.set("ProductName", "Kokoro Kindle Reader");
+    res.set("FileVersion", "0.2.0.0");
+    res.set("ProductVersion", "0.2.0.0");
+    res.set("LegalCopyright", "Apache-2.0 licensed");
+    if let Err(e) = res.compile() {
+        println!("cargo:warning=winresource (host): {e}");
     }
 }
 

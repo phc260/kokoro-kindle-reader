@@ -16,6 +16,9 @@ path = "src/main.rs"
 [build-dependencies]
 # Compiles ui/panel.slint into Rust (styled with the Fluent theme).
 slint-build = "1"
+# Embed a Windows version resource (FileDescription/ProductName/icon) so the exe
+# shows a friendly name + icon in Task Manager / Explorer instead of the bare file.
+winresource = "0.1"
 
 [dependencies]
 slint = "1"

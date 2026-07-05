@@ -47,6 +47,11 @@ VIAddVersionKey "FileDescription" "${APPNAME} installer"
 !insertmacro MUI_LANGUAGE "English"
 
 Section "Install"
+  ; Upgrade-safe: stop a running instance so its exes/DLLs unlock before we
+  ; overwrite them (a fresh install just no-ops these).
+  nsExec::ExecToLog 'taskkill /IM kokoro-panel.exe /F'
+  nsExec::ExecToLog 'taskkill /IM kokoro-host.exe /F'
+
   SetOutPath "$INSTDIR"
   File "${STAGING}\kokoro-host.exe"
   File "${STAGING}\kokoro-panel.exe"
