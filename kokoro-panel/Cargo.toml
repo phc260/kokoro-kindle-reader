@@ -19,3 +19,8 @@ serde_json = "1"
 # Preview playback. The panel synthesizes a per-voice intro through the host's pipe
 # (same engine + controls.json as Kindle) and plays the returned PCM with rodio.
 rodio = { version = "0.19", default-features = false }
+# Model download/verify (blocking client on a bg thread; rustls avoids a system
+# OpenSSL dep). Files stream from HuggingFace per model-manifest.json; each is
+# SHA-256-verified before commit.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "blocking"] }
+sha2 = "0.10"
