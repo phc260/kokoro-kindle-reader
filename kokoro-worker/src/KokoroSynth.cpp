@@ -382,6 +382,30 @@ bool KokoroSynth::RunModel(const std::vector<int64_t>& ids, float speed,
     }
 }
 
+bool KokoroSynth::SynthOne(const std::string& utf8Text, float speed,
+                           std::vector<float>& outPcm, std::string& err) {
+    outPcm.clear();
+    string phon = Phonemize(utf8Text);
+    std::vector<int64_t> ids = Tokenize(phon);
+    if (std::getenv("KOKORO_DUMP_TOKENS")) {
+        std::fprintf(stderr, "PHON: %s\nTOKENS:", phon.c_str());
+        for (int64_t id : ids) std::fprintf(stderr, " %lld", (long long)id);
+        std::fprintf(stderr, "\n");
+    }
+    if (ids.size() <= 2) return true;  // empty / punctuation-only: nothing to say
+    return RunModel(ids, speed, outPcm, err);
+}
+
+bool KokoroSynth::SetVoice(const std::wstring& voiceBin, std::string& err) {
+    std::ifstream vf(voiceBin, std::ios::binary);
+    if (!vf) { err = "voice .bin open failed"; return false; }
+    std::vector<float> v(size_t(kVoiceRows) * kStyleDim);
+    vf.read(reinterpret_cast<char*>(v.data()), std::streamsize(v.size() * sizeof(float)));
+    if (!vf) { err = "voice .bin read short"; return false; }
+    m_->voice.swap(v);  // commit only on full success (keeps current voice otherwise)
+    return true;
+}
+
 KokoroSynth::Status KokoroSynth::Next(std::vector<float>& outPcm) {
     outPcm.clear();
     if (m_->cancel.load()) return Status::End;

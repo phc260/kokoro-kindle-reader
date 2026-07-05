@@ -47,6 +47,19 @@ public:
     // Honors Cancel() between chunks.
     Status Next(std::vector<float>& outPcm);
 
+    // Synthesize `utf8Text` as a SINGLE unit — NO sentence chunking (unlike
+    // Begin/Next). This is the per-chunk primitive the Rust pipe host calls: it
+    // owns split_text / prefetch / pacing and hands us one already-cut chunk.
+    // Empty/punctuation-only text yields an empty buffer + true. false + err on
+    // model failure.
+    bool SynthOne(const std::string& utf8Text, float speed, std::vector<float>& outPcm,
+                  std::string& err);
+
+    // Reload just the voice style vectors (narrator switch) from `voiceBin`; keeps
+    // the ORT session. Returns false + fills err on open/read failure (and keeps
+    // the current voice). For the pipe host's controls.json narrator changes.
+    bool SetVoice(const std::wstring& voiceBin, std::string& err);
+
     // Atomically request cancellation of the in-flight utterance (safe from another
     // thread — the SAPI engine calls this on stop). The next Next() returns End.
     void Cancel();

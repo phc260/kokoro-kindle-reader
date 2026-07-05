@@ -1,6 +1,7 @@
-# Downloaded / built third-party artifacts (re-created by tools/*.ps1)
-third_party/onnxruntime/
-third_party/espeak-ng-src/
+# Downloaded / built third-party artifacts + staged runtime DLLs
+# (all re-created by tools/*.ps1 and the staging step).
+third_party/
 # Build output
 build-test/
 build/
+ffi-probe/target/
