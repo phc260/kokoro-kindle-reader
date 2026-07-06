@@ -4,8 +4,9 @@ name: Headless installer (kokoro-host + panel)
 # (kokoro-panel) + the native Dawn WebGPU runtime + the x86 KokoroSapi.dll (Rust),
 # packaged by packaging/build-installer.ps1 (makensis). This is now the only edition
 # (the Tauri/WebView2 installer.yml is retired), so it owns the vX.Y.Z release tags.
-# Windows-only. The kokoro-worker C++ deps are provisioned by fetch-deps.ps1 (ORT
-# release zip + onnxruntime-webgpu wheel + an espeak-ng x64 build).
+# Windows-only. The synth runtime deps are provisioned by fetch-deps.ps1 (the
+# onnxruntime-webgpu wheel for the Dawn runtime DLLs + an espeak-ng x64 build). The
+# synth core is pure Rust; onnxruntime.dll is loaded at runtime via the `ort` crate.
 
 on:
   workflow_dispatch:
@@ -49,9 +50,10 @@ jobs:
       - name: Install NSIS
         run: choco install nsis -y --no-progress
 
-      # Provision kokoro-worker/third_party (ORT headers/lib + Dawn runtime DLLs +
-      # espeak-ng x64). Downloads + an espeak build; the slowest step.
-      - name: Provision native deps (ORT + espeak)
+      # Provision kokoro-worker/third_party: the Dawn runtime DLLs (from the
+      # onnxruntime-webgpu wheel) + an espeak-ng x64 build. Downloads + a build;
+      # the slowest step.
+      - name: Provision native deps (ORT runtime + espeak)
         shell: pwsh
         run: ./kokoro-worker/tools/fetch-deps.ps1
 
