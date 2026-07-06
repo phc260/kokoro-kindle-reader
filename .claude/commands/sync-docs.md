@@ -20,11 +20,17 @@ this" material) — don't pad.
   controls it describes, tuning advice, badges/links resolve.
 - `CLAUDE.md` — the gotchas/invariants and the architecture descriptions.
 - `ARCHITECTURE.md` — the engine chain, streaming/pacing model, Layout table, build steps.
+- **Per-crate READMEs** — `kokoro-host/`, `kokoro-panel/`, `kokoro-protocol/`,
+  `kokoro-sapi/`, `kokoro-sapi-smoke/`, `native-deps/`. These are deliberately *thin
+  pointers* (orient + the load-bearing gotcha + a link to `CLAUDE.md`/`ARCHITECTURE.md`),
+  so keep them thin: check their Layout tables list the files that actually exist, their
+  build/run snippets still run, and any invariant they restate agrees with `CLAUDE.md`.
+  Don't let them grow into a third full copy of the architecture.
 
 Drift-prone claim types to check explicitly:
 - **File/path references** — every file named in prose or the Layout table still exists
   at that path (e.g. `kokoro-sapi/*.ps1`, the DLL path, `kokoro-host/src/*`,
-  `kokoro-panel/src/*`, `kokoro-worker/tools/*`, `model-manifest.json`, `icons/`).
+  `kokoro-panel/src/*`, `native-deps/tools/*`, `model-manifest.json`, `icons/`).
 - **Wire-protocol names** — the markers named in docs match the `kokoro-protocol` crate
   (`STREAM_END`/`SYNTH_ERROR` = `0xFFFF_FFFE`/`0xFFFF_FFFF`, the `'S'` request
   `[rate][textBytes][text]`, the `[nSamples][gain][f32…]` frame format).
@@ -33,7 +39,7 @@ Drift-prone claim types to check explicitly:
   are *not* in the file — they're fixed constants in `pipe.rs`, so docs must not describe
   them as user-tunable.
 - **Dependency pins / versions** — the ORT / `onnxruntime-webgpu` pin in
-  `kokoro-worker/tools/fetch-deps.ps1` matches what the docs claim; the product version
+  `native-deps/tools/fetch-deps.ps1` matches what the docs claim; the product version
   agrees across `packaging/installer.nsi` (`VERSION`) and the `FileVersion` in
   `kokoro-host/build.rs` + `kokoro-panel/build.rs`.
 - **Command snippets** — the PowerShell/cargo commands in fenced blocks still run as
@@ -56,7 +62,7 @@ fix whichever side is wrong (code is the source of truth; update the comment/doc
   what `kokoro-panel` embeds and derives its narrator dropdowns from.
 - **Version sync** — the product version in `packaging/installer.nsi` (`VERSION`) ⇆ the
   `FileVersion`/`ProductVersion` set in `kokoro-host/build.rs` + `kokoro-panel/build.rs`.
-- **Build ordering** — `kokoro-worker/tools/fetch-deps.ps1` must run before building
+- **Build ordering** — `native-deps/tools/fetch-deps.ps1` must run before building
   `kokoro-host` (its `build.rs` panics without `third_party/`); `build-installer.ps1`
   builds the x86 SAPI DLL (`kokoro-sapi`, needs the `i686-pc-windows-msvc` target).
 - **Icons in LFS** — `icons/*` are tracked via Git LFS (`.gitattributes`); CI checks out
