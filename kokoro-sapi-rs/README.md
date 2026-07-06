@@ -71,6 +71,13 @@ that captures the PCM the engine writes. Start `kokoro-host` (with the model pre
 rerun the harness, and the `Speak` line reports the bytes/ms of audio streamed through
 the real pipe path. This exercises everything but the Kindle-specific in-process load.
 
+One command does the whole thing (builds, reuses/launches a host, runs the harness,
+tears down what it started):
+
+```powershell
+.\kokoro-sapi-smoke\run-speak-test.ps1
+```
+
 **Still NOT verified — needs the full A/B (see below):**
 - Audio *parity* with the C++ engine (by ear / spectral), abort/stop (close-to-cancel)
   under a real host, and behavior once loaded inside Kindle specifically.
