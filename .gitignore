@@ -10,3 +10,6 @@ target/
 .idea
 .DS_Store
 *.sw?
+
+# Scratch audio dumps from the SAPI smoke test
+*.wav

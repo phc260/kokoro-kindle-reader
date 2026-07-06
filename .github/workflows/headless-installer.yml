@@ -39,6 +39,8 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: i686-pc-windows-msvc # the x86 SAPI DLL (kokoro-sapi-rs)
 
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
@@ -46,6 +48,7 @@ jobs:
           workspaces: |
             kokoro-host
             kokoro-panel
+            kokoro-sapi-rs
 
       - name: Install NSIS
         run: choco install nsis -y --no-progress
@@ -56,12 +59,7 @@ jobs:
         shell: pwsh
         run: ./kokoro-worker/tools/fetch-deps.ps1
 
-      # x86 SAPI engine (separate MSVC x86 toolchain, in its own cmd subshell).
-      - name: Build SAPI engine (x86)
-        shell: pwsh
-        run: ./kokoro-sapi/build.ps1
-
-      # Release-build both crates, stage the bundle, run makensis.
+      # Build the x86 Rust SAPI DLL + release-build both crates, stage, run makensis.
       - name: Build installer
         shell: pwsh
         run: ./packaging/build-installer.ps1

@@ -19,7 +19,7 @@
 #
 # third_party/espeak-ng-src is a gitignored clone; re-run this after a fresh clone.
 $ErrorActionPreference = 'Stop'
-$root = Split-Path -Parent $PSScriptRoot                  # kokoro-sapi/
+$root = Split-Path -Parent $PSScriptRoot                  # kokoro-worker/
 $src  = Join-Path $root 'third_party\espeak-ng-src'
 if (-not (Test-Path (Join-Path $src '.git'))) {
     throw "espeak-ng source not at $src - clone it first:`n" +

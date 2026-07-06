@@ -23,11 +23,11 @@ this" material) — don't pad.
 
 Drift-prone claim types to check explicitly:
 - **File/path references** — every file named in prose or the Layout table still exists
-  at that path (e.g. `kokoro-sapi/*.ps1`, the DLL path, `kokoro-host/src/*`,
+  at that path (e.g. `kokoro-sapi-rs/*.ps1`, the DLL path, `kokoro-host/src/*`,
   `kokoro-panel/src/*`, `kokoro-worker/src/*`, `model-manifest.json`, `icons/`).
-- **Wire-protocol names** — the `WorkerProtocol.h` markers named in docs match the code
-  (`kStreamEnd`/`kSynthError` ⇆ `STREAM_END`/`SYNTH_ERROR` = `0xFFFF_FFFE`/`0xFFFF_FFFF`,
-  the `'S'` request `[rate][textBytes][text]`, the `[nSamples][gain][f32…]` frame format).
+- **Wire-protocol names** — the markers named in docs match the `kokoro-protocol` crate
+  (`STREAM_END`/`SYNTH_ERROR` = `0xFFFF_FFFE`/`0xFFFF_FFFF`, the `'S'` request
+  `[rate][textBytes][text]`, the `[nSamples][gain][f32…]` frame format).
 - **`controls.json` keys** — the keys the docs list are the ones actually written/read
   (`voice`, `speed`, `gain`, `chunk`, `kindle_kokoro`). Note the pacing lead / sub-frame
   are *not* in the file — they're fixed constants in `pipe.rs`, so docs must not describe
@@ -43,8 +43,9 @@ Drift-prone claim types to check explicitly:
 These are facts asserted in one place that must agree with another. Verify each pair and
 fix whichever side is wrong (code is the source of truth; update the comment/doc):
 
-- **Wire format** — `kokoro-sapi/src/WorkerProtocol.h` (C++) ⇆ the `kokoro-protocol`
-  crate (Rust, used by `kokoro-host/src/pipe.rs`). Two copies; change the format in both.
+- **Wire format** — the `kokoro-protocol` crate is the single source, used by **both**
+  `kokoro-host/src/pipe.rs` and the SAPI engine `kokoro-sapi-rs`. Verify neither hardcodes
+  the constants inline instead.
 - **`controls.json` contract** — the keys `kokoro-panel/src/main.rs` writes ⇆ the keys
   `kokoro-host/src/native_synth.rs` (`read_controls`) reads (and what `CLAUDE.md` lists).
 - **Chunker parity** — `split_text` in `kokoro-host/src/split_text.rs` ⇆ its 1:1 C++ port
@@ -55,7 +56,7 @@ fix whichever side is wrong (code is the source of truth; update the comment/doc
   `FileVersion`/`ProductVersion` set in `kokoro-host/build.rs` + `kokoro-panel/build.rs`.
 - **Build ordering** — `kokoro-worker/tools/fetch-deps.ps1` must run before building
   `kokoro-host` (its `build.rs` panics without `third_party/`); `build-installer.ps1`
-  runs `kokoro-sapi/build.ps1` if the x86 DLL is missing.
+  builds the x86 SAPI DLL (`kokoro-sapi-rs`, needs the `i686-pc-windows-msvc` target).
 - **Icons in LFS** — `icons/*` are tracked via Git LFS (`.gitattributes`); CI checks out
   with `lfs: true` so `icon.ico` bundles.
 
