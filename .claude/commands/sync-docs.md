@@ -43,8 +43,8 @@ Drift-prone claim types to check explicitly:
 These are facts asserted in one place that must agree with another. Verify each pair and
 fix whichever side is wrong (code is the source of truth; update the comment/doc):
 
-- **Wire format** — `kokoro-sapi/src/WorkerProtocol.h` ⇆ `kokoro-host/src/pipe.rs`
-  ("change it in both places").
+- **Wire format** — `kokoro-sapi/src/WorkerProtocol.h` (C++) ⇆ the `kokoro-protocol`
+  crate (Rust, used by `kokoro-host/src/pipe.rs`). Two copies; change the format in both.
 - **`controls.json` contract** — the keys `kokoro-panel/src/main.rs` writes ⇆ the keys
   `kokoro-host/src/native_synth.rs` (`read_controls`) reads (and what `CLAUDE.md` lists).
 - **Chunker parity** — `split_text` in `kokoro-host/src/split_text.rs` ⇆ its 1:1 C++ port

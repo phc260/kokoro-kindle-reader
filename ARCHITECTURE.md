@@ -117,6 +117,7 @@ gain, and per-chunk sentence count are user-facing.
 | `kokoro-panel/` | The native settings panel (Slint/Fluent): `ui/panel.slint` + `src/main.rs`, and the framework-agnostic `download.rs` / `kindle.rs` / `preview.rs`. Writes `controls.json`. |
 | `kokoro-worker/` | The C++ synth core: `KokoroText.cpp`, `KokoroSynth.cpp` (Dawn WebGPU EP), `kokoro_ffi.cpp` + `kokoro_ffi.h` (the C ABI). `tools/fetch-deps.ps1` provisions `third_party/` (ORT + Dawn DLLs + espeak). |
 | `kokoro-sapi/src/` | The x86 SAPI engine: `Dll.cpp`, `KokoroTTSEngine.cpp`, `WorkerClient.cpp`, `WorkerProtocol.h` (thin COM shim + pipe client, no deps). |
+| `kokoro-protocol/` | The named-pipe wire constants (pipe name, `'S'`/`'I'`, `STREAM_END`/`SYNTH_ERROR`, sample rate) as a small crate shared by `kokoro-host` — one Rust source of truth for the format (`WorkerProtocol.h` is the C++ copy). |
 | `kokoro-sapi/*.ps1` | `build.ps1` (builds the x86 engine, NMake via vcvarsall), `test-speak.ps1` (SAPI smoke test), `kindle-voice-guard.ps1` (Kindle hive patch), `voice-setup.ps1` (self-elevating register/unregister wrapper the installer calls). |
 | `model-manifest.json` | Files the model downloads from HF (paths + sizes + SHA-256); embedded in `kokoro-panel` (the narrator list is derived from it). |
 | `icons/` | Shared app icons (LFS); embedded in the exes' version resource and the installer. |

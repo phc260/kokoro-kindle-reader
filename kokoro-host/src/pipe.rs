@@ -18,15 +18,9 @@ use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
 
 use crate::native_synth::{self, NativeSynth};
 use crate::split_text::split_text;
+// The named-pipe wire format is shared with the SAPI engine (one source of truth).
+use kokoro_protocol::{CMD_INFO, CMD_SYNTH, MAX_TEXT_BYTES, PIPE_NAME, STREAM_END, SYNTH_ERROR};
 
-const PIPE_NAME: &str = r"\\.\pipe\KokoroSapiSynth";
-const CMD_SYNTH: u8 = b'S';
-const CMD_INFO: u8 = b'I';
-// Frame-stream markers (must match WorkerProtocol.h). A leading u32 >= STREAM_END
-// is a control marker, never a real sample count.
-const STREAM_END: u32 = 0xFFFF_FFFE;
-const SYNTH_ERROR: u32 = 0xFFFF_FFFF;
-const MAX_TEXT: u32 = 1 << 20;
 // Default send-pacing lead (ms): keep at most this much audio ahead of real time so
 // SAPI doesn't buffer a whole chunk of gain-baked PCM ahead of the speaker — a
 // volume/gain change then lands within ~this long. controls.json doesn't carry the
@@ -35,8 +29,9 @@ const DEFAULT_LEAD_MS: u32 = 500;
 // Default sub-frame size (ms): each chunk's PCM is sliced this fine, and gain is
 // re-read once per sub-frame. Smaller = finer volume granularity, more round-trips.
 const DEFAULT_SUBFRAME_MS: u32 = 250;
-// Kokoro's output rate (mono f32). Converts the ms knobs above to samples/seconds.
-const SAMPLE_RATE: f64 = 24_000.0;
+// Kokoro's output rate (mono f32) as f64, to convert the ms knobs above to
+// samples/seconds (the wire rate itself lives in kokoro_protocol::SAMPLE_RATE).
+const SAMPLE_RATE: f64 = kokoro_protocol::SAMPLE_RATE as f64;
 
 /// Everything the pipe path needs, in place of Tauri's AppHandle: where
 /// controls.json lives and the serialized native synth worker.
@@ -111,7 +106,7 @@ async fn serve_client(mut pipe: NamedPipeServer, ctx: Ctx) -> std::io::Result<()
                 let rate = f32::from_le_bytes(b4);
                 pipe.read_exact(&mut b4).await?;
                 let tlen = u32::from_le_bytes(b4);
-                if tlen == 0 || tlen > MAX_TEXT {
+                if tlen == 0 || tlen > MAX_TEXT_BYTES {
                     return Ok(());
                 }
                 let mut tbuf = vec![0u8; tlen as usize];

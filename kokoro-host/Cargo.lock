@@ -960,12 +960,17 @@ dependencies = [
  "auto-launch",
  "cc",
  "image",
+ "kokoro-protocol",
  "serde_json",
  "tao",
  "tokio",
  "tray-icon",
  "winresource",
 ]
+
+[[package]]
+name = "kokoro-protocol"
+version = "0.2.0"
 
 [[package]]
 name = "lazy_static"
