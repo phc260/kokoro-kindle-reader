@@ -939,7 +939,7 @@ dependencies = [
 
 [[package]]
 name = "kokoro-host"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "auto-launch",
  "image",
@@ -954,7 +954,7 @@ dependencies = [
 
 [[package]]
 name = "kokoro-protocol"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "lazy_static"
