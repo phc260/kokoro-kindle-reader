@@ -71,6 +71,15 @@ jobs:
           path: packaging/*-setup.exe
           if-no-files-found: error
 
+      # Release title: match the existing "kokoro-kindle-reader vX.Y.Z" convention
+      # (strip the headless-v tag prefix). This is now the only edition, so no
+      # "(headless)" qualifier.
+      - name: Compose release title
+        if: startsWith(github.ref, 'refs/tags/headless-v')
+        id: relname
+        shell: bash
+        run: echo "title=kokoro-kindle-reader v${GITHUB_REF_NAME#headless-v}" >> "$GITHUB_OUTPUT"
+
       # On a headless-v* tag, also publish a draft GitHub Release.
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/headless-v')
@@ -78,7 +87,7 @@ jobs:
         with:
           files: packaging/*-setup.exe
           draft: true
-          name: ${{ github.ref_name }} (headless)
+          name: ${{ steps.relname.outputs.title }}
           body: |
             WebView2-free edition of Kokoro Kindle Reader — a headless tray host
             (native Dawn WebGPU synthesis) + a native Slint settings panel.
