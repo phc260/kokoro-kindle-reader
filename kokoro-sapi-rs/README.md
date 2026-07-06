@@ -41,20 +41,31 @@ crate. A Rust panic can never unwind into Kindle — the crate builds with
 
 ## Status
 
-**Verified (statically):**
+**Verified statically:**
 - Builds clean for `i686-pc-windows-msvc`, zero warnings.
 - Output is a 32-bit PE32 DLL (~90 KB; the C++ is ~21 KB — both negligible vs the
   430 MB model).
 - The four COM entry points are exported undecorated.
 
-**NOT yet verified — needs a real A/B test (see below):**
-- QueryInterface across `ISpTTSEngine` / `ISpObjectWithToken` / `IUnknown` (that
-  `#[implement]` wires the vtables the way SAPI expects).
-- The hand-declared vtable **layouts/IIDs** matching `sapiddk.h` at runtime (a wrong
-  slot or IID fails silently — nothing plays).
-- `GetActions` returning `DWORD` by value across the vtable, and `ISpTTSEngineSite`
-  method offsets.
-- End-to-end narration in Kindle (audio parity, abort/stop, volume/rate response).
+**Verified at runtime by `../kokoro-sapi-smoke` (no Kindle, no host, no elevation):**
+- `DllGetClassObject` returns the class factory for the CLSID; `CreateInstance`
+  produces the engine.
+- QueryInterface across `ISpTTSEngine` / `ISpObjectWithToken` / `IUnknown` all
+  succeed; a bogus IID returns `E_NOINTERFACE`. So `#[implement]` wires the
+  multi-interface vtables correctly.
+- `GetOutputFormat` **dispatches through the vtable** and returns 24 kHz/16-bit/mono —
+  proving the hand-declared `ISpTTSEngine` slot order/IID are right.
+- `DllCanUnloadNow` returns `S_FALSE`.
+
+```powershell
+cargo build -p kokoro-sapi-rs --release --target i686-pc-windows-msvc
+cargo run  -p kokoro-sapi-smoke --release --target i686-pc-windows-msvc
+```
+
+**Still NOT verified — needs the real A/B test (see below):**
+- The `Speak` path end-to-end: pipe streaming to `kokoro-host`, audio parity with the
+  C++ engine, abort/stop (close-to-cancel), and volume/rate response.
+- Behavior once loaded inside Kindle specifically.
 
 ## A/B test (manual, your call — modifies the system)
 

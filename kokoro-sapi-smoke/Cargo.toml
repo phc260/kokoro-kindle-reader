@@ -1,0 +1,22 @@
+[package]
+name = "kokoro-sapi-smoke"
+version = "0.1.0"
+edition = "2021"
+description = "No-Kindle, no-elevation COM smoke test for the Rust SAPI DLL"
+
+[[bin]]
+name = "smoke"
+path = "src/main.rs"
+
+# Must match the DLL's bitness (32-bit):
+#   cargo run --release --target i686-pc-windows-msvc -p kokoro-sapi-smoke -- <path-to-dll>
+
+[dependencies]
+windows-core = "0.62"
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_System_LibraryLoader",
+    "Win32_Media_Audio",
+    "Win32_Media_Speech",
+] }
