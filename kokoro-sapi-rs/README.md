@@ -72,15 +72,17 @@ rerun the harness, and the `Speak` line reports the bytes/ms of audio streamed t
 the real pipe path. This exercises everything but the Kindle-specific in-process load.
 
 One command does the whole thing (builds, reuses/launches a host, runs the harness,
-tears down what it started):
+tears down what it started). Add `-Wav` to dump the engine's output for an audio A/B:
 
 ```powershell
 .\kokoro-sapi-smoke\run-speak-test.ps1
+.\kokoro-sapi-smoke\run-speak-test.ps1 -Wav rust-engine.wav   # -> a 24 kHz mono WAV
 ```
 
 **Still NOT verified — needs the full A/B (see below):**
-- Audio *parity* with the C++ engine (by ear / spectral), abort/stop (close-to-cancel)
-  under a real host, and behavior once loaded inside Kindle specifically.
+- Audio *parity* with the C++ engine — dump both engines' output (the Rust one via
+  `-Wav`) and compare by ear / spectrally.
+- Abort/stop (close-to-cancel) under a real host, and behavior inside Kindle.
 
 ## A/B test (manual, your call — modifies the system)
 

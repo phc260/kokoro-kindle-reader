@@ -104,10 +104,37 @@ impl ISpTTSEngineSite_Impl for TestSite_Impl {
     }
 }
 
+/// Minimal 24 kHz / 16-bit / mono WAV writer. `pcm` is exactly the int16 LE bytes the
+/// engine wrote, so we just prepend a 44-byte header.
+fn write_wav(path: &str, pcm: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let (sr, ch, bits) = (24000u32, 1u16, 16u16);
+    let block_align = ch * (bits / 8);
+    let byte_rate = sr * block_align as u32;
+    let data_len = pcm.len() as u32;
+    let mut f = std::fs::File::create(path)?;
+    f.write_all(b"RIFF")?;
+    f.write_all(&(36 + data_len).to_le_bytes())?;
+    f.write_all(b"WAVE")?;
+    f.write_all(b"fmt ")?;
+    f.write_all(&16u32.to_le_bytes())?; // PCM fmt chunk size
+    f.write_all(&1u16.to_le_bytes())?; // WAVE_FORMAT_PCM
+    f.write_all(&ch.to_le_bytes())?;
+    f.write_all(&sr.to_le_bytes())?;
+    f.write_all(&byte_rate.to_le_bytes())?;
+    f.write_all(&block_align.to_le_bytes())?;
+    f.write_all(&bits.to_le_bytes())?;
+    f.write_all(b"data")?;
+    f.write_all(&data_len.to_le_bytes())?;
+    f.write_all(pcm)?;
+    Ok(())
+}
+
 /// Drive the engine's real `Speak` path against a running kokoro-host: build a text
-/// fragment + a capturing site, call Speak, and confirm PCM came back. Reports SKIP if
-/// the host isn't serving the pipe (Speak returns E_FAIL with no audio).
-unsafe fn speak_test(engine: &ISpTTSEngine) {
+/// fragment + a capturing site, call Speak, and confirm PCM came back (optionally
+/// dumping it to `wav` for an audio A/B). Reports SKIP if the host isn't serving the
+/// pipe (Speak returns E_FAIL with no audio).
+unsafe fn speak_test(engine: &ISpTTSEngine, wav: Option<&str>) {
     let pcm = Arc::new(Mutex::new(Vec::<u8>::new()));
     let site: ISpTTSEngineSite = TestSite { pcm: pcm.clone() }.into();
 
@@ -140,6 +167,13 @@ unsafe fn speak_test(engine: &ISpTTSEngine) {
         &format!("Speak streamed PCM ({bytes} bytes ≈ {ms} ms) hr={hr:?}"),
         hr.is_ok() && bytes > 0,
     );
+
+    if let (Some(path), true) = (wav, bytes > 0) {
+        match write_wav(path, &pcm.lock().unwrap()) {
+            Ok(()) => println!("  wrote {path}"),
+            Err(e) => println!("  WAV write failed: {e}"),
+        }
+    }
 }
 
 // A GUID we know the engine does NOT implement.
@@ -163,7 +197,19 @@ fn check(name: &str, ok: bool) {
 }
 
 fn main() {
-    let path = std::env::args().nth(1).unwrap_or_else(|| {
+    // Args: [<dll-path>] [--wav <out.wav>]. Both optional.
+    let mut path: Option<String> = None;
+    let mut wav: Option<String> = None;
+    let mut args = std::env::args().skip(1);
+    while let Some(a) = args.next() {
+        match a.as_str() {
+            "--wav" => wav = args.next(),
+            _ => {
+                path.get_or_insert(a);
+            }
+        }
+    }
+    let path = path.unwrap_or_else(|| {
         r"..\kokoro-sapi-rs\target\i686-pc-windows-msvc\release\KokoroSapi.dll".into()
     });
     println!("Loading {path}");
@@ -229,7 +275,7 @@ fn main() {
         }
 
         // The real synthesis path (requires a running host).
-        speak_test(&engine);
+        speak_test(&engine, wav.as_deref());
     }
     finish();
 }

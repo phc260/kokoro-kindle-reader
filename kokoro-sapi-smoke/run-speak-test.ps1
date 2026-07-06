@@ -5,6 +5,8 @@
 # elevation. ASCII-only (PowerShell 5.1).
 #
 #   .\kokoro-sapi-smoke\run-speak-test.ps1
+#   .\kokoro-sapi-smoke\run-speak-test.ps1 -Wav out.wav   # also dump the audio
+param([string]$Wav)
 $ErrorActionPreference = 'Stop'
 $target = 'i686-pc-windows-msvc'
 $root = Split-Path $PSScriptRoot -Parent
@@ -39,10 +41,12 @@ $deadline = (Get-Date).AddSeconds(15)
 while (-not (Test-Pipe) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 300 }
 if (-not (Test-Pipe)) { Write-Warning 'pipe never appeared; the Speak test will report SKIP' }
 
-# 3. Run the harness.
+# 3. Run the harness (optionally dumping the audio for an A/B).
+$smokeArgs = @($dll)
+if ($Wav) { $smokeArgs += @('--wav', $Wav) }
 try {
     Write-Host ''
-    & $smoke $dll
+    & $smoke @smokeArgs
     $code = $LASTEXITCODE
 } finally {
     # 4. Stop only the host we started.
