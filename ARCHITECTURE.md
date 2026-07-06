@@ -117,7 +117,7 @@ gain, and per-chunk sentence count are user-facing.
 |---|---|
 | `kokoro-host/` | The windowless tray host (x64): `main.rs` (tao event loop + tray + `auto-launch`), `pipe.rs` (named-pipe server; owns chunking + prefetch + pacing), `native_synth.rs` (serialized Rust WebGPU synth + `controls.json` reader) + `text.rs`/`espeak.rs` (kokoro-js text normalizer + espeak-ng FFI), `split_text.rs` (the sentence-chunk splitter). `build.rs` links the espeak-ng import lib and stages the runtime DLLs + `espeak-ng-data`. |
 | `kokoro-panel/` | The native settings panel (Slint/Fluent): `ui/panel.slint` + `src/main.rs`, and the framework-agnostic `download.rs` / `kindle.rs` / `preview.rs`. Writes `controls.json`. |
-| `kokoro-worker/` | Synth **dependency provisioning** only (no source): `tools/fetch-deps.ps1` populates `third_party/` — the Dawn/WebGPU runtime DLLs (from the `onnxruntime-webgpu` wheel) + espeak-ng (x64 build + import lib + `espeak-ng-data`). |
+| `native-deps/` | Synth **dependency provisioning** only (no source): `tools/fetch-deps.ps1` populates `third_party/` — the Dawn/WebGPU runtime DLLs (from the `onnxruntime-webgpu` wheel) + espeak-ng (x64 build + import lib + `espeak-ng-data`). |
 | `kokoro-sapi/` | The x86 SAPI engine — a Rust `cdylib` (thin COM shim + pipe client, no deps): `lib.rs` (COM exports + registration), `engine.rs` (`ISpTTSEngine`), `worker.rs` (pipe client), `sapi.rs` (hand-declared `sapiddk.h` interfaces). Plus the `voice-setup.ps1` / `kindle-voice-guard.ps1` (Kindle hive patch) / `test-speak.ps1` scripts. |
 | `kokoro-sapi-smoke/` | No-Kindle COM + Speak smoke test for the engine (`run-speak-test.ps1`). |
 | `kokoro-protocol/` | The named-pipe wire constants (pipe name, `'S'`/`'I'`, `STREAM_END`/`SYNTH_ERROR`, sample rate) as a small crate shared by **both** `kokoro-host` and `kokoro-sapi` — the single source of truth for the format. |
@@ -134,7 +134,7 @@ Studio with the MSVC toolchain + CMake, Python (for the onnxruntime-webgpu wheel
 ```powershell
 # 1. One-time: provision the synth runtime deps
 #    (Dawn runtime DLLs + espeak-ng x64 import lib/DLL + espeak-ng-data)
-.\kokoro-worker\tools\fetch-deps.ps1
+.\native-deps\tools\fetch-deps.ps1
 rustup target add i686-pc-windows-msvc   # for the x86 SAPI DLL
 
 # 2. Build + run the headless host (tray). Right-click the tray → Settings for the panel.

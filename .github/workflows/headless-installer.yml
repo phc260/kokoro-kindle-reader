@@ -50,12 +50,12 @@ jobs:
       - name: Install NSIS
         run: choco install nsis -y --no-progress
 
-      # Provision kokoro-worker/third_party: the Dawn runtime DLLs (from the
+      # Provision native-deps/third_party: the Dawn runtime DLLs (from the
       # onnxruntime-webgpu wheel) + an espeak-ng x64 build. Downloads + a build;
       # the slowest step.
       - name: Provision native deps (ORT runtime + espeak)
         shell: pwsh
-        run: ./kokoro-worker/tools/fetch-deps.ps1
+        run: ./native-deps/tools/fetch-deps.ps1
 
       # Build the x86 Rust SAPI DLL + release-build both crates, stage, run makensis.
       - name: Build installer

@@ -22,7 +22,7 @@ if ($LASTEXITCODE) { throw 'DLL build failed' }
 cargo build --release --target $target --manifest-path (Join-Path $root 'kokoro-sapi-smoke\Cargo.toml')
 if ($LASTEXITCODE) { throw 'harness build failed' }
 cargo build --manifest-path (Join-Path $root 'kokoro-host\Cargo.toml')
-if ($LASTEXITCODE) { throw 'host build failed (did you run kokoro-worker\tools\fetch-deps.ps1?)' }
+if ($LASTEXITCODE) { throw 'host build failed (did you run native-deps\tools\fetch-deps.ps1?)' }
 
 # 2. Ensure a host is serving the pipe. Reuse a running one; otherwise launch a
 #    throwaway we own (and will stop). Note: real synthesis needs the model present.

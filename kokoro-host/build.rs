@@ -12,9 +12,9 @@ fn main() {
     // Give the exe a friendly name + icon in Task Manager / Explorer.
     embed_version_info(&manifest, "Kokoro Kindle Reader");
 
-    // kokoro-host and kokoro-worker are both direct children of the repo root.
-    let worker = manifest.parent().unwrap().join("kokoro-worker");
-    let tp = worker.join("third_party");
+    // kokoro-host and native-deps are both direct children of the repo root.
+    let native_deps = manifest.parent().unwrap().join("native-deps");
+    let tp = native_deps.join("third_party");
     let espk_lib = tp
         .join("espeak-ng-src")
         .join("build-x64")
@@ -29,7 +29,7 @@ fn main() {
     for p in [&espk_lib, &runtime, &espk_data] {
         if !p.exists() {
             panic!(
-                "kokoro-host: missing {} — run kokoro-worker/tools/fetch-deps.ps1 \
+                "kokoro-host: missing {} — run native-deps/tools/fetch-deps.ps1 \
                  (which downloads the ORT/Dawn runtime and builds the espeak artifacts) first",
                 p.display()
             );

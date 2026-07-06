@@ -1,4 +1,4 @@
-# Reproducibly provision kokoro-worker/third_party (the runtime DLLs the host stages +
+# Reproducibly provision native-deps/third_party (the runtime DLLs the host stages +
 # the espeak import lib it links) with no manual venv / hardcoded paths, so a fresh
 # clone or CI runner can build the synth. Populates:
 #
@@ -19,7 +19,7 @@ param(
     [switch]$Force
 )
 $ErrorActionPreference = 'Stop'
-$root = Split-Path -Parent $PSScriptRoot   # kokoro-worker/
+$root = Split-Path -Parent $PSScriptRoot   # native-deps/
 $tp   = Join-Path $root 'third_party'
 $tools = $PSScriptRoot
 New-Item -ItemType Directory -Force $tp | Out-Null

@@ -4,6 +4,10 @@
 # Rust build output (each crate also ignores its own target/)
 target/
 
+# kokoro-protocol is a path-dep library, not built standalone — no lockfile of its own
+# (the binary crates that consume it commit theirs). Ignore the stray one cargo leaves.
+kokoro-protocol/Cargo.lock
+
 # Editor / OS
 .vscode/*
 !.vscode/extensions.json
