@@ -62,7 +62,17 @@ if ($Force -or -not (Test-Path (Join-Path $runtime 'onnxruntime.dll'))) {
     Get-ChildItem $capi -Filter '*.dll' | ForEach-Object { Copy-Item $_.FullName $runtime -Force }
 }
 
-# --- 3. espeak-ng x64 (build) -----------------------------------------------
+# --- 3. espeak-ng x64 (clone + build) ---------------------------------------
+# build-espeak.ps1 needs the source clone to exist (it's gitignored, so a fresh
+# checkout / CI runner won't have it). Clone the 1.52.0 tag before building; the
+# build script does the tag checkout + horse-hoarse revert on top of it.
+$espkSrc = Join-Path $tp 'espeak-ng-src'
+if (-not (Test-Path (Join-Path $espkSrc '.git'))) {
+    Write-Host '==> Cloning espeak-ng (tag 1.52.0)'
+    & git clone --branch 1.52.0 --depth 1 https://github.com/espeak-ng/espeak-ng.git $espkSrc
+    if ($LASTEXITCODE) { throw 'git clone espeak-ng failed' }
+}
+
 $espkDll = Join-Path $tp 'espeak-ng-src\build-x64\src\espeak-ng.dll'
 if ($Force -or -not (Test-Path $espkDll)) {
     Write-Host '==> Building espeak-ng (x64, 1.52.0 + horse-hoarse revert)'
