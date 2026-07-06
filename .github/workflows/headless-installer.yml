@@ -1,20 +1,16 @@
 name: Headless installer (kokoro-host + panel)
 
-# Builds the WebView2-free edition's installer: the tray host (kokoro-host) + the
-# Slint settings panel (kokoro-panel) + the native Dawn WebGPU runtime + the
-# unchanged x86 KokoroSapi.dll, packaged by packaging/build-installer.ps1 (makensis).
-#
-# Separate from installer.yml (the Tauri/WebView2 edition) so `main` keeps shipping
-# that while this edition matures on the headless-tray branch. Windows-only.
-#
-# NOTE: not yet validated on a real runner — the kokoro-worker C++ deps are
-# provisioned here by fetch-deps.ps1 (ORT release zip + onnxruntime-webgpu wheel +
-# an espeak-ng x64 build), which was verified locally but not end-to-end in CI.
+# Builds the installer: the tray host (kokoro-host) + the Slint settings panel
+# (kokoro-panel) + the native Dawn WebGPU runtime + the x86 KokoroSapi.dll (Rust),
+# packaged by packaging/build-installer.ps1 (makensis). This is now the only edition
+# (the Tauri/WebView2 installer.yml is retired), so it owns the vX.Y.Z release tags.
+# Windows-only. The kokoro-worker C++ deps are provisioned by fetch-deps.ps1 (ORT
+# release zip + onnxruntime-webgpu wheel + an espeak-ng x64 build).
 
 on:
   workflow_dispatch:
   push:
-    tags: ['headless-v*']
+    tags: ['v*']
 
 permissions:
   contents: write
@@ -72,17 +68,16 @@ jobs:
           if-no-files-found: error
 
       # Release title: match the existing "kokoro-kindle-reader vX.Y.Z" convention
-      # (strip the headless-v tag prefix). This is now the only edition, so no
-      # "(headless)" qualifier.
+      # (strip the leading v from the tag).
       - name: Compose release title
-        if: startsWith(github.ref, 'refs/tags/headless-v')
+        if: startsWith(github.ref, 'refs/tags/v')
         id: relname
         shell: bash
-        run: echo "title=kokoro-kindle-reader v${GITHUB_REF_NAME#headless-v}" >> "$GITHUB_OUTPUT"
+        run: echo "title=kokoro-kindle-reader v${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
-      # On a headless-v* tag, also publish a draft GitHub Release.
+      # On a v* tag, also publish a draft GitHub Release.
       - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/headless-v')
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           files: packaging/*-setup.exe
