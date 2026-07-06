@@ -47,7 +47,8 @@ crate. A Rust panic can never unwind into Kindle — the crate builds with
   430 MB model).
 - The four COM entry points are exported undecorated.
 
-**Verified at runtime by `../kokoro-sapi-smoke` (no Kindle, no host, no elevation):**
+**Verified at runtime by `../kokoro-sapi-smoke` (no Kindle, no registration, no
+elevation):**
 - `DllGetClassObject` returns the class factory for the CLSID; `CreateInstance`
   produces the engine.
 - QueryInterface across `ISpTTSEngine` / `ISpObjectWithToken` / `IUnknown` all
@@ -56,16 +57,23 @@ crate. A Rust panic can never unwind into Kindle — the crate builds with
 - `GetOutputFormat` **dispatches through the vtable** and returns 24 kHz/16-bit/mono —
   proving the hand-declared `ISpTTSEngine` slot order/IID are right.
 - `DllCanUnloadNow` returns `S_FALSE`.
+- With no host, `Speak` returns `E_FAIL` and no audio (the correct "no pipe, no
+  fallback" behavior).
 
 ```powershell
-cargo build -p kokoro-sapi-rs --release --target i686-pc-windows-msvc
+cargo build -p kokoro-sapi-rs   --release --target i686-pc-windows-msvc
 cargo run  -p kokoro-sapi-smoke --release --target i686-pc-windows-msvc
 ```
 
-**Still NOT verified — needs the real A/B test (see below):**
-- The `Speak` path end-to-end: pipe streaming to `kokoro-host`, audio parity with the
-  C++ engine, abort/stop (close-to-cancel), and volume/rate response.
-- Behavior once loaded inside Kindle specifically.
+**Verifiable with a running host, still without Kindle/registration/elevation:**
+The smoke harness includes a `Speak`-path test — it supplies a fake `ISpTTSEngineSite`
+that captures the PCM the engine writes. Start `kokoro-host` (with the model present),
+rerun the harness, and the `Speak` line reports the bytes/ms of audio streamed through
+the real pipe path. This exercises everything but the Kindle-specific in-process load.
+
+**Still NOT verified — needs the full A/B (see below):**
+- Audio *parity* with the C++ engine (by ear / spectral), abort/stop (close-to-cancel)
+  under a real host, and behavior once loaded inside Kindle specifically.
 
 ## A/B test (manual, your call — modifies the system)
 
@@ -84,9 +92,13 @@ C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe -File ..\kokoro-sapi\t
 # To revert: regsvr32 /u the Rust DLL and re-register the C++ one.
 ```
 
+## Shared wire protocol
+
+The wire format lives in the `kokoro-protocol` crate, depended on by **both** this DLL
+and `kokoro-host` — one source of truth, so the two ends can't drift. (The C++
+`WorkerProtocol.h` is the third copy; it goes away if this DLL replaces `kokoro-sapi/`.)
+
 ## If it graduates
 
 Replace `kokoro-sapi/` and point `packaging/build-installer.ps1` +
-`kokoro-sapi/voice-setup.ps1` at this DLL. The genuine upside: `protocol.rs` could be
-promoted to a crate shared with `kokoro-host`, retiring the `WorkerProtocol.h` ⇆
-`pipe.rs` "change it in both places" duplication.
+`kokoro-sapi/voice-setup.ps1` at this DLL.

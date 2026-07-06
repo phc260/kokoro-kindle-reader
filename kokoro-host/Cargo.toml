@@ -18,6 +18,8 @@ cc = "1"
 winresource = "0.1"
 
 [dependencies]
+# The named-pipe wire format, shared with the SAPI engine (one source of truth).
+kokoro-protocol = { path = "../kokoro-protocol" }
 # Named-pipe server + async streaming/pacing (the Tauri-free pipe path).
 tokio = { version = "1", features = ["net", "io-util", "rt", "rt-multi-thread", "sync", "time", "macros"] }
 # controls.json parsing (shared with native_synth.rs::read_controls).

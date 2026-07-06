@@ -8,7 +8,6 @@
 #![allow(non_snake_case)]
 
 mod engine;
-mod protocol;
 mod sapi;
 mod worker;
 

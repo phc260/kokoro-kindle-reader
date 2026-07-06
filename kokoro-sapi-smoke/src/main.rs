@@ -15,11 +15,14 @@
 
 use core::ffi::c_void;
 use core::ptr::null_mut;
+use std::sync::{Arc, Mutex};
 
+use windows::Win32::Foundation::{E_NOTIMPL, S_OK};
 use windows::Win32::Media::Audio::WAVEFORMATEX;
+use windows::Win32::Media::Speech::{SPVA_Speak, SPVSTATE, SPVTEXTFRAG};
 use windows::Win32::System::Com::IClassFactory;
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
-use windows_core::{interface, s, Interface, GUID, HRESULT, IUnknown, IUnknown_Vtbl, PCWSTR};
+use windows_core::{implement, interface, s, Interface, GUID, HRESULT, IUnknown, IUnknown_Vtbl, PCWSTR};
 
 // Must match kokoro-sapi-rs.
 const CLSID_KOKORO: GUID = GUID::from_u128(0x0898F9AB_42C8_4DA5_A54F_520C9DD13C49);
@@ -36,6 +39,107 @@ unsafe trait ISpTTSEngine: IUnknown {
 unsafe trait ISpObjectWithToken: IUnknown {
     pub unsafe fn SetObjectToken(&self, token: *mut c_void) -> HRESULT;
     pub unsafe fn GetObjectToken(&self, token: *mut *mut c_void) -> HRESULT;
+}
+
+// The site SAPI normally supplies to Speak; here a fake one that captures the PCM the
+// engine writes. Full vtable in order (the engine calls GetActions/GetVolume/GetRate/
+// Write). IID + slot order match kokoro-sapi-rs::sapi::ISpTTSEngineSite.
+#[interface("9880499B-CCE9-11D2-B503-00C04F797396")]
+unsafe trait ISpTTSEngineSite: IUnknown {
+    pub unsafe fn AddEvents(&self, events: *const c_void, count: u32) -> HRESULT;
+    pub unsafe fn GetEventInterest(&self, interest: *mut u64) -> HRESULT;
+    pub unsafe fn GetActions(&self) -> u32;
+    pub unsafe fn Write(&self, buf: *const c_void, cb: u32, written: *mut u32) -> HRESULT;
+    pub unsafe fn GetRate(&self, rate: *mut i32) -> HRESULT;
+    pub unsafe fn GetVolume(&self, volume: *mut u16) -> HRESULT;
+    pub unsafe fn GetSkipInfo(&self, ty: *mut i32, items: *mut i32) -> HRESULT;
+    pub unsafe fn CompleteSkip(&self, skipped: i32) -> HRESULT;
+}
+
+#[implement(ISpTTSEngineSite)]
+struct TestSite {
+    pcm: Arc<Mutex<Vec<u8>>>, // bytes the engine writes (int16 mono @ 24 kHz)
+}
+
+impl ISpTTSEngineSite_Impl for TestSite_Impl {
+    unsafe fn AddEvents(&self, _e: *const c_void, _c: u32) -> HRESULT {
+        S_OK
+    }
+    unsafe fn GetEventInterest(&self, i: *mut u64) -> HRESULT {
+        if !i.is_null() {
+            *i = 0;
+        }
+        S_OK
+    }
+    unsafe fn GetActions(&self) -> u32 {
+        0 // no abort, no volume/rate change mid-stream
+    }
+    unsafe fn Write(&self, buf: *const c_void, cb: u32, written: *mut u32) -> HRESULT {
+        if !buf.is_null() && cb > 0 {
+            let slice = core::slice::from_raw_parts(buf as *const u8, cb as usize);
+            self.pcm.lock().unwrap().extend_from_slice(slice);
+        }
+        if !written.is_null() {
+            *written = cb;
+        }
+        S_OK
+    }
+    unsafe fn GetRate(&self, r: *mut i32) -> HRESULT {
+        if !r.is_null() {
+            *r = 0;
+        }
+        S_OK
+    }
+    unsafe fn GetVolume(&self, v: *mut u16) -> HRESULT {
+        if !v.is_null() {
+            *v = 100;
+        }
+        S_OK
+    }
+    unsafe fn GetSkipInfo(&self, _t: *mut i32, _n: *mut i32) -> HRESULT {
+        E_NOTIMPL
+    }
+    unsafe fn CompleteSkip(&self, _n: i32) -> HRESULT {
+        E_NOTIMPL
+    }
+}
+
+/// Drive the engine's real `Speak` path against a running kokoro-host: build a text
+/// fragment + a capturing site, call Speak, and confirm PCM came back. Reports SKIP if
+/// the host isn't serving the pipe (Speak returns E_FAIL with no audio).
+unsafe fn speak_test(engine: &ISpTTSEngine) {
+    let pcm = Arc::new(Mutex::new(Vec::<u8>::new()));
+    let site: ISpTTSEngineSite = TestSite { pcm: pcm.clone() }.into();
+
+    let text: Vec<u16> = "This is a Kokoro speech test.".encode_utf16().collect();
+    let mut state: SPVSTATE = core::mem::zeroed();
+    state.eAction = SPVA_Speak;
+    let frag = SPVTEXTFRAG {
+        pNext: null_mut(),
+        State: state,
+        pTextStart: PCWSTR(text.as_ptr()),
+        ulTextLen: text.len() as u32,
+        ulTextSrcOffset: 0,
+    };
+
+    println!("\nSpeak path (needs kokoro-host running):");
+    let hr = engine.Speak(
+        0,
+        null_mut(),
+        null_mut(),
+        &frag as *const SPVTEXTFRAG as *const c_void,
+        site.as_raw(),
+    );
+    let bytes = pcm.lock().unwrap().len();
+    if hr.is_err() && bytes == 0 {
+        println!("  SKIP  Speak returned {hr:?}, no audio — is kokoro-host running?");
+        return;
+    }
+    let ms = bytes / 2 * 1000 / 24000; // int16 mono @ 24 kHz
+    check(
+        &format!("Speak streamed PCM ({bytes} bytes ≈ {ms} ms) hr={hr:?}"),
+        hr.is_ok() && bytes > 0,
+    );
 }
 
 // A GUID we know the engine does NOT implement.
@@ -123,6 +227,9 @@ fn main() {
         if !wfx.is_null() {
             windows::Win32::System::Com::CoTaskMemFree(Some(wfx as *const c_void));
         }
+
+        // The real synthesis path (requires a running host).
+        speak_test(&engine);
     }
     finish();
 }
