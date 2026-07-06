@@ -1,6 +1,5 @@
 // Utterance → sentence-chunk splitter for the headless host's pipe path. The
-// correctness-critical chunking; mirrored 1:1 by the C++ chunker in
-// kokoro-worker/src/KokoroSynth.cpp. Pure (no external deps).
+// correctness-critical chunking. Pure (no external deps).
 
 /// Split an utterance into sentence chunks for streaming. We ramp up: the FIRST
 /// chunk is a single sentence (so audio starts quickly), then chunks coalesce
