@@ -158,7 +158,7 @@ runs `makensis`):
 .\packaging\build-installer.ps1
 ```
 
-CI does this on a `v*` tag (`.github/workflows/headless-installer.yml`); the
+CI does this on a `v*` tag (`.github/workflows/installer.yml`); the
 `sapi.yml` workflow builds the DLL + runs the COM smoke test on engine changes.
 
 ## Kindle for PC notes (technical)
