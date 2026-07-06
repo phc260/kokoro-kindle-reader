@@ -1,6 +1,6 @@
 [package]
 name = "kokoro-panel"
-version = "0.2.1"
+version = "0.2.0"
 edition = "2021"
 description = "Native settings panel for Kokoro Kindle Reader (Slint)"
 
