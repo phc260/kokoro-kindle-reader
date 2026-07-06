@@ -1,7 +1,7 @@
-//! In-process COM server for the Kokoro SAPI5 voice — Rust prototype of the C++
-//! `kokoro-sapi` shim. Connect-only: it forwards each `Speak` over the named pipe to
-//! the running kokoro-host, which synthesizes and returns PCM. MUST be built x86
-//! (Kindle is a 32-bit process and loads this in-process).
+//! In-process COM server for the Kokoro SAPI5 voice — the x86 engine Kindle loads.
+//! Connect-only: it forwards each `Speak` over the named pipe to the running
+//! kokoro-host, which synthesizes and returns PCM. MUST be built x86 (Kindle is a
+//! 32-bit process and loads this in-process).
 
 // COM interface/method names and the KokoroSapi.dll crate name follow Windows
 // conventions, not Rust's.
