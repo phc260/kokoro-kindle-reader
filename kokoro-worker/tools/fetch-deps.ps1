@@ -1,14 +1,16 @@
-# Reproducibly provision kokoro-worker/third_party (the ORT + espeak artifacts the
-# host/panel build.rs link against) with no manual venv / hardcoded paths, so a
-# fresh clone or CI runner can build the native synth. Populates:
+# Reproducibly provision kokoro-worker/third_party (the runtime DLLs the host stages +
+# the espeak import lib it links) with no manual venv / hardcoded paths, so a fresh
+# clone or CI runner can build the synth. Populates:
 #
-#   third_party/onnxruntime/include, /lib   (headers + import lib; ORT release zip)
 #   third_party/runtime/*.dll               (Dawn/WebGPU onnxruntime.dll +
 #                                            providers_shared + dxcompiler + dxil,
 #                                            from the onnxruntime-webgpu wheel;
 #                                            espeak-ng.dll from the espeak build)
 #   third_party/espeak-ng-src/...           (espeak-ng 1.52.0 x64 + horse-hoarse
-#                                            revert, via build-espeak.ps1)
+#                                            revert + import lib, via build-espeak.ps1)
+#
+# The ONNX model runs on the `ort` crate's WebGPU EP via load-dynamic, so onnxruntime.dll
+# is loaded at runtime (not linked) - no ORT headers/import lib needed.
 #
 # Requires: Python+pip (for `pip download` of the wheel), CMake + MSVC (espeak),
 # and network. Idempotent: pass -Force to re-provision.
@@ -24,24 +26,7 @@ New-Item -ItemType Directory -Force $tp | Out-Null
 
 $ProgressPreference = 'SilentlyContinue'   # fast Invoke-WebRequest
 
-# --- 1. ORT release zip: headers + import lib -------------------------------
-$ortDir = Join-Path $tp 'onnxruntime'
-if ($Force -or -not (Test-Path (Join-Path $ortDir 'lib\onnxruntime.lib'))) {
-    Write-Host "==> Fetching ONNX Runtime $OrtVersion (headers + import lib)"
-    $zipUrl = "https://github.com/microsoft/onnxruntime/releases/download/v$OrtVersion/onnxruntime-win-x64-$OrtVersion.zip"
-    $tmp = Join-Path $env:TEMP "ort-$OrtVersion.zip"
-    Invoke-WebRequest -Uri $zipUrl -OutFile $tmp
-    $ex = Join-Path $env:TEMP "ort-$OrtVersion"
-    Remove-Item -Recurse -Force $ex -ErrorAction SilentlyContinue
-    Expand-Archive $tmp -DestinationPath $ex
-    $inner = Get-ChildItem $ex -Directory | Select-Object -First 1
-    Remove-Item -Recurse -Force $ortDir -ErrorAction SilentlyContinue
-    New-Item -ItemType Directory -Force $ortDir | Out-Null
-    Copy-Item -Recurse (Join-Path $inner.FullName 'include') $ortDir
-    Copy-Item -Recurse (Join-Path $inner.FullName 'lib') $ortDir
-}
-
-# --- 2. onnxruntime-webgpu wheel: the Dawn runtime DLLs ----------------------
+# --- 1. onnxruntime-webgpu wheel: the Dawn runtime DLLs ----------------------
 $runtime = Join-Path $tp 'runtime'
 New-Item -ItemType Directory -Force $runtime | Out-Null
 if ($Force -or -not (Test-Path (Join-Path $runtime 'onnxruntime.dll'))) {
@@ -62,7 +47,7 @@ if ($Force -or -not (Test-Path (Join-Path $runtime 'onnxruntime.dll'))) {
     Get-ChildItem $capi -Filter '*.dll' | ForEach-Object { Copy-Item $_.FullName $runtime -Force }
 }
 
-# --- 3. espeak-ng x64 (clone + build) ---------------------------------------
+# --- 2. espeak-ng x64 (clone + build) ---------------------------------------
 # build-espeak.ps1 needs the source clone to exist (it's gitignored, so a fresh
 # checkout / CI runner won't have it). Clone the 1.52.0 tag before building; the
 # build script does the tag checkout + horse-hoarse revert on top of it.
@@ -82,6 +67,5 @@ if ($Force -or -not (Test-Path $espkDll)) {
 Copy-Item $espkDll $runtime -Force
 
 Write-Host '==> third_party provisioned:'
-Write-Host ("    onnxruntime/lib : {0}" -f (Test-Path (Join-Path $ortDir 'lib\onnxruntime.lib')))
 Write-Host ("    runtime DLLs    : {0}" -f (Get-ChildItem $runtime -Filter '*.dll').Count)
 Write-Host ("    espeak-ng.dll   : {0}" -f (Test-Path $espkDll))

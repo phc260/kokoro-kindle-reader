@@ -24,7 +24,7 @@ this" material) — don't pad.
 Drift-prone claim types to check explicitly:
 - **File/path references** — every file named in prose or the Layout table still exists
   at that path (e.g. `kokoro-sapi-rs/*.ps1`, the DLL path, `kokoro-host/src/*`,
-  `kokoro-panel/src/*`, `kokoro-worker/src/*`, `model-manifest.json`, `icons/`).
+  `kokoro-panel/src/*`, `kokoro-worker/tools/*`, `model-manifest.json`, `icons/`).
 - **Wire-protocol names** — the markers named in docs match the `kokoro-protocol` crate
   (`STREAM_END`/`SYNTH_ERROR` = `0xFFFF_FFFE`/`0xFFFF_FFFF`, the `'S'` request
   `[rate][textBytes][text]`, the `[nSamples][gain][f32…]` frame format).
@@ -48,8 +48,10 @@ fix whichever side is wrong (code is the source of truth; update the comment/doc
   the constants inline instead.
 - **`controls.json` contract** — the keys `kokoro-panel/src/main.rs` writes ⇆ the keys
   `kokoro-host/src/native_synth.rs` (`read_controls`) reads (and what `CLAUDE.md` lists).
-- **Chunker parity** — `split_text` in `kokoro-host/src/split_text.rs` ⇆ its 1:1 C++ port
-  `SplitText` in `kokoro-worker/src/KokoroSynth.cpp`.
+- **Phonemizer parity** — `kokoro-host/src/text.rs` (normalization/segmentation) +
+  `espeak.rs` must stay token-identical to kokoro-js; the golden tests in `text.rs`
+  (`#[cfg(test)] mod tests`) lock the normalization passes. Model I/O (input names,
+  style-row = clamp(nTokens-2,0,509), fp32) lives in `native_synth.rs::run_model`.
 - **Manifest ⇆ narrator list** — voice entries in `model-manifest.json` (repo root) are
   what `kokoro-panel` embeds and derives its narrator dropdowns from.
 - **Version sync** — the product version in `packaging/installer.nsi` (`VERSION`) ⇆ the

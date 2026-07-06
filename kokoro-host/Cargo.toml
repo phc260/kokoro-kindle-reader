@@ -4,15 +4,14 @@ version = "0.2.0"
 edition = "2021"
 description = "Synthesis host for Kokoro Kindle Reader"
 
-# Standalone crate (own target dir), not a workspace member. build.rs compiles
-# kokoro-worker's C++ synth core; native_synth.rs / split_text.rs live in src/.
+# Standalone crate (own target dir), not a workspace member. The synth core is pure
+# Rust: native_synth.rs (ort WebGPU) + text.rs / espeak.rs / split_text.rs in src/.
 
 [[bin]]
 name = "kokoro-host"
 path = "src/main.rs"
 
 [build-dependencies]
-cc = "1"
 # Embed a Windows version resource (FileDescription/ProductName/icon) so the exe
 # shows a friendly name + icon in Task Manager / Explorer instead of the bare file.
 winresource = "0.1"
@@ -22,8 +21,13 @@ winresource = "0.1"
 kokoro-protocol = { path = "../kokoro-protocol" }
 # Named-pipe server + async streaming/pacing.
 tokio = { version = "1", features = ["net", "io-util", "rt", "rt-multi-thread", "sync", "time", "macros"] }
-# controls.json parsing (shared with native_synth.rs::read_controls).
+# controls.json + tokenizer.json parsing (native_synth.rs).
 serde_json = "1"
+# Kokoro ONNX inference on the Dawn WebGPU EP. load-dynamic loads the staged
+# onnxruntime.dll at runtime (the WebGPU EP register() is enabled by it); an explicit
+# api-NN feature is required under default-features=false (the 1.27 wheel is API 27, so
+# api-24 — the max ort-sys exposes — is fine, DLLs are backward-compatible).
+ort = { version = "=2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "load-dynamic", "api-24"] }
 # System tray + its event loop. tao (Tauri's windowing lib) hosts a windowless
 # message loop; tray-icon adds the tray + menu — the whole GUI surface of the host
 # (the settings panel is a separate process).

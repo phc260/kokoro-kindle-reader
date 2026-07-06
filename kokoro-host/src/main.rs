@@ -2,9 +2,10 @@
 // synth. A tray icon (tao message loop) is the only GUI; the settings panel is a
 // separate process. The tokio pipe server runs on a background thread.
 //
-//   - native_synth.rs (serialized C++ WebGPU worker + controls.json reader)
+//   - native_synth.rs (serialized Rust WebGPU synth worker + controls.json reader)
+//   - text.rs / espeak.rs (the kokoro-js text normalizer + espeak-ng FFI)
 //   - split_text.rs   (the sentence-chunk splitter)
-// are plain modules here. The C++ core is compiled and its runtime DLLs staged by
+// are plain modules here. The ORT/espeak runtime DLLs + espeak-ng-data are staged by
 // build.rs.
 
 // Windows GUI subsystem: no console window when launched from Explorer / at login.
@@ -13,9 +14,10 @@
 
 use std::path::PathBuf;
 
-// native_synth's `extern "C"` symbols resolve to the C++ compiled in build.rs.
+mod espeak;
 mod native_synth;
 mod split_text;
+mod text;
 
 mod pipe;
 

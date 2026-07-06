@@ -5,8 +5,9 @@ installation and day-to-day use, see the [README](README.md).
 
 Local, offline text-to-speech built on [Kokoro-82M](https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX),
 synthesized **natively on the Dawn WebGPU** execution provider of ONNX Runtime (the
-same Dawn that Chrome/WebView2 ship) via a small C++ core — **no browser, no
-WebView2**. It serves two front ends:
+same Dawn that Chrome/WebView2 ship) — **no browser, no WebView2, no C++**. The synth
+core is pure Rust: the `ort` crate drives the model on the WebGPU EP and espeak-ng is
+reached over a thin FFI. It serves two front ends:
 
 1. **A native settings panel** (Slint) — pick a narrator, tune speed and volume, and
    audition it with a Preview button (there's no free-text reading box; the app's job
@@ -30,7 +31,7 @@ flowchart TB
   subgraph H["⚙️ kokoro-host.exe · 64-bit, windowless tray"]
     direction LR
     PIPE["pipe.rs<br/>named-pipe server · owns chunking"]
-    SYNTH["native_synth.rs → kokoro-worker C++<br/>★ KokoroSynth on Dawn WebGPU EP"]
+    SYNTH["native_synth.rs · Rust<br/>★ text + espeak + ort on Dawn WebGPU EP"]
     PIPE -->|"synth each chunk"| SYNTH
     SYNTH -->|"raw f32 PCM"| PIPE
   end
@@ -85,12 +86,13 @@ DLL straight into Kindle and calls its functions:
    elevated (UAC) on demand. The chosen state is recorded in `controls.json`
    (`kindle_kokoro`) so the checkbox initializes to the last-set state.
 
-**Native synthesis.** `native_synth.rs` is a thin Rust FFI wrapper over the C++ core
-in `kokoro-worker/` (KokoroText + KokoroSynth on the ORT **Dawn WebGPU** EP + espeak).
-espeak keeps global state and isn't thread-safe, so all synthesis is **serialized onto
-one dedicated worker thread** that owns the `KokoroWorker` for the process lifetime;
-requests arrive over an mpsc channel and replies come back on tokio oneshots so the
-async pipe tasks never block.
+**Native synthesis.** `native_synth.rs` is the pure-Rust synth core: `text.rs`
+normalize/segment → `espeak.rs` phonemize (espeak-ng FFI) → tokenize → the Kokoro ONNX
+model on the ORT **Dawn WebGPU** EP via the `ort` crate (load-dynamic against the staged
+`onnxruntime.dll`) → f32 PCM. espeak keeps global state and isn't thread-safe (and the
+`ort` session lives here), so all synthesis is **serialized onto one dedicated worker
+thread** that owns the session for the process lifetime; requests arrive over an mpsc
+channel and replies come back on tokio oneshots so the async pipe tasks never block.
 
 **Streaming.** `pipe.rs` synthesizes **sentence by sentence** — a small first chunk
 (fast first sound) then N-sentence chunks (user-tunable via the `chunk` setting) —
@@ -113,9 +115,9 @@ gain, and per-chunk sentence count are user-facing.
 
 | Path | What |
 |---|---|
-| `kokoro-host/` | The windowless tray host (x64): `main.rs` (tao event loop + tray + `auto-launch`), `pipe.rs` (named-pipe server; owns chunking + prefetch + pacing), `native_synth.rs` (serialized C++ WebGPU worker + `controls.json` reader), `split_text.rs` (the sentence-chunk splitter). `build.rs` compiles the `kokoro-worker` C++ and stages the runtime DLLs + `espeak-ng-data`. |
+| `kokoro-host/` | The windowless tray host (x64): `main.rs` (tao event loop + tray + `auto-launch`), `pipe.rs` (named-pipe server; owns chunking + prefetch + pacing), `native_synth.rs` (serialized Rust WebGPU synth + `controls.json` reader) + `text.rs`/`espeak.rs` (kokoro-js text normalizer + espeak-ng FFI), `split_text.rs` (the sentence-chunk splitter). `build.rs` links the espeak-ng import lib and stages the runtime DLLs + `espeak-ng-data`. |
 | `kokoro-panel/` | The native settings panel (Slint/Fluent): `ui/panel.slint` + `src/main.rs`, and the framework-agnostic `download.rs` / `kindle.rs` / `preview.rs`. Writes `controls.json`. |
-| `kokoro-worker/` | The C++ synth core: `KokoroText.cpp`, `KokoroSynth.cpp` (Dawn WebGPU EP), `kokoro_ffi.cpp` + `kokoro_ffi.h` (the C ABI). `tools/fetch-deps.ps1` provisions `third_party/` (ORT + Dawn DLLs + espeak). |
+| `kokoro-worker/` | Synth **dependency provisioning** only (no source): `tools/fetch-deps.ps1` populates `third_party/` — the Dawn/WebGPU runtime DLLs (from the `onnxruntime-webgpu` wheel) + espeak-ng (x64 build + import lib + `espeak-ng-data`). |
 | `kokoro-sapi-rs/` | The x86 SAPI engine — a Rust `cdylib` (thin COM shim + pipe client, no deps): `lib.rs` (COM exports + registration), `engine.rs` (`ISpTTSEngine`), `worker.rs` (pipe client), `sapi.rs` (hand-declared `sapiddk.h` interfaces). Plus the `voice-setup.ps1` / `kindle-voice-guard.ps1` (Kindle hive patch) / `test-speak.ps1` scripts. |
 | `kokoro-sapi-smoke/` | No-Kindle COM + Speak smoke test for the engine (`run-speak-test.ps1`). |
 | `kokoro-protocol/` | The named-pipe wire constants (pipe name, `'S'`/`'I'`, `STREAM_END`/`SYNTH_ERROR`, sample rate) as a small crate shared by **both** `kokoro-host` and `kokoro-sapi-rs` — the single source of truth for the format. |
@@ -130,8 +132,8 @@ Studio with the MSVC toolchain + CMake, Python (for the onnxruntime-webgpu wheel
 [NSIS](https://nsis.sourceforge.io/) (for the installer).
 
 ```powershell
-# 1. One-time: provision the C++ synth deps
-#    (ORT headers/lib + Dawn runtime DLLs + espeak-ng x64 + espeak-ng-data)
+# 1. One-time: provision the synth runtime deps
+#    (Dawn runtime DLLs + espeak-ng x64 import lib/DLL + espeak-ng-data)
 .\kokoro-worker\tools\fetch-deps.ps1
 rustup target add i686-pc-windows-msvc   # for the x86 SAPI DLL
 
