@@ -86,7 +86,8 @@ No Rust test suites; "testing" is Preview in the panel and Read Aloud in Kindle 
   "Settings" spawns `kokoro-panel.exe` (tracked via `Child`/`try_wait` to avoid dup
   windows). `#![windows_subsystem = "windows"]` in release so there's no console.
 - `pipe.rs` — the **SAPI bridge** and the **owner of all chunking**. A tokio named-pipe
-  server at `\\.\pipe\KokoroSapiSynth` speaking the `WorkerProtocol.h` wire format. Each
+  server at `\\.\pipe\KokoroSapiSynth` speaking the wire format from the `kokoro-protocol`
+  crate (pipe name, `'S'`/`'I'` commands, `STREAM_END`/`SYNTH_ERROR` markers). Each
   `'S'` request carries the **whole utterance**; `split_text` cuts it into sentence
   chunks (first chunk = 1 sentence for a fast start, then `chunk` sentences each), a
   **depth-1 prefetch pipeline** renders each chunk via `native_synth`, and the PCM is
@@ -122,8 +123,9 @@ No Rust test suites; "testing" is Preview in the panel and Read Aloud in Kindle 
   gain × host volume and writing ~250 ms blocks with `SPVES_ABORT` checks. Stop
   interrupts by closing the pipe (`WorkerClient::Close`).
 - `WorkerClient.cpp` — pipe **client**: `EnsureConnected` is connect-only (no spawn).
-- `WorkerProtocol.h` — the wire format, shared in spirit with `pipe.rs`. **Change it in
-  both places.**
+- `WorkerProtocol.h` — the C++ side of the wire format. Its Rust counterpart is the
+  `kokoro-protocol` crate (used by `pipe.rs`); the two are separate copies. **Change
+  the format in both.**
 
 ### Packaging / installer
 - **Standalone NSIS** via `makensis` (`packaging/installer.nsi` + `build-installer.ps1`)
@@ -189,7 +191,8 @@ No Rust test suites; "testing" is Preview in the panel and Read Aloud in Kindle 
   relocating means re-`regsvr32`.
 - **Shared files live outside `kokoro-sapi`.** `native_synth.rs` + `split_text.rs` are in
   `kokoro-host/src/`; `model-manifest.json` + `icons/` are at the repo root (the panel
-  embeds the manifest; the exes + installer use the icons). `icons/*` are in Git LFS.
+  embeds the manifest; the exes + installer use the icons). `icons/*` are in Git LFS. The
+  pipe wire constants are in the `kokoro-protocol` crate (a `path` dep of `kokoro-host`).
 
 ## Environment quirks
 

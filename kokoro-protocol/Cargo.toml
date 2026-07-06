@@ -1,0 +1,8 @@
+[package]
+name = "kokoro-protocol"
+version = "0.2.0"
+edition = "2021"
+description = "Shared named-pipe wire protocol between kokoro-host and the SAPI engine"
+
+# Pure constants, no deps — builds for both the x64 host and the x86 SAPI DLL.
+[lib]
