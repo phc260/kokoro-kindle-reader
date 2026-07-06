@@ -4,11 +4,11 @@ version = 4
 
 [[package]]
 name = "kokoro-protocol"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "kokoro-sapi-rs"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "kokoro-protocol",
  "windows",

@@ -1,8 +1,8 @@
 ; Standalone NSIS installer for the headless (no-WebView2) edition of
 ; Kokoro Kindle Reader. Bundles the tray host + Slint settings panel + the native
-; Dawn WebGPU runtime + the UNCHANGED x86 KokoroSapi.dll, and registers the SAPI
-; voice via voice-setup.ps1 (self-elevating). Per-user install, unelevated; the
-; registration raises one UAC prompt.
+; Dawn WebGPU runtime + the x86 KokoroSapi.dll (Rust, kokoro-sapi-rs), and registers
+; the SAPI voice via voice-setup.ps1 (self-elevating). Per-user install, unelevated;
+; the registration raises one UAC prompt.
 ;
 ; Build via packaging/build-installer.ps1 (stages files into packaging/staging then
 ; runs makensis). See CLAUDE.md "Packaging / installer".
@@ -12,7 +12,7 @@ Unicode true
 
 !define APPNAME "Kokoro Kindle Reader"
 !define COMPANY "phc260"
-!define VERSION "0.2.0"
+!define VERSION "0.2.1"
 !define STAGING "staging"
 !define RUNKEY "Software\Microsoft\Windows\CurrentVersion\Run"
 !define RUNVALUE "kokoro-kindle-reader"
@@ -28,7 +28,7 @@ InstallDir "$LOCALAPPDATA\kokoro-kindle-reader"
 RequestExecutionLevel user
 SetCompressor /SOLID lzma
 
-VIProductVersion "0.2.0.0"
+VIProductVersion "0.2.1.0"
 VIAddVersionKey "ProductName" "${APPNAME}"
 VIAddVersionKey "FileVersion" "${VERSION}"
 VIAddVersionKey "CompanyName" "${COMPANY}"
