@@ -1,4 +1,4 @@
-//! No-Kindle, no-elevation smoke test for the Rust SAPI DLL (`kokoro-sapi-rs`).
+//! No-Kindle, no-elevation smoke test for the Rust SAPI DLL (`kokoro-sapi`).
 //!
 //! It never touches the registry: it `LoadLibrary`s the built DLL, calls its exported
 //! `DllGetClassObject` to get the class factory, `CreateInstance`s the engine, and then
@@ -24,7 +24,7 @@ use windows::Win32::System::Com::IClassFactory;
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 use windows_core::{implement, interface, s, Interface, GUID, HRESULT, IUnknown, IUnknown_Vtbl, PCWSTR};
 
-// Must match kokoro-sapi-rs.
+// Must match kokoro-sapi.
 const CLSID_KOKORO: GUID = GUID::from_u128(0x0898F9AB_42C8_4DA5_A54F_520C9DD13C49);
 
 // Minimal redeclarations so we can call across the vtable (only the slots we touch
@@ -43,7 +43,7 @@ unsafe trait ISpObjectWithToken: IUnknown {
 
 // The site SAPI normally supplies to Speak; here a fake one that captures the PCM the
 // engine writes. Full vtable in order (the engine calls GetActions/GetVolume/GetRate/
-// Write). IID + slot order match kokoro-sapi-rs::sapi::ISpTTSEngineSite.
+// Write). IID + slot order match kokoro-sapi::sapi::ISpTTSEngineSite.
 #[interface("9880499B-CCE9-11D2-B503-00C04F797396")]
 unsafe trait ISpTTSEngineSite: IUnknown {
     pub unsafe fn AddEvents(&self, events: *const c_void, count: u32) -> HRESULT;
@@ -210,7 +210,7 @@ fn main() {
         }
     }
     let path = path.unwrap_or_else(|| {
-        r"..\kokoro-sapi-rs\target\i686-pc-windows-msvc\release\KokoroSapi.dll".into()
+        r"..\kokoro-sapi\target\i686-pc-windows-msvc\release\KokoroSapi.dll".into()
     });
     println!("Loading {path}");
     let wpath: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();

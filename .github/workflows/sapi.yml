@@ -1,15 +1,15 @@
-name: sapi-rs (Rust SAPI engine)
+name: sapi (Rust SAPI engine)
 
-# Builds the x86 Rust SAPI DLL (kokoro-sapi-rs) and runs the no-Kindle COM smoke test
+# Builds the x86 Rust SAPI DLL (kokoro-sapi) and runs the no-Kindle COM smoke test
 # (kokoro-sapi-smoke): LoadLibrary + DllGetClassObject + CreateInstance + QI across the
 # interfaces + GetOutputFormat. The engine is a thin COM shim + named-pipe client with
 # no third-party deps -- all synthesis happens in kokoro-host. SAPI5 is Windows-only.
 
 on:
   push:
-    paths: ['kokoro-sapi-rs/**', 'kokoro-sapi-smoke/**', 'kokoro-protocol/**', '.github/workflows/sapi-rs.yml']
+    paths: ['kokoro-sapi/**', 'kokoro-sapi-smoke/**', 'kokoro-protocol/**', '.github/workflows/sapi.yml']
   pull_request:
-    paths: ['kokoro-sapi-rs/**', 'kokoro-sapi-smoke/**', 'kokoro-protocol/**', '.github/workflows/sapi-rs.yml']
+    paths: ['kokoro-sapi/**', 'kokoro-sapi-smoke/**', 'kokoro-protocol/**', '.github/workflows/sapi.yml']
   workflow_dispatch:
 
 jobs:
@@ -23,16 +23,16 @@ jobs:
           targets: i686-pc-windows-msvc
 
       - name: Build SAPI DLL (x86)
-        run: cargo build --release --target i686-pc-windows-msvc --manifest-path kokoro-sapi-rs/Cargo.toml
+        run: cargo build --release --target i686-pc-windows-msvc --manifest-path kokoro-sapi/Cargo.toml
 
       # No host running on the runner, so the Speak path self-SKIPs; the COM checks
       # (7) still run and a vtable/QI regression fails the job.
       - name: COM smoke test (no Kindle, no host)
-        run: cargo run --release --target i686-pc-windows-msvc --manifest-path kokoro-sapi-smoke/Cargo.toml -- kokoro-sapi-rs/target/i686-pc-windows-msvc/release/KokoroSapi.dll
+        run: cargo run --release --target i686-pc-windows-msvc --manifest-path kokoro-sapi-smoke/Cargo.toml -- kokoro-sapi/target/i686-pc-windows-msvc/release/KokoroSapi.dll
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: KokoroSapi.dll
-          path: kokoro-sapi-rs/target/i686-pc-windows-msvc/release/KokoroSapi.dll
+          path: kokoro-sapi/target/i686-pc-windows-msvc/release/KokoroSapi.dll
           if-no-files-found: error
