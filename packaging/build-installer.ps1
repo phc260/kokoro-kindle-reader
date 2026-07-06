@@ -1,38 +1,30 @@
-# Build the headless-edition NSIS installer: release-builds the tray host + Slint
-# panel, stages everything the installer needs (both exes + native runtime DLLs +
-# espeak data + the x86 KokoroSapi.dll + guard scripts), then runs makensis.
+# Build the NSIS installer: build the x86 Rust SAPI DLL (kokoro-sapi-rs),
+# release-build the tray host + Slint panel, stage everything the installer needs
+# (both exes + native runtime DLLs + espeak data + the x86 KokoroSapi.dll + guard
+# scripts), then run makensis.
 #
 #   packaging\build-installer.ps1            # full: build + stage + makensis
 #   packaging\build-installer.ps1 -SkipBuild # reuse existing release binaries
-#   packaging\build-installer.ps1 -RustSapi  # bundle the Rust SAPI DLL (prototype)
 #
-# Output: packaging\kokoro-kindle-reader-<version>[-rust]-setup.exe
-param([switch]$SkipBuild, [switch]$RustSapi)
+# Output: packaging\kokoro-kindle-reader-<version>-setup.exe
+param([switch]$SkipBuild)
 $ErrorActionPreference = 'Stop'
 
 $here = $PSScriptRoot
 $root = Split-Path $here -Parent
 $hostRel = Join-Path $root 'kokoro-host\target\release'
 $panelRel = Join-Path $root 'kokoro-panel\target\release'
-$sapi = Join-Path $root 'kokoro-sapi'
+$sapiRs = Join-Path $root 'kokoro-sapi-rs'
 
-# 1. The x86 SAPI DLL. -RustSapi bundles the Rust prototype engine
-#    (kokoro-sapi-rs) instead of the C++ one; both export the same COM entry points
-#    + CLSID, so the registration flow (voice-setup.ps1) is identical.
-if ($RustSapi) {
-    Write-Host '==> Building the Rust x86 KokoroSapi.dll (kokoro-sapi-rs)'
-    Push-Location (Join-Path $root 'kokoro-sapi-rs')
-    cargo build --release --target i686-pc-windows-msvc
-    if ($LASTEXITCODE) { throw 'Rust SAPI DLL build failed' }
-    Pop-Location
-    $sapiDll = Join-Path $root 'kokoro-sapi-rs\target\i686-pc-windows-msvc\release\KokoroSapi.dll'
-} else {
-    if (-not (Test-Path (Join-Path $sapi 'build\KokoroSapi.dll'))) {
-        Write-Host '==> Building x86 KokoroSapi.dll'
-        & (Join-Path $sapi 'build.ps1')
-    }
-    $sapiDll = Join-Path $sapi 'build\KokoroSapi.dll'
-}
+# 1. Build the x86 SAPI DLL (Kindle is 32-bit, loads it in-process). The Rust engine
+#    is connect-only -- it forwards Speak to kokoro-host over the pipe -- so there's no
+#    ONNX/espeak dep here.
+Write-Host '==> cargo build --release --target i686-pc-windows-msvc (kokoro-sapi-rs)'
+Push-Location $sapiRs
+cargo build --release --target i686-pc-windows-msvc
+if ($LASTEXITCODE) { throw 'SAPI DLL build failed (need the i686-pc-windows-msvc target?)' }
+Pop-Location
+$sapiDll = Join-Path $sapiRs 'target\i686-pc-windows-msvc\release\KokoroSapi.dll'
 
 # 2. Release-build both Rust crates (each stages its own runtime next to the exe).
 if (-not $SkipBuild) {
@@ -57,8 +49,8 @@ Copy-Item (Join-Path $root 'icons\icon.ico') (Join-Path $stage 'icon.ico')
 
 $res = Join-Path $stage 'resources'
 Copy-Item $sapiDll $res
-Copy-Item (Join-Path $sapi 'kindle-voice-guard.ps1') $res
-Copy-Item (Join-Path $sapi 'voice-setup.ps1') $res
+Copy-Item (Join-Path $sapiRs 'kindle-voice-guard.ps1') $res
+Copy-Item (Join-Path $sapiRs 'voice-setup.ps1') $res
 
 # 4. Compile the installer.
 $makensis = 'C:\Program Files (x86)\NSIS\makensis.exe'
@@ -67,12 +59,5 @@ Write-Host '==> makensis'
 & $makensis (Join-Path $here 'installer.nsi')
 if ($LASTEXITCODE) { throw 'makensis failed' }
 
-$out = Get-ChildItem (Join-Path $here '*-setup.exe') | Where-Object { $_.Name -notlike '*-rust-setup.exe' } | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-if ($RustSapi) {
-    # Rename so the Rust-engine build doesn't collide with the C++ one.
-    $rust = $out.FullName -replace '-setup\.exe$', '-rust-setup.exe'
-    Move-Item -Force $out.FullName $rust
-    $out = Get-Item $rust
-    Write-Host '    (bundled the Rust SAPI engine)'
-}
+$out = Get-ChildItem (Join-Path $here '*-setup.exe') | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 Write-Host "==> Installer: $($out.FullName)  ($([math]::Round($out.Length/1MB,1)) MB)"

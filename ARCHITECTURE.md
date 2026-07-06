@@ -69,7 +69,7 @@ DLL straight into Kindle and calls its functions:
    **must be x86** (matching Kindle) and a native COM DLL — and why it stays a separate
    file from the x64 host.
 3. **The DLL is a thin shim → the host.** `Speak` sends the *whole* utterance over the
-   pipe `\\.\pipe\KokoroSapiSynth` (`WorkerProtocol.h`) in one `'S'` request
+   pipe `\\.\pipe\KokoroSapiSynth` (wire format: the `kokoro-protocol` crate) in one `'S'` request
    (`[rate][textBytes][text]`) and gets back a **stream** of PCM frames
    (`[nSamples][gain][f32…]`, ended by a `kStreamEnd` / `kSynthError` marker — the u32
    sentinels `0xFFFF_FFFE` / `0xFFFF_FFFF`). `kokoro-host`'s `pipe.rs` owns the
@@ -116,33 +116,34 @@ gain, and per-chunk sentence count are user-facing.
 | `kokoro-host/` | The windowless tray host (x64): `main.rs` (tao event loop + tray + `auto-launch`), `pipe.rs` (named-pipe server; owns chunking + prefetch + pacing), `native_synth.rs` (serialized C++ WebGPU worker + `controls.json` reader), `split_text.rs` (the sentence-chunk splitter). `build.rs` compiles the `kokoro-worker` C++ and stages the runtime DLLs + `espeak-ng-data`. |
 | `kokoro-panel/` | The native settings panel (Slint/Fluent): `ui/panel.slint` + `src/main.rs`, and the framework-agnostic `download.rs` / `kindle.rs` / `preview.rs`. Writes `controls.json`. |
 | `kokoro-worker/` | The C++ synth core: `KokoroText.cpp`, `KokoroSynth.cpp` (Dawn WebGPU EP), `kokoro_ffi.cpp` + `kokoro_ffi.h` (the C ABI). `tools/fetch-deps.ps1` provisions `third_party/` (ORT + Dawn DLLs + espeak). |
-| `kokoro-sapi/src/` | The x86 SAPI engine: `Dll.cpp`, `KokoroTTSEngine.cpp`, `WorkerClient.cpp`, `WorkerProtocol.h` (thin COM shim + pipe client, no deps). |
-| `kokoro-protocol/` | The named-pipe wire constants (pipe name, `'S'`/`'I'`, `STREAM_END`/`SYNTH_ERROR`, sample rate) as a small crate shared by `kokoro-host` — one Rust source of truth for the format (`WorkerProtocol.h` is the C++ copy). |
-| `kokoro-sapi/*.ps1` | `build.ps1` (builds the x86 engine, NMake via vcvarsall), `test-speak.ps1` (SAPI smoke test), `kindle-voice-guard.ps1` (Kindle hive patch), `voice-setup.ps1` (self-elevating register/unregister wrapper the installer calls). |
+| `kokoro-sapi-rs/` | The x86 SAPI engine — a Rust `cdylib` (thin COM shim + pipe client, no deps): `lib.rs` (COM exports + registration), `engine.rs` (`ISpTTSEngine`), `worker.rs` (pipe client), `sapi.rs` (hand-declared `sapiddk.h` interfaces). Plus the `voice-setup.ps1` / `kindle-voice-guard.ps1` (Kindle hive patch) / `test-speak.ps1` scripts. |
+| `kokoro-sapi-smoke/` | No-Kindle COM + Speak smoke test for the engine (`run-speak-test.ps1`). |
+| `kokoro-protocol/` | The named-pipe wire constants (pipe name, `'S'`/`'I'`, `STREAM_END`/`SYNTH_ERROR`, sample rate) as a small crate shared by **both** `kokoro-host` and `kokoro-sapi-rs` — the single source of truth for the format. |
 | `model-manifest.json` | Files the model downloads from HF (paths + sizes + SHA-256); embedded in `kokoro-panel` (the narrator list is derived from it). |
 | `icons/` | Shared app icons (LFS); embedded in the exes' version resource and the installer. |
 | `packaging/` | `installer.nsi` + `build-installer.ps1` (standalone NSIS build). |
 
 ## Building from source
 
-Prerequisites: Rust (x64), Visual Studio with the MSVC toolchain (x64 for the worker,
-**x86** for the SAPI engine) + CMake, Python (for the onnxruntime-webgpu wheel), and
+Prerequisites: Rust (x64 + the `i686-pc-windows-msvc` target for the SAPI DLL), Visual
+Studio with the MSVC toolchain + CMake, Python (for the onnxruntime-webgpu wheel), and
 [NSIS](https://nsis.sourceforge.io/) (for the installer).
 
 ```powershell
 # 1. One-time: provision the C++ synth deps
 #    (ORT headers/lib + Dawn runtime DLLs + espeak-ng x64 + espeak-ng-data)
 .\kokoro-worker\tools\fetch-deps.ps1
+rustup target add i686-pc-windows-msvc   # for the x86 SAPI DLL
 
 # 2. Build + run the headless host (tray). Right-click the tray → Settings for the panel.
 cargo run --manifest-path kokoro-host\Cargo.toml
 cargo run --manifest-path kokoro-panel\Cargo.toml   # or launched from the tray
 
-# 3. The x86 SAPI engine (thin shim, no third-party deps) — for a real Kindle test
-.\kokoro-sapi\build.ps1
+# 3. The x86 SAPI engine (Rust cdylib, no third-party deps) — for a real Kindle test
+cargo build --release --target i686-pc-windows-msvc --manifest-path kokoro-sapi-rs\Cargo.toml
 
 # Register the voice (ELEVATED; the 32-bit regsvr32 is the one that matters)
-C:\Windows\SysWOW64\regsvr32.exe "kokoro-sapi\build\KokoroSapi.dll"
+C:\Windows\SysWOW64\regsvr32.exe "kokoro-sapi-rs\target\i686-pc-windows-msvc\release\KokoroSapi.dll"
 ```
 
 The TTS model (~430 MB: `onnx/model.onnx`, voices, config/tokenizer) is **downloaded by
@@ -155,7 +156,8 @@ runs `makensis`):
 .\packaging\build-installer.ps1
 ```
 
-CI does this on a `v*` tag (`.github/workflows/headless-installer.yml`).
+CI does this on a `headless-v*` tag (`.github/workflows/headless-installer.yml`); the
+`sapi-rs.yml` workflow builds the DLL + runs the COM smoke test on engine changes.
 
 ## Kindle for PC notes (technical)
 
@@ -167,4 +169,4 @@ CI does this on a `v*` tag (`.github/workflows/headless-installer.yml`).
   manually if a Kindle update resets the voice. Reopen Kindle after a switch.
 - **The host must be running** when Kindle reads — it's the synthesizer. If it isn't,
   the voice is silent (the shim has no local fallback by design).
-- Don't move/delete `kokoro-sapi/` — the registered token references the DLL by path.
+- Don't move/delete `kokoro-sapi-rs/` — the registered token references the DLL by path.

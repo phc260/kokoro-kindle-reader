@@ -15,9 +15,9 @@ x86 SAPI shim:
    with a **Preview** button (synthesizes a fixed per-voice intro line; there is **no**
    free-text reading box), download/verify the model, and toggle Kindle's default voice.
    Zero resident UI at idle.
-3. **`KokoroSapi.dll`** — a thin **x86** COM shim that Kindle loads in-process. It's
-   **connect-only**: it forwards each `Speak` over a named pipe to the running host,
-   which synthesizes and returns PCM. (Unchanged from the earlier WebView2 edition.)
+3. **`KokoroSapi.dll`** — a thin **x86** COM shim (Rust, `kokoro-sapi-rs`) that Kindle
+   loads in-process. It's **connect-only**: it forwards each `Speak` over a named pipe
+   to the running host, which synthesizes and returns PCM.
 
 All audio is produced by the native synth in `kokoro-host`; the SAPI engine itself does
 no synthesis. **Consequence: `kokoro-host` must be running for Kindle to speak.**
@@ -44,22 +44,24 @@ kokoro-worker\tools\fetch-deps.ps1
 cargo run --manifest-path kokoro-host\Cargo.toml     # windowless tray daemon
 cargo run --manifest-path kokoro-panel\Cargo.toml    # settings panel (or via the tray)
 
-# SAPI engine — x86 only, no deps (thin COM shim + pipe client). NMake via vcvarsall.
-kokoro-sapi\build.ps1
+# SAPI engine — x86 Rust cdylib, no deps (thin COM shim + pipe client).
+cargo build --release --target i686-pc-windows-msvc --manifest-path kokoro-sapi-rs\Cargo.toml
 
 # Register the voice — DEV path (elevated; MUST be the 32-bit regsvr32). Same DLL path =
 # registration survives rebuilds. The packaged installer does this automatically.
-C:\Windows\SysWOW64\regsvr32.exe "kokoro-sapi\build\KokoroSapi.dll"
+C:\Windows\SysWOW64\regsvr32.exe "kokoro-sapi-rs\target\i686-pc-windows-msvc\release\KokoroSapi.dll"
 
-# Packaged installer — release-builds both crates, stages everything (both exes + native
-# runtime + the x86 DLL + guard scripts), then runs makensis. Needs NSIS installed.
+# Packaged installer — builds the x86 DLL + release-builds both crates, stages everything
+# (both exes + native runtime + the x86 DLL + guard scripts), then runs makensis. NSIS.
 packaging\build-installer.ps1
-# CI does this on a v* tag (.github/workflows/headless-installer.yml); native.yml still
-# builds + uploads just the x86 DLL for kokoro-sapi/** changes.
+# CI does this on a headless-v* tag (.github/workflows/headless-installer.yml); sapi-rs.yml
+# builds the x86 DLL + runs the COM smoke test on kokoro-sapi-rs/** changes.
 
-# SAPI smoke test — run under 32-BIT PowerShell, with the host running, to drive the
-# engine -> pipe -> native synth path without Kindle.
-C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe -File kokoro-sapi\test-speak.ps1
+# SAPI smoke test — no Kindle, no elevation: LoadLibrary the DLL + drive the COM object
+# model + Speak path (needs the host running for audio). See kokoro-sapi-smoke/.
+cargo run --release --target i686-pc-windows-msvc --manifest-path kokoro-sapi-smoke\Cargo.toml
+# Or the SAPI-registered path (32-BIT PowerShell, host running, DLL registered):
+C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe -File kokoro-sapi-rs\test-speak.ps1
 ```
 
 No Rust test suites; "testing" is Preview in the panel and Read Aloud in Kindle (or
@@ -114,18 +116,24 @@ No Rust test suites; "testing" is Preview in the panel and Read Aloud in Kindle 
   Kindle's **next page** — no IPC, no restart. (The pacing lead/sub-frame are *not* in
   the file; they're fixed constants in `pipe.rs`.)
 
-### SAPI engine (`kokoro-sapi/src/`) — connect-only, no deps, UNCHANGED
-- `Dll.cpp` — COM class factory + `DllRegisterServer`/`Unregister` (writes the CLSID
-  `InprocServer32` and the `KokoroTTS` voice token). Registered by manual `regsvr32`
-  (dev) or the installer's `voice-setup.ps1` (packaged).
-- `KokoroTTSEngine.cpp` — `ISpTTSEngine`, a pure streaming sink: `Speak` sends the whole
-  text (`BeginSynth`), then loops `ReadFrame` over the response stream, applying carried
-  gain × host volume and writing ~250 ms blocks with `SPVES_ABORT` checks. Stop
-  interrupts by closing the pipe (`WorkerClient::Close`).
-- `WorkerClient.cpp` — pipe **client**: `EnsureConnected` is connect-only (no spawn).
-- `WorkerProtocol.h` — the C++ side of the wire format. Its Rust counterpart is the
-  `kokoro-protocol` crate (used by `pipe.rs`); the two are separate copies. **Change
-  the format in both.**
+### SAPI engine (`kokoro-sapi-rs/`) — Rust x86 cdylib, connect-only, no deps
+A `crate-type = ["cdylib"]` built for `i686-pc-windows-msvc` (Kindle is 32-bit). It
+uses `windows-rs` for the COM plumbing; the three `sapiddk.h` interfaces (`ISpTTSEngine`,
+`ISpTTSEngineSite`, `ISpObjectWithToken`) are **hand-declared** via `#[interface]` since
+windows-rs ships only the SAPI *SDK* surface. `panic = "abort"` — a Rust panic must never
+unwind into Kindle.
+- `lib.rs` — the four exported COM entry points (`DllGetClassObject` / `DllCanUnloadNow` /
+  `DllRegisterServer` / `DllUnregisterServer`), `DllMain`, the class factory, and
+  registration (writes the CLSID `InprocServer32` + the `KokoroTTS` voice token).
+  `#[no_mangle] extern "system"` exports them undecorated, so **no `.def` file is needed**.
+- `engine.rs` — `KokoroEngine` (`ISpTTSEngine` + `ISpObjectWithToken`), a pure streaming
+  sink: `Speak` forwards the whole utterance over the pipe, loops the response frames,
+  applies carried gain × host volume, and writes ~250 ms blocks with `SPVES_ABORT` checks.
+- `worker.rs` — the pipe **client** (connect-only, no spawn); `sapi.rs` — the interface
+  declarations; the wire format is the shared **`kokoro-protocol`** crate (used by both
+  the DLL and `pipe.rs` — one source of truth).
+- The `voice-setup.ps1` / `kindle-voice-guard.ps1` / `test-speak.ps1` scripts live here.
+  Verified by `kokoro-sapi-smoke` (no-Kindle COM + Speak smoke test).
 
 ### Packaging / installer
 - **Standalone NSIS** via `makensis` (`packaging/installer.nsi` + `build-installer.ps1`)
@@ -170,7 +178,8 @@ No Rust test suites; "testing" is Preview in the panel and Read Aloud in Kindle 
 - **Register from a stable path, never a git worktree.** The token's `InprocServer32`
   stores the absolute DLL path it was registered from; if that path goes away (e.g. an
   auto-cleaned worktree), Kindle's `LoadLibrary` fails silently and Read Aloud plays
-  **nothing**. Always register the main checkout's `kokoro-sapi\build\KokoroSapi.dll`.
+  **nothing**. Always register the main checkout's
+  `kokoro-sapi-rs\target\i686-pc-windows-msvc\release\KokoroSapi.dll`.
 - **Installer is `currentUser`, registration self-elevates.** `installMode: currentUser`
   keeps the app out of `C:\Program Files` and runs the installer unelevated, but
   `DllRegisterServer` writes HKLM and the Kindle guard does `reg load`, both needing admin
@@ -187,9 +196,9 @@ No Rust test suites; "testing" is Preview in the panel and Read Aloud in Kindle 
   is absent. Only once the elevated guard exits 0 does the panel record the choice in
   `controls.json` (`kindle_kokoro`). The OneCore registry is a dead end — Kindle uses
   classic `SpVoice`.
-- **Don't move `kokoro-sapi/`** — the registered token points at the DLL by path;
+- **Don't move `kokoro-sapi-rs/`** — the registered token points at the DLL by path;
   relocating means re-`regsvr32`.
-- **Shared files live outside `kokoro-sapi`.** `native_synth.rs` + `split_text.rs` are in
+- **Shared files live outside the engine crate.** `native_synth.rs` + `split_text.rs` are in
   `kokoro-host/src/`; `model-manifest.json` + `icons/` are at the repo root (the panel
   embeds the manifest; the exes + installer use the icons). `icons/*` are in Git LFS. The
   pipe wire constants are in the `kokoro-protocol` crate (a `path` dep of `kokoro-host`).
