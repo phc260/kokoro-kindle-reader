@@ -7,7 +7,7 @@ name = "kokoro-protocol"
 version = "0.2.1"
 
 [[package]]
-name = "kokoro-sapi-rs"
+name = "kokoro-sapi"
 version = "0.2.1"
 dependencies = [
  "kokoro-protocol",

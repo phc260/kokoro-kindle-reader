@@ -1,6 +1,6 @@
 ; Standalone NSIS installer for the headless (no-WebView2) edition of
 ; Kokoro Kindle Reader. Bundles the tray host + Slint settings panel + the native
-; Dawn WebGPU runtime + the x86 KokoroSapi.dll (Rust, kokoro-sapi-rs), and registers
+; Dawn WebGPU runtime + the x86 KokoroSapi.dll (Rust, kokoro-sapi), and registers
 ; the SAPI voice via voice-setup.ps1 (self-elevating). Per-user install, unelevated;
 ; the registration raises one UAC prompt.
 ;

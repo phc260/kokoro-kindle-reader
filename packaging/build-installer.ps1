@@ -1,4 +1,4 @@
-# Build the NSIS installer: build the x86 Rust SAPI DLL (kokoro-sapi-rs),
+# Build the NSIS installer: build the x86 Rust SAPI DLL (kokoro-sapi),
 # release-build the tray host + Slint panel, stage everything the installer needs
 # (both exes + native runtime DLLs + espeak data + the x86 KokoroSapi.dll + guard
 # scripts), then run makensis.
@@ -14,12 +14,12 @@ $here = $PSScriptRoot
 $root = Split-Path $here -Parent
 $hostRel = Join-Path $root 'kokoro-host\target\release'
 $panelRel = Join-Path $root 'kokoro-panel\target\release'
-$sapiRs = Join-Path $root 'kokoro-sapi-rs'
+$sapiRs = Join-Path $root 'kokoro-sapi'
 
 # 1. Build the x86 SAPI DLL (Kindle is 32-bit, loads it in-process). The Rust engine
 #    is connect-only -- it forwards Speak to kokoro-host over the pipe -- so there's no
 #    ONNX/espeak dep here.
-Write-Host '==> cargo build --release --target i686-pc-windows-msvc (kokoro-sapi-rs)'
+Write-Host '==> cargo build --release --target i686-pc-windows-msvc (kokoro-sapi)'
 Push-Location $sapiRs
 cargo build --release --target i686-pc-windows-msvc
 if ($LASTEXITCODE) { throw 'SAPI DLL build failed (need the i686-pc-windows-msvc target?)' }

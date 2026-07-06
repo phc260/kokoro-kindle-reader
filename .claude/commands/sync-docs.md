@@ -23,7 +23,7 @@ this" material) — don't pad.
 
 Drift-prone claim types to check explicitly:
 - **File/path references** — every file named in prose or the Layout table still exists
-  at that path (e.g. `kokoro-sapi-rs/*.ps1`, the DLL path, `kokoro-host/src/*`,
+  at that path (e.g. `kokoro-sapi/*.ps1`, the DLL path, `kokoro-host/src/*`,
   `kokoro-panel/src/*`, `kokoro-worker/tools/*`, `model-manifest.json`, `icons/`).
 - **Wire-protocol names** — the markers named in docs match the `kokoro-protocol` crate
   (`STREAM_END`/`SYNTH_ERROR` = `0xFFFF_FFFE`/`0xFFFF_FFFF`, the `'S'` request
@@ -44,7 +44,7 @@ These are facts asserted in one place that must agree with another. Verify each 
 fix whichever side is wrong (code is the source of truth; update the comment/doc):
 
 - **Wire format** — the `kokoro-protocol` crate is the single source, used by **both**
-  `kokoro-host/src/pipe.rs` and the SAPI engine `kokoro-sapi-rs`. Verify neither hardcodes
+  `kokoro-host/src/pipe.rs` and the SAPI engine `kokoro-sapi`. Verify neither hardcodes
   the constants inline instead.
 - **`controls.json` contract** — the keys `kokoro-panel/src/main.rs` writes ⇆ the keys
   `kokoro-host/src/native_synth.rs` (`read_controls`) reads (and what `CLAUDE.md` lists).
@@ -58,7 +58,7 @@ fix whichever side is wrong (code is the source of truth; update the comment/doc
   `FileVersion`/`ProductVersion` set in `kokoro-host/build.rs` + `kokoro-panel/build.rs`.
 - **Build ordering** — `kokoro-worker/tools/fetch-deps.ps1` must run before building
   `kokoro-host` (its `build.rs` panics without `third_party/`); `build-installer.ps1`
-  builds the x86 SAPI DLL (`kokoro-sapi-rs`, needs the `i686-pc-windows-msvc` target).
+  builds the x86 SAPI DLL (`kokoro-sapi`, needs the `i686-pc-windows-msvc` target).
 - **Icons in LFS** — `icons/*` are tracked via Git LFS (`.gitattributes`); CI checks out
   with `lfs: true` so `icon.ico` bundles.
 

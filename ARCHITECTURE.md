@@ -118,9 +118,9 @@ gain, and per-chunk sentence count are user-facing.
 | `kokoro-host/` | The windowless tray host (x64): `main.rs` (tao event loop + tray + `auto-launch`), `pipe.rs` (named-pipe server; owns chunking + prefetch + pacing), `native_synth.rs` (serialized Rust WebGPU synth + `controls.json` reader) + `text.rs`/`espeak.rs` (kokoro-js text normalizer + espeak-ng FFI), `split_text.rs` (the sentence-chunk splitter). `build.rs` links the espeak-ng import lib and stages the runtime DLLs + `espeak-ng-data`. |
 | `kokoro-panel/` | The native settings panel (Slint/Fluent): `ui/panel.slint` + `src/main.rs`, and the framework-agnostic `download.rs` / `kindle.rs` / `preview.rs`. Writes `controls.json`. |
 | `kokoro-worker/` | Synth **dependency provisioning** only (no source): `tools/fetch-deps.ps1` populates `third_party/` — the Dawn/WebGPU runtime DLLs (from the `onnxruntime-webgpu` wheel) + espeak-ng (x64 build + import lib + `espeak-ng-data`). |
-| `kokoro-sapi-rs/` | The x86 SAPI engine — a Rust `cdylib` (thin COM shim + pipe client, no deps): `lib.rs` (COM exports + registration), `engine.rs` (`ISpTTSEngine`), `worker.rs` (pipe client), `sapi.rs` (hand-declared `sapiddk.h` interfaces). Plus the `voice-setup.ps1` / `kindle-voice-guard.ps1` (Kindle hive patch) / `test-speak.ps1` scripts. |
+| `kokoro-sapi/` | The x86 SAPI engine — a Rust `cdylib` (thin COM shim + pipe client, no deps): `lib.rs` (COM exports + registration), `engine.rs` (`ISpTTSEngine`), `worker.rs` (pipe client), `sapi.rs` (hand-declared `sapiddk.h` interfaces). Plus the `voice-setup.ps1` / `kindle-voice-guard.ps1` (Kindle hive patch) / `test-speak.ps1` scripts. |
 | `kokoro-sapi-smoke/` | No-Kindle COM + Speak smoke test for the engine (`run-speak-test.ps1`). |
-| `kokoro-protocol/` | The named-pipe wire constants (pipe name, `'S'`/`'I'`, `STREAM_END`/`SYNTH_ERROR`, sample rate) as a small crate shared by **both** `kokoro-host` and `kokoro-sapi-rs` — the single source of truth for the format. |
+| `kokoro-protocol/` | The named-pipe wire constants (pipe name, `'S'`/`'I'`, `STREAM_END`/`SYNTH_ERROR`, sample rate) as a small crate shared by **both** `kokoro-host` and `kokoro-sapi` — the single source of truth for the format. |
 | `model-manifest.json` | Files the model downloads from HF (paths + sizes + SHA-256); embedded in `kokoro-panel` (the narrator list is derived from it). |
 | `icons/` | Shared app icons (LFS); embedded in the exes' version resource and the installer. |
 | `packaging/` | `installer.nsi` + `build-installer.ps1` (standalone NSIS build). |
@@ -142,10 +142,10 @@ cargo run --manifest-path kokoro-host\Cargo.toml
 cargo run --manifest-path kokoro-panel\Cargo.toml   # or launched from the tray
 
 # 3. The x86 SAPI engine (Rust cdylib, no third-party deps) — for a real Kindle test
-cargo build --release --target i686-pc-windows-msvc --manifest-path kokoro-sapi-rs\Cargo.toml
+cargo build --release --target i686-pc-windows-msvc --manifest-path kokoro-sapi\Cargo.toml
 
 # Register the voice (ELEVATED; the 32-bit regsvr32 is the one that matters)
-C:\Windows\SysWOW64\regsvr32.exe "kokoro-sapi-rs\target\i686-pc-windows-msvc\release\KokoroSapi.dll"
+C:\Windows\SysWOW64\regsvr32.exe "kokoro-sapi\target\i686-pc-windows-msvc\release\KokoroSapi.dll"
 ```
 
 The TTS model (~430 MB: `onnx/model.onnx`, voices, config/tokenizer) is **downloaded by
@@ -158,8 +158,8 @@ runs `makensis`):
 .\packaging\build-installer.ps1
 ```
 
-CI does this on a `headless-v*` tag (`.github/workflows/headless-installer.yml`); the
-`sapi-rs.yml` workflow builds the DLL + runs the COM smoke test on engine changes.
+CI does this on a `v*` tag (`.github/workflows/headless-installer.yml`); the
+`sapi.yml` workflow builds the DLL + runs the COM smoke test on engine changes.
 
 ## Kindle for PC notes (technical)
 
@@ -171,4 +171,4 @@ CI does this on a `headless-v*` tag (`.github/workflows/headless-installer.yml`)
   manually if a Kindle update resets the voice. Reopen Kindle after a switch.
 - **The host must be running** when Kindle reads — it's the synthesizer. If it isn't,
   the voice is silent (the shim has no local fallback by design).
-- Don't move/delete `kokoro-sapi-rs/` — the registered token references the DLL by path.
+- Don't move/delete `kokoro-sapi/` — the registered token references the DLL by path.

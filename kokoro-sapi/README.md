@@ -1,4 +1,4 @@
-# kokoro-sapi-rs — the x86 SAPI engine (Rust)
+# kokoro-sapi — the x86 SAPI engine (Rust)
 
 The in-process **x86 COM DLL** Kindle loads to narrate with Kokoro (`KokoroSapi.dll`).
 It's **connect-only**: an `ISpTTSEngine` that forwards each `Speak` over
@@ -56,7 +56,7 @@ and by `../kokoro-sapi-smoke` — a no-Kindle / no-registration / no-elevation h
   fallback" behavior).
 
 ```powershell
-cargo build -p kokoro-sapi-rs   --release --target i686-pc-windows-msvc
+cargo build -p kokoro-sapi   --release --target i686-pc-windows-msvc
 cargo run  -p kokoro-sapi-smoke --release --target i686-pc-windows-msvc
 ```
 
@@ -77,10 +77,10 @@ The installer does this in production. To test a **local** build against Kindle,
 
 ```powershell
 # Register the build (ELEVATED, 32-bit regsvr32 — from a STABLE path, not a temp dir).
-C:\Windows\SysWOW64\regsvr32.exe "…\kokoro-sapi-rs\target\i686-pc-windows-msvc\release\KokoroSapi.dll"
+C:\Windows\SysWOW64\regsvr32.exe "…\kokoro-sapi\target\i686-pc-windows-msvc\release\KokoroSapi.dll"
 
 # Drive it without Kindle (32-bit PowerShell, host running):
-C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe -File .\kokoro-sapi-rs\test-speak.ps1
+C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe -File .\kokoro-sapi\test-speak.ps1
 
 # Then the real test: Read Aloud in Kindle. Set Kindle's default voice to Kokoro via the
 # panel's Kindle-voice toggle (or kindle-voice-guard.ps1 -Set kokoro).

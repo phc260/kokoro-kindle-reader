@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 /// Locate kindle-voice-guard.ps1: next to the exe (bundle: resources/ or alongside),
-/// else the dev checkout's kokoro-sapi-rs/.
+/// else the dev checkout's kokoro-sapi/.
 fn guard_script_path() -> Result<PathBuf, String> {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
@@ -26,7 +26,7 @@ fn guard_script_path() -> Result<PathBuf, String> {
     {
         let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("..")
-            .join("kokoro-sapi-rs")
+            .join("kokoro-sapi")
             .join("kindle-voice-guard.ps1");
         if dev.exists() {
             return Ok(dev);

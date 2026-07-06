@@ -11,13 +11,13 @@ $ErrorActionPreference = 'Stop'
 $target = 'i686-pc-windows-msvc'
 $root = Split-Path $PSScriptRoot -Parent
 
-$dll   = Join-Path $root "kokoro-sapi-rs\target\$target\release\KokoroSapi.dll"
+$dll   = Join-Path $root "kokoro-sapi\target\$target\release\KokoroSapi.dll"
 $smoke = Join-Path $root "kokoro-sapi-smoke\target\$target\release\smoke.exe"
 $hostExe = Join-Path $root 'kokoro-host\target\debug\kokoro-host.exe'
 
 # 1. Build the x86 DLL + harness and the x64 host.
 Write-Host '==> Building DLL + harness (x86) and host (x64)'
-cargo build --release --target $target --manifest-path (Join-Path $root 'kokoro-sapi-rs\Cargo.toml')
+cargo build --release --target $target --manifest-path (Join-Path $root 'kokoro-sapi\Cargo.toml')
 if ($LASTEXITCODE) { throw 'DLL build failed' }
 cargo build --release --target $target --manifest-path (Join-Path $root 'kokoro-sapi-smoke\Cargo.toml')
 if ($LASTEXITCODE) { throw 'harness build failed' }

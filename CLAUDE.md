@@ -16,7 +16,7 @@ binaries plus a thin x86 SAPI shim:
    with a **Preview** button (synthesizes a fixed per-voice intro line; there is **no**
    free-text reading box), download/verify the model, and toggle Kindle's default voice.
    Zero resident UI at idle.
-3. **`KokoroSapi.dll`** — a thin **x86** COM shim (Rust, `kokoro-sapi-rs`) that Kindle
+3. **`KokoroSapi.dll`** — a thin **x86** COM shim (Rust, `kokoro-sapi`) that Kindle
    loads in-process. It's **connect-only**: it forwards each `Speak` over a named pipe
    to the running host, which synthesizes and returns PCM.
 
@@ -46,23 +46,23 @@ cargo run --manifest-path kokoro-host\Cargo.toml     # windowless tray daemon
 cargo run --manifest-path kokoro-panel\Cargo.toml    # settings panel (or via the tray)
 
 # SAPI engine — x86 Rust cdylib, no deps (thin COM shim + pipe client).
-cargo build --release --target i686-pc-windows-msvc --manifest-path kokoro-sapi-rs\Cargo.toml
+cargo build --release --target i686-pc-windows-msvc --manifest-path kokoro-sapi\Cargo.toml
 
 # Register the voice — DEV path (elevated; MUST be the 32-bit regsvr32). Same DLL path =
 # registration survives rebuilds. The packaged installer does this automatically.
-C:\Windows\SysWOW64\regsvr32.exe "kokoro-sapi-rs\target\i686-pc-windows-msvc\release\KokoroSapi.dll"
+C:\Windows\SysWOW64\regsvr32.exe "kokoro-sapi\target\i686-pc-windows-msvc\release\KokoroSapi.dll"
 
 # Packaged installer — builds the x86 DLL + release-builds both crates, stages everything
 # (both exes + native runtime + the x86 DLL + guard scripts), then runs makensis. NSIS.
 packaging\build-installer.ps1
-# CI does this on a headless-v* tag (.github/workflows/headless-installer.yml); sapi-rs.yml
-# builds the x86 DLL + runs the COM smoke test on kokoro-sapi-rs/** changes.
+# CI does this on a v* tag (.github/workflows/headless-installer.yml); sapi.yml
+# builds the x86 DLL + runs the COM smoke test on kokoro-sapi/** changes.
 
 # SAPI smoke test — no Kindle, no elevation: LoadLibrary the DLL + drive the COM object
 # model + Speak path (needs the host running for audio). See kokoro-sapi-smoke/.
 cargo run --release --target i686-pc-windows-msvc --manifest-path kokoro-sapi-smoke\Cargo.toml
 # Or the SAPI-registered path (32-BIT PowerShell, host running, DLL registered):
-C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe -File kokoro-sapi-rs\test-speak.ps1
+C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe -File kokoro-sapi\test-speak.ps1
 ```
 
 No Rust test suites; "testing" is Preview in the panel and Read Aloud in Kindle (or
@@ -124,7 +124,7 @@ No Rust test suites; "testing" is Preview in the panel and Read Aloud in Kindle 
   Kindle's **next page** — no IPC, no restart. (The pacing lead/sub-frame are *not* in
   the file; they're fixed constants in `pipe.rs`.)
 
-### SAPI engine (`kokoro-sapi-rs/`) — Rust x86 cdylib, connect-only, no deps
+### SAPI engine (`kokoro-sapi/`) — Rust x86 cdylib, connect-only, no deps
 A `crate-type = ["cdylib"]` built for `i686-pc-windows-msvc` (Kindle is 32-bit). It
 uses `windows-rs` for the COM plumbing; the three `sapiddk.h` interfaces (`ISpTTSEngine`,
 `ISpTTSEngineSite`, `ISpObjectWithToken`) are **hand-declared** via `#[interface]` since
@@ -188,7 +188,7 @@ unwind into Kindle.
   stores the absolute DLL path it was registered from; if that path goes away (e.g. an
   auto-cleaned worktree), Kindle's `LoadLibrary` fails silently and Read Aloud plays
   **nothing**. Always register the main checkout's
-  `kokoro-sapi-rs\target\i686-pc-windows-msvc\release\KokoroSapi.dll`.
+  `kokoro-sapi\target\i686-pc-windows-msvc\release\KokoroSapi.dll`.
 - **Installer is `currentUser`, registration self-elevates.** `installMode: currentUser`
   keeps the app out of `C:\Program Files` and runs the installer unelevated, but
   `DllRegisterServer` writes HKLM and the Kindle guard does `reg load`, both needing admin
@@ -205,7 +205,7 @@ unwind into Kindle.
   is absent. Only once the elevated guard exits 0 does the panel record the choice in
   `controls.json` (`kindle_kokoro`). The OneCore registry is a dead end — Kindle uses
   classic `SpVoice`.
-- **Don't move `kokoro-sapi-rs/`** — the registered token points at the DLL by path;
+- **Don't move `kokoro-sapi/`** — the registered token points at the DLL by path;
   relocating means re-`regsvr32`.
 - **Shared files live outside the engine crate.** the synth core (`native_synth.rs` +
   `text.rs` + `espeak.rs` + `split_text.rs`) is in
