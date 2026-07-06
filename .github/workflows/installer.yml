@@ -1,9 +1,9 @@
-name: Headless installer (kokoro-host + panel)
+name: Installer (kokoro-host + panel)
 
 # Builds the installer: the tray host (kokoro-host) + the Slint settings panel
 # (kokoro-panel) + the native Dawn WebGPU runtime + the x86 KokoroSapi.dll (Rust),
-# packaged by packaging/build-installer.ps1 (makensis). This is now the only edition
-# (the Tauri/WebView2 installer.yml is retired), so it owns the vX.Y.Z release tags.
+# packaged by packaging/build-installer.ps1 (makensis). This is the only edition now
+# (the old Tauri/WebView2 build is retired), so it owns the vX.Y.Z release tags.
 # Windows-only. The synth runtime deps are provisioned by fetch-deps.ps1 (the
 # onnxruntime-webgpu wheel for the Dawn runtime DLLs + an espeak-ng x64 build). The
 # synth core is pure Rust; onnxruntime.dll is loaded at runtime via the `ort` crate.
@@ -17,12 +17,12 @@ permissions:
   contents: write
 
 concurrency:
-  group: headless-installer-${{ github.ref }}
+  group: installer-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   build:
-    name: Build headless installer
+    name: Build installer
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
@@ -63,9 +63,9 @@ jobs:
         run: ./packaging/build-installer.ps1
 
       - name: Upload installer
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
-          name: kokoro-kindle-reader-headless-setup
+          name: kokoro-kindle-reader-setup
           path: packaging/*-setup.exe
           if-no-files-found: error
 

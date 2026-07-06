@@ -31,7 +31,7 @@ jobs:
         run: cargo run --release --target i686-pc-windows-msvc --manifest-path kokoro-sapi-smoke/Cargo.toml -- kokoro-sapi/target/i686-pc-windows-msvc/release/KokoroSapi.dll
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: KokoroSapi.dll
           path: kokoro-sapi/target/i686-pc-windows-msvc/release/KokoroSapi.dll

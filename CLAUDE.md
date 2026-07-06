@@ -55,7 +55,7 @@ C:\Windows\SysWOW64\regsvr32.exe "kokoro-sapi\target\i686-pc-windows-msvc\releas
 # Packaged installer — builds the x86 DLL + release-builds both crates, stages everything
 # (both exes + native runtime + the x86 DLL + guard scripts), then runs makensis. NSIS.
 packaging\build-installer.ps1
-# CI does this on a v* tag (.github/workflows/headless-installer.yml); sapi.yml
+# CI does this on a v* tag (.github/workflows/installer.yml); sapi.yml
 # builds the x86 DLL + runs the COM smoke test on kokoro-sapi/** changes.
 
 # SAPI smoke test — no Kindle, no elevation: LoadLibrary the DLL + drive the COM object
