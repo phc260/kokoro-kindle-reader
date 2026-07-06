@@ -1,5 +1,5 @@
 // Native Dawn WebGPU synthesis for the Kindle pipe path. pipe.rs calls this to
-// synthesize each chunk natively, so Kindle can be narrated with no WebView2.
+// synthesize each chunk natively so Kindle can be narrated.
 //
 // The C++ core (kokoro-worker/src, linked via build.rs) owns the ORT/WebGPU session
 // + espeak. espeak keeps global state and a temp-file phoneme trace, so it is NOT

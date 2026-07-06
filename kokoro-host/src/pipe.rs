@@ -33,8 +33,8 @@ const DEFAULT_SUBFRAME_MS: u32 = 250;
 // samples/seconds (the wire rate itself lives in kokoro_protocol::SAMPLE_RATE).
 const SAMPLE_RATE: f64 = kokoro_protocol::SAMPLE_RATE as f64;
 
-/// Everything the pipe path needs, in place of Tauri's AppHandle: where
-/// controls.json lives and the serialized native synth worker.
+/// Everything the pipe path needs: where controls.json lives and the serialized
+/// native synth worker.
 #[derive(Clone)]
 pub struct Ctx {
     pub app_data: PathBuf,
@@ -76,7 +76,7 @@ pub async fn serve_loop(ctx: Ctx) -> std::io::Result<()> {
     let mut first = true;
     loop {
         // first_pipe_instance fails if another server already owns the name (e.g.
-        // the Tauri app or a second host instance) — surfaced via `?`.
+        // a second host instance) — surfaced via `?`.
         let server = ServerOptions::new()
             .first_pipe_instance(first)
             .create(PIPE_NAME)?;
