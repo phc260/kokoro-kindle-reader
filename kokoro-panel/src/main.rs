@@ -21,8 +21,7 @@ mod preview;
 
 slint::include_modules!();
 
-// Same identifier as the host / Tauri app: controls.json lives under
-// %APPDATA%\<identifier>.
+// Same identifier as the host: controls.json lives under %APPDATA%\<identifier>.
 const APP_IDENTIFIER: &str = "com.phc260.kokoro-kindle-reader";
 // Embedded so the narrator list stays in sync with what actually downloads.
 const MANIFEST_JSON: &str = include_str!("../../model-manifest.json");

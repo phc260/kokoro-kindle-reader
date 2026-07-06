@@ -1,13 +1,11 @@
-// Headless synthesis host for Kokoro Kindle Reader — the SAPI pipe + native Dawn
-// WebGPU synth with NO WebView2. A tray icon (tao message loop) is the only GUI;
-// the settings panel is a separate process (M3). The tokio pipe server runs on a
-// background thread.
+// Synthesis host for Kokoro Kindle Reader — the SAPI pipe + native Dawn WebGPU
+// synth. A tray icon (tao message loop) is the only GUI; the settings panel is a
+// separate process. The tokio pipe server runs on a background thread.
 //
-// Reuses, verbatim, the exact code the Tauri app's `native-synth` build proved:
 //   - native_synth.rs (serialized C++ WebGPU worker + controls.json reader)
 //   - split_text.rs   (the sentence-chunk splitter)
-// via #[path] include so there is one source of truth. The C++ core is compiled and
-// its runtime DLLs staged by build.rs.
+// are plain modules here. The C++ core is compiled and its runtime DLLs staged by
+// build.rs.
 
 // Windows GUI subsystem: no console window when launched from Explorer / at login.
 // (Under `cargo run` a console is still attached by the parent.)
@@ -27,18 +25,18 @@ use tray_icon::menu::{Menu, MenuEvent, MenuItem};
 use tray_icon::{TrayIconBuilder, TrayIconEvent};
 
 // The app identifier — the model + controls.json live under %APPDATA%\<identifier>
-// on Windows (unchanged from the original Tauri app, so existing data is reused).
+// on Windows (matches prior releases, so an existing install's data is reused).
 const APP_IDENTIFIER: &str = "com.phc260.kokoro-kindle-reader";
 // The pinned model's repo id (from model-manifest.json); the model files
 // live under <app_data>/<MODEL_ID>/. Embedded so we don't parse the manifest at
 // runtime just for this one string.
 const MODEL_ID: &str = "onnx-community/Kokoro-82M-v1.0-ONNX";
-// HKCU Run value name — same as the Tauri app so login autostart isn't duplicated.
+// HKCU Run value name — matches prior releases so login autostart isn't duplicated.
 // Only read by the release-gated enable_autostart, hence allow(dead_code) in debug.
 #[cfg_attr(debug_assertions, allow(dead_code))]
 const AUTOSTART_NAME: &str = "kokoro-kindle-reader";
 
-/// Tauri's app_data_dir on Windows: %APPDATA% (Roaming) \ <identifier>.
+/// The app-data dir on Windows: %APPDATA% (Roaming) \ <identifier>.
 fn app_data_dir() -> PathBuf {
     let roaming = std::env::var_os("APPDATA")
         .map(PathBuf::from)
@@ -88,7 +86,7 @@ fn start_pipe_server() {
 }
 
 /// Register the host to launch hidden at login (release only, so a dev run doesn't
-/// hijack the installed app's Run entry — same guard the Tauri app uses).
+/// hijack the installed app's Run entry).
 #[cfg(not(debug_assertions))]
 fn enable_autostart() {
     let Ok(exe) = std::env::current_exe() else { return };
