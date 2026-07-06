@@ -9,9 +9,9 @@ use windows::Win32::Foundation::{CloseHandle, GENERIC_READ, GENERIC_WRITE, HANDL
 use windows::Win32::Storage::FileSystem::{
     CreateFileW, ReadFile, WriteFile, FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_NONE, OPEN_EXISTING,
 };
-use windows_core::w;
+use windows_core::PCWSTR;
 
-use crate::protocol::{CMD_SYNTH, MAX_TEXT_BYTES, STREAM_END, SYNTH_ERROR};
+use kokoro_protocol::{CMD_SYNTH, MAX_TEXT_BYTES, PIPE_NAME, STREAM_END, SYNTH_ERROR};
 
 /// Result of reading one frame of the 'S' response stream.
 pub enum Frame {
@@ -47,9 +47,10 @@ impl Worker {
         if self.is_open() {
             return true;
         }
+        let name: Vec<u16> = PIPE_NAME.encode_utf16().chain(core::iter::once(0)).collect();
         let h = unsafe {
             CreateFileW(
-                w!(r"\\.\pipe\KokoroSapiSynth"),
+                PCWSTR(name.as_ptr()),
                 (GENERIC_READ.0 | GENERIC_WRITE.0) as u32,
                 FILE_SHARE_NONE,
                 None,
