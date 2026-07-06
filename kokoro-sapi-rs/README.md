@@ -1,0 +1,113 @@
+# kokoro-sapi-rs — Rust port of the x86 SAPI shim (PROTOTYPE)
+
+A Rust reimplementation of `kokoro-sapi/` (the in-process x86 COM DLL Kindle loads to
+narrate with Kokoro). This is a **prototype for A/B evaluation** against the C++ DLL —
+it is not yet wired into the installer and has **not been verified inside Kindle**.
+
+Same job as the C++ shim: a connect-only `ISpTTSEngine` that forwards each `Speak`
+over `\\.\pipe\KokoroSapiSynth` to the running `kokoro-host`, which synthesizes and
+streams PCM back. Same CLSID, same voice token, same wire protocol.
+
+## Build
+
+```powershell
+# One-time: the 32-bit Rust target (Kindle is a 32-bit process).
+rustup target add i686-pc-windows-msvc
+
+cargo build --release --target i686-pc-windows-msvc
+# -> target\i686-pc-windows-msvc\release\KokoroSapi.dll
+```
+
+No `.def` file is needed: `#[no_mangle] extern "system"` exports the four COM entry
+points undecorated (`DllGetClassObject`, `DllCanUnloadNow`, `DllRegisterServer`,
+`DllUnregisterServer`) — the names regsvr32 / COM look up — even on x86 stdcall. (The
+C++ build needs `kokoro_sapi.def` for exactly this.)
+
+## How it maps to the C++
+
+| C++ | Rust |
+|---|---|
+| `Dll.cpp` (class factory, exports, registration, DllMain) | `lib.rs` + `engine.rs` (`Factory`) |
+| `KokoroTTSEngine.cpp` (`ISpTTSEngine` + `ISpObjectWithToken`) | `engine.rs` (`KokoroEngine`) |
+| `WorkerClient.cpp` (pipe client) | `worker.rs` |
+| `WorkerProtocol.h` (wire format) | `protocol.rs` |
+| `Guids.h` (CLSID) + `sapiddk.h` interfaces | `sapi.rs` (hand-declared via `#[interface]`) |
+
+The `sapiddk.h` interfaces (`ISpTTSEngine`, `ISpTTSEngineSite`, `ISpObjectWithToken`)
+are hand-declared because `windows-rs` only ships the SAPI *SDK* surface; the SDK
+structs/constants (`SPVTEXTFRAG`, `SPVA_*`, `SPVES_*`, `WAVEFORMATEX`) come from the
+crate. A Rust panic can never unwind into Kindle — the crate builds with
+`panic = "abort"`.
+
+## Status
+
+**Verified statically:**
+- Builds clean for `i686-pc-windows-msvc`, zero warnings.
+- Output is a 32-bit PE32 DLL (~90 KB; the C++ is ~21 KB — both negligible vs the
+  430 MB model).
+- The four COM entry points are exported undecorated.
+
+**Verified at runtime by `../kokoro-sapi-smoke` (no Kindle, no registration, no
+elevation):**
+- `DllGetClassObject` returns the class factory for the CLSID; `CreateInstance`
+  produces the engine.
+- QueryInterface across `ISpTTSEngine` / `ISpObjectWithToken` / `IUnknown` all
+  succeed; a bogus IID returns `E_NOINTERFACE`. So `#[implement]` wires the
+  multi-interface vtables correctly.
+- `GetOutputFormat` **dispatches through the vtable** and returns 24 kHz/16-bit/mono —
+  proving the hand-declared `ISpTTSEngine` slot order/IID are right.
+- `DllCanUnloadNow` returns `S_FALSE`.
+- With no host, `Speak` returns `E_FAIL` and no audio (the correct "no pipe, no
+  fallback" behavior).
+
+```powershell
+cargo build -p kokoro-sapi-rs   --release --target i686-pc-windows-msvc
+cargo run  -p kokoro-sapi-smoke --release --target i686-pc-windows-msvc
+```
+
+**Verifiable with a running host, still without Kindle/registration/elevation:**
+The smoke harness includes a `Speak`-path test — it supplies a fake `ISpTTSEngineSite`
+that captures the PCM the engine writes. Start `kokoro-host` (with the model present),
+rerun the harness, and the `Speak` line reports the bytes/ms of audio streamed through
+the real pipe path. This exercises everything but the Kindle-specific in-process load.
+
+One command does the whole thing (builds, reuses/launches a host, runs the harness,
+tears down what it started). Add `-Wav` to dump the engine's output for an audio A/B:
+
+```powershell
+.\kokoro-sapi-smoke\run-speak-test.ps1
+.\kokoro-sapi-smoke\run-speak-test.ps1 -Wav rust-engine.wav   # -> a 24 kHz mono WAV
+```
+
+**Still NOT verified — needs the full A/B (see below):**
+- Audio *parity* with the C++ engine — dump both engines' output (the Rust one via
+  `-Wav`) and compare by ear / spectrally.
+- Abort/stop (close-to-cancel) under a real host, and behavior inside Kindle.
+
+## A/B test (manual, your call — modifies the system)
+
+The Rust DLL uses the **same CLSID** as the C++ one, so only one can be registered at a
+time. With `kokoro-host` running:
+
+```powershell
+# 1. Unregister the C++ DLL if registered, then register the Rust build (ELEVATED,
+#    32-bit regsvr32 — from a STABLE path, not a temp dir).
+C:\Windows\SysWOW64\regsvr32.exe "…\kokoro-sapi-rs\target\i686-pc-windows-msvc\release\KokoroSapi.dll"
+
+# 2. Drive it without Kindle (32-bit PowerShell, host running):
+C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe -File ..\kokoro-sapi\test-speak.ps1
+
+# 3. Then the real test: Read Aloud in Kindle.
+# To revert: regsvr32 /u the Rust DLL and re-register the C++ one.
+```
+
+## Shared wire protocol
+
+The wire format lives in the `kokoro-protocol` crate, depended on by **both** this DLL
+and `kokoro-host` — one source of truth, so the two ends can't drift. (The C++
+`WorkerProtocol.h` is the third copy; it goes away if this DLL replaces `kokoro-sapi/`.)
+
+## If it graduates
+
+Replace `kokoro-sapi/` and point `packaging/build-installer.ps1` +
+`kokoro-sapi/voice-setup.ps1` at this DLL.

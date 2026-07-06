@@ -1,0 +1,37 @@
+[package]
+name = "kokoro-sapi-rs"
+version = "0.2.0"
+edition = "2021"
+description = "Kokoro SAPI5 voice engine (x86 in-process COM shim) — Rust prototype"
+
+# Native COM DLL Kindle loads in-process. MUST be built for i686 (Kindle is 32-bit):
+#   cargo build --release --target i686-pc-windows-msvc
+[lib]
+crate-type = ["cdylib"]
+name = "KokoroSapi"
+
+[dependencies]
+kokoro-protocol = { path = "../kokoro-protocol" }
+windows-core = "0.62"
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Com",
+    "Win32_System_IO",
+    "Win32_System_Registry",
+    "Win32_System_LibraryLoader",
+    "Win32_System_SystemServices",
+    "Win32_Storage_FileSystem",
+    "Win32_Media_Speech",
+    "Win32_Media_Audio",
+] }
+
+# Never let a Rust panic unwind across the COM/FFI boundary into Kindle.
+[profile.release]
+panic = "abort"
+opt-level = "z"
+lto = true
+strip = true
+
+[profile.dev]
+panic = "abort"
