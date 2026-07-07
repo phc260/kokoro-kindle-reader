@@ -219,6 +219,10 @@ unwind into Kindle.
   turns a harmless cmd-autorun line into a terminating error). `Select-Object -First`
   truncates upstream pipelines. Writing `.ps1` files: keep them **ASCII** — PS 5.1 misreads
   a UTF-8-no-BOM em-dash "—", so use "-" in scripts (Rust/`.slint` handle "—" fine).
+- **Keep `installer.nsi` ASCII too.** `makensis` parses the script as **ACP** (see its
+  `(ACP)` log line) since the file has no BOM — `Unicode true` only makes the *output*
+  installer's strings Unicode. So a UTF-8 `…`/`—` in a user-visible `DetailPrint`/
+  `MessageBox` renders as mojibake (`â€¦`) in the install UI. Use plain ASCII (`...`, `-`).
 - **File locks:** rebuilds hit LNK1104 / "Access is denied" while Kindle holds
   `KokoroSapi.dll` or a running `kokoro-panel.exe`/`kokoro-host.exe` holds its exe — stop
   them first. Port lingers after a crashed session.
