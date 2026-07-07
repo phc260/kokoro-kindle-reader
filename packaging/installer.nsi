@@ -20,7 +20,7 @@ Unicode true
 
 Name "${APPNAME}"
 OutFile "kokoro-kindle-reader-${VERSION}-setup.exe"
-; Fixed install path — the same per-user folder the original app used
+; Fixed install path - the same per-user folder the original app used
 ; ($LOCALAPPDATA\kokoro-kindle-reader), so this edition installs in place rather
 ; than a second location. Not overridable (no directory page, no reg override), so
 ; the path stays consistent across versions/reinstalls.
@@ -80,7 +80,7 @@ Section "Install"
   SetOutPath "$INSTDIR"
   WriteUninstaller "$INSTDIR\uninstall.exe"
 
-  ; Launch hidden at login — the host must be running for Kindle to narrate. Same
+  ; Launch hidden at login - the host must be running for Kindle to narrate. Same
   ; value name the host self-registers via auto-launch, so no double entry.
   WriteRegStr HKCU "${RUNKEY}" "${RUNVALUE}" '"$INSTDIR\kokoro-host.exe" --hidden'
 
@@ -103,7 +103,7 @@ Section "Install"
   ; self-elevates (one UAC) because regsvr32 -> HKLM/WOW6432Node and the Kindle
   ; guard's reg-load need admin; it self-skips the Kindle step if Kindle isn't
   ; installed, so it never fails the install.
-  DetailPrint "Registering the Kokoro SAPI voice (may prompt for administrator)…"
+  DetailPrint "Registering the Kokoro SAPI voice (may prompt for administrator)..."
   nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\resources\voice-setup.ps1" -Action register -ResourcesDir "$INSTDIR\resources"'
 SectionEnd
 
@@ -112,7 +112,7 @@ Section "Uninstall"
   nsExec::ExecToLog 'taskkill /IM kokoro-panel.exe /F'
   nsExec::ExecToLog 'taskkill /IM kokoro-host.exe /F'
 
-  ; Revert Kindle to Microsoft David, then unregister the COM server + token — in
+  ; Revert Kindle to Microsoft David, then unregister the COM server + token - in
   ; that order, while the DLL + guard still exist in resources\. Self-elevates (UAC).
   nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\resources\voice-setup.ps1" -Action unregister -ResourcesDir "$INSTDIR\resources"'
 
