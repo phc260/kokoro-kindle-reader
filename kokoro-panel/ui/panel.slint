@@ -213,7 +213,12 @@ min-width: 100px;
 
         CheckBox {
             text: "Use Kokoro as Kindle's default voice";
-            checked: root.kindle-kokoro;
+            // Two-way (<=>), not one-way (:) — a user click imperatively sets the
+            // widget's own `checked`, which clobbers a one-way binding and leaves the
+            // Rust-side revert (on a cancelled UAC / failed guard) unable to move the
+            // checkbox back. Two-way keeps the property and the widget in sync both
+            // ways, so set_kindle_kokoro(!desired) actually reverts it.
+            checked <=> root.kindle-kokoro;
             enabled: !root.kindle-busy;
             toggled => { root.kindle-toggled(self.checked); }
         }
