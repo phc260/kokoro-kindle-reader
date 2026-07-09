@@ -12,7 +12,7 @@ Unicode true
 
 !define APPNAME "Kokoro Kindle Reader"
 !define COMPANY "phc260"
-!define VERSION "0.3.0"
+!define VERSION "0.3.1"
 !define STAGING "staging"
 !define RUNKEY "Software\Microsoft\Windows\CurrentVersion\Run"
 !define RUNVALUE "kokoro-kindle-reader"
@@ -28,7 +28,7 @@ InstallDir "$LOCALAPPDATA\kokoro-kindle-reader"
 RequestExecutionLevel user
 SetCompressor /SOLID lzma
 
-VIProductVersion "0.3.0.0"
+VIProductVersion "0.3.1.0"
 VIAddVersionKey "ProductName" "${APPNAME}"
 VIAddVersionKey "FileVersion" "${VERSION}"
 VIAddVersionKey "CompanyName" "${COMPANY}"
