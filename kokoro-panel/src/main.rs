@@ -16,7 +16,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 mod download;
-mod kindle;
 mod preview;
 
 slint::include_modules!();
@@ -263,7 +262,6 @@ fn main() -> Result<(), slint::PlatformError> {
     let dl_running = Arc::new(AtomicBool::new(false));
     let dl_progress = Arc::new(Mutex::new(download::Progress::default()));
     let verify_running = Arc::new(AtomicBool::new(false));
-    let kindle_running = Arc::new(AtomicBool::new(false));
 
     // --- controls callbacks (UI thread) ---
     // Narrator: accent/gender re-filter the name list (reset to its first entry);
@@ -415,49 +413,29 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     }
 
-    // --- Kindle-voice toggle (elevated) ---
+    // --- Kindle-voice toggle (persist only) ---
+    // Just records `kindle_kokoro` in controls.json. The host's Kindle-watcher reads this
+    // flag live and injects (or doesn't) the Kokoro hook on Kindle's next launch — no UAC,
+    // no elevated guard, nothing to fail, so no busy state or revert.
     {
         let ui_weak = ui.as_weak();
-        let kindle_running = kindle_running.clone();
         let controls = controls.clone();
         ui.on_kindle_toggled(move |desired| {
-            if kindle_running.swap(true, Ordering::SeqCst) {
-                return;
+            {
+                let mut c = controls.lock().unwrap();
+                c.kindle_kokoro = desired;
+                c.save();
             }
             if let Some(ui) = ui_weak.upgrade() {
-                ui.set_kindle_busy(true);
-            }
-            let weak = ui_weak.clone();
-            let running = kindle_running.clone();
-            let controls = controls.clone();
-            std::thread::spawn(move || {
-                let res = kindle::set_voice(desired);
-                running.store(false, Ordering::SeqCst);
-                let _ = weak.upgrade_in_event_loop(move |ui| {
-                    ui.set_kindle_busy(false);
-                    match res {
-                        Ok(()) => {
-                            {
-                                let mut c = controls.lock().unwrap();
-                                c.kindle_kokoro = desired;
-                                c.save();
-                            }
-                            ui.set_kindle_kokoro(desired);
-                            ui.set_status(
-                                format!(
-                                    "Kindle voice set to {}. Reopen Kindle for it to take effect.",
-                                    if desired { "Kokoro" } else { "Microsoft David" }
-                                )
-                                .into(),
-                            );
-                        }
-                        Err(e) => {
-                            ui.set_kindle_kokoro(!desired); // revert the checkbox
-                            ui.set_status(e.into());
-                        }
+                ui.set_status(
+                    if desired {
+                        "Kokoro will narrate Kindle. Reopen Kindle if it's already open."
+                    } else {
+                        "Kindle will use its own voice on next launch."
                     }
-                });
-            });
+                    .into(),
+                );
+            }
         });
     }
 

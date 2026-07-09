@@ -26,6 +26,18 @@ if ($LASTEXITCODE) { throw 'SAPI DLL build failed (need the i686-pc-windows-msvc
 Pop-Location
 $sapiDll = Join-Path $sapiRs 'target\i686-pc-windows-msvc\release\KokoroSapi.dll'
 
+# 1b. Build the x86 Kindle-hook DLL + injector (Kindle is 32-bit). The host's watcher spawns
+#     the injector, which LoadLibrary-loads the hook into Kindle to force the Kokoro voice.
+foreach ($c in 'kokoro-hook', 'kokoro-inject') {
+    Write-Host "==> cargo build --release --target i686-pc-windows-msvc ($c)"
+    Push-Location (Join-Path $root $c)
+    cargo build --release --target i686-pc-windows-msvc
+    if ($LASTEXITCODE) { throw "$c build failed (need the i686-pc-windows-msvc target?)" }
+    Pop-Location
+}
+$hookDll = Join-Path $root 'kokoro-hook\target\i686-pc-windows-msvc\release\kokoro_hook.dll'
+$injectExe = Join-Path $root 'kokoro-inject\target\i686-pc-windows-msvc\release\kokoro-inject.exe'
+
 # 2. Release-build both Rust crates (each stages its own runtime next to the exe).
 if (-not $SkipBuild) {
     Write-Host '==> cargo build --release (kokoro-host)'
@@ -49,6 +61,8 @@ Copy-Item (Join-Path $root 'icons\icon.ico') (Join-Path $stage 'icon.ico')
 
 $res = Join-Path $stage 'resources'
 Copy-Item $sapiDll $res
+Copy-Item $hookDll $res
+Copy-Item $injectExe $res
 Copy-Item (Join-Path $sapiRs 'kindle-voice-guard.ps1') $res
 Copy-Item (Join-Path $sapiRs 'voice-setup.ps1') $res
 

@@ -1,0 +1,27 @@
+[package]
+name = "kokoro-inject"
+version = "0.1.0"
+edition = "2021"
+description = "x86 helper kokoro-host spawns to LoadLibrary-inject kokoro_hook.dll into the running 32-bit Kindle.exe."
+
+# Kindle is 32-bit; a same-bitness injector can reuse its own kernel32!LoadLibraryW address
+# in the target. MUST be x86:
+#   cargo build --release --target i686-pc-windows-msvc
+[[bin]]
+name = "kokoro-inject"
+path = "src/main.rs"
+
+[dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Threading",
+    "Win32_System_Memory",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_Diagnostics_Debug",
+] }
+
+[profile.release]
+opt-level = "z"
+strip = true

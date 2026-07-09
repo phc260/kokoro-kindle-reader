@@ -11,9 +11,9 @@ reached over a thin FFI. It serves two front ends:
 
 1. **A native settings panel** (Slint) — pick a narrator, tune speed and volume, and
    audition it with a Preview button (there's no free-text reading box; the app's job
-   is choosing/hosting the voice, not reading pasted text). A checkbox also switches
-   Kindle's default voice between Kokoro and Microsoft David. The panel is spawned on
-   demand from the tray; nothing UI is resident at idle.
+   is choosing/hosting the voice, not reading pasted text). A checkbox toggles whether
+   Kindle narrates with Kokoro. The panel is spawned on demand from the tray; nothing UI
+   is resident at idle.
 2. **A SAPI5 voice for Windows** — "Kokoro (SAPI5)" appears in the system voice list,
    so apps like **Kindle for PC Read Aloud** narrate books with Kokoro. A thin **x86**
    COM DLL that Kindle loads in-process forwards each utterance over a named pipe to
@@ -76,15 +76,28 @@ DLL straight into Kindle and calls its functions:
    sentinels `0xFFFF_FFFE` / `0xFFFF_FFFF`). `kokoro-host`'s `pipe.rs` owns the
    chunking: it splits the text, renders each chunk on the native Dawn WebGPU synth,
    and streams the PCM back; the engine just writes each frame to Kindle's audio site.
-4. **Default-voice selection (MSIX).** Kindle plays whichever token equals
-   `DefaultTokenId` — and because it's sandboxed, that value lives in its **private
-   hive** (`…\Packages\AMZNKindle…\SystemAppData\Helium\User.dat`), not real HKCU.
-   Point it at Kokoro: stop Kindle, `reg load` the hive, set
-   `Software\Microsoft\Speech\Voices\DefaultTokenId` to the `KokoroTTS` token, `reg
-   unload`. `kindle-voice-guard.ps1 -Set kokoro|david` automates this; the installer
-   runs it at install time, and the panel's **Kindle-voice checkbox** re-runs it
-   elevated (UAC) on demand. The chosen state is recorded in `controls.json`
-   (`kindle_kokoro`) so the checkbox initializes to the last-set state.
+4. **Voice selection — and the Kindle 1.0.18632.0 change.** Historically Kindle narrated
+   with whichever token equals `DefaultTokenId` in its **private hive**
+   (`…\Packages\AMZNKindle…\SystemAppData\Helium\User.dat`, not real HKCU);
+   `kindle-voice-guard.ps1 -Set kokoro|david` points it at Kokoro (the installer runs it).
+   **But Kindle 1.0.18632.0 (2026-07) rewrote its narrator** (`SpVoiceEngine` in
+   `xrm120.dll`): it now resolves the voice from the **WinRT `SpeechSynthesizer` default**
+   (Microsoft Zira) and applies it via `ISpVoice::SetVoice`, ignoring `DefaultTokenId`
+   entirely. So on 18632+ the guard is a no-op; the hook below restores Kokoro. The panel's
+   checkbox now just records `kindle_kokoro` in `controls.json` (no elevation), which gates
+   the hook.
+
+### Restoring Kokoro on Kindle 1.0.18632.0+ (the hook)
+
+Because 18632's narrator is still classic `ISpVoice`, the fix is to change *which token
+reaches `SetVoice`*. `kokoro-host`'s watcher (`kindle_watch.rs`) polls for `Kindle.exe` on a
+4 s timer and, when `kindle_kokoro` is on, spawns the x86 **`kokoro-inject.exe`**, which
+`LoadLibrary`-injects **`kokoro_hook.dll`** into Kindle. The hook patches the process-shared
+`ISpVoice` vtable slot for `SetVoice` (**index 18**) so whatever token Kindle requests (Zira)
+is replaced with the Kokoro token — after which Kindle loads `KokoroSapi.dll` and the chain
+above runs unchanged. The host is x64, so it can't inject directly (the injector must match
+Kindle's bitness); it spawns the x86 helper instead. The patch is in-memory only, re-applied
+on each Kindle launch. `kokoro-hook`'s `selftest` bin guards the slot-18 ABI.
 
 **Native synthesis.** `native_synth.rs` is the pure-Rust synth core: `text.rs`
 normalize/segment → `espeak.rs` phonemize (espeak-ng FFI) → tokenize → the Kokoro ONNX
@@ -115,8 +128,10 @@ gain, and per-chunk sentence count are user-facing.
 
 | Path | What |
 |---|---|
-| `kokoro-host/` | The windowless tray host (x64): `main.rs` (tao event loop + tray + `auto-launch`), `pipe.rs` (named-pipe server; owns chunking + prefetch + pacing), `native_synth.rs` (serialized Rust WebGPU synth + `controls.json` reader) + `text.rs`/`espeak.rs` (kokoro-js text normalizer + espeak-ng FFI), `split_text.rs` (the sentence-chunk splitter). `build.rs` links the espeak-ng import lib and stages the runtime DLLs + `espeak-ng-data`. |
-| `kokoro-panel/` | The native settings panel (Slint/Fluent): `ui/panel.slint` + `src/main.rs`, and the framework-agnostic `download.rs` / `kindle.rs` / `preview.rs`. Writes `controls.json`. |
+| `kokoro-host/` | The windowless tray host (x64): `main.rs` (tao event loop + tray + `auto-launch` + Kindle-watcher tick), `pipe.rs` (named-pipe server; owns chunking + prefetch + pacing), `native_synth.rs` (serialized Rust WebGPU synth + `controls.json` reader) + `text.rs`/`espeak.rs` (kokoro-js text normalizer + espeak-ng FFI), `split_text.rs` (the sentence-chunk splitter), `kindle_watch.rs` (polls for Kindle, spawns the injector). `build.rs` links the espeak-ng import lib and stages the runtime DLLs + `espeak-ng-data`. |
+| `kokoro-panel/` | The native settings panel (Slint/Fluent): `ui/panel.slint` + `src/main.rs`, and the framework-agnostic `download.rs` / `preview.rs`. Writes `controls.json`. |
+| `kokoro-hook/` | x86 `cdylib` injected into Kindle 18632+: `DllMain` patches the shared `ISpVoice::SetVoice` vtable slot (index 18) → Kokoro token. `selftest` bin proves it Kindle-free. |
+| `kokoro-inject/` | x86 exe the host spawns: `LoadLibrary`-injects `kokoro_hook.dll` into `Kindle.exe`. |
 | `native-deps/` | Synth **dependency provisioning** only (no source): `tools/fetch-deps.ps1` populates `third_party/` — the Dawn/WebGPU runtime DLLs (from the `onnxruntime-webgpu` wheel) + espeak-ng (x64 build + import lib + `espeak-ng-data`). |
 | `kokoro-sapi/` | The x86 SAPI engine — a Rust `cdylib` (thin COM shim + pipe client, no deps): `lib.rs` (COM exports + registration), `engine.rs` (`ISpTTSEngine`), `worker.rs` (pipe client), `sapi.rs` (hand-declared `sapiddk.h` interfaces). Plus the `voice-setup.ps1` / `kindle-voice-guard.ps1` (Kindle hive patch) / `test-speak.ps1` scripts. |
 | `kokoro-sapi-smoke/` | No-Kindle COM + Speak smoke test for the engine (`run-speak-test.ps1`). |
@@ -158,17 +173,19 @@ runs `makensis`):
 .\packaging\build-installer.ps1
 ```
 
-CI does this on a `v*` tag (`.github/workflows/installer.yml`); the
-`sapi.yml` workflow builds the DLL + runs the COM smoke test on engine changes.
+CI does this on a `v*` tag (`.github/workflows/installer.yml`); the `sapi.yml` workflow
+builds the DLL + runs the COM smoke test on engine changes, and `hook.yml` compile-checks
+the x86 hook + injector on their changes.
 
 ## Kindle for PC notes (technical)
 
-- Kindle is **32-bit MSIX**; the engine must be x86, registered under `WOW6432Node`
-  (the 32-bit `regsvr32` does this), and its default voice patched in the package hive
-  (above). The installer patches it to Kokoro at install time and reverts it to
-  Microsoft David on uninstall (so Kindle isn't left pointing at a removed token); the
-  panel's Kindle-voice checkbox re-runs `kindle-voice-guard.ps1` on demand; re-run it
-  manually if a Kindle update resets the voice. Reopen Kindle after a switch.
+- Kindle is **32-bit MSIX**; the engine (and the hook + injector) must be x86, and the
+  engine is registered under `WOW6432Node` (the 32-bit `regsvr32` does this). Its
+  `DefaultTokenId` lives in the package hive; the installer points it at Kokoro at install
+  and reverts to Microsoft David on uninstall. **On Kindle 1.0.18632.0+ that `DefaultTokenId`
+  no longer selects the voice** — the narrator uses the WinRT default, so the host's watcher
+  injects `kokoro_hook.dll` to force Kokoro instead (see "Restoring Kokoro…" above). Reopen
+  Kindle after toggling the checkbox (the hook applies on Kindle's next launch).
 - **The host must be running** when Kindle reads — it's the synthesizer. If it isn't,
   the voice is silent (the shim has no local fallback by design).
 - Don't move/delete `kokoro-sapi/` — the registered token references the DLL by path.
