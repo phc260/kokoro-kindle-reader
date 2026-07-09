@@ -105,7 +105,10 @@ Section "Install"
   ; Register the x86 SAPI engine + make Kokoro Kindle's default. voice-setup.ps1
   ; self-elevates (one UAC) because regsvr32 -> HKLM/WOW6432Node and the Kindle
   ; guard's reg-load need admin; it self-skips the Kindle step if Kindle isn't
-  ; installed, so it never fails the install.
+  ; installed, so it never fails the install. It also copies the elevated-executed
+  ; artifacts (KokoroSapi.dll + the guard) into an admin-owned, ACL-locked dir under
+  ; %ProgramData% and registers THOSE, so nothing runs elevated from user-writable
+  ; %LOCALAPPDATA% (local-EoP hardening); see voice-setup.ps1.
   DetailPrint "Registering the Kokoro SAPI voice (may prompt for administrator)..."
   nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\resources\voice-setup.ps1" -Action register -ResourcesDir "$INSTDIR\resources"'
 SectionEnd
@@ -116,7 +119,8 @@ Section "Uninstall"
   nsExec::ExecToLog 'taskkill /IM kokoro-host.exe /F'
 
   ; Revert Kindle to Microsoft David, then unregister the COM server + token - in
-  ; that order, while the DLL + guard still exist in resources\. Self-elevates (UAC).
+  ; that order, while the DLL + guard still exist. Self-elevates (UAC); also removes
+  ; the admin-owned %ProgramData% copy voice-setup.ps1 created on register.
   nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\resources\voice-setup.ps1" -Action unregister -ResourcesDir "$INSTDIR\resources"'
 
   DeleteRegValue HKCU "${RUNKEY}" "${RUNVALUE}"
