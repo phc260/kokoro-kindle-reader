@@ -222,8 +222,14 @@ unwind into Kindle.
 - **Register from a stable path, never a git worktree.** The token's `InprocServer32`
   stores the absolute DLL path it was registered from; if that path goes away (e.g. an
   auto-cleaned worktree), Kindle's `LoadLibrary` fails silently and Read Aloud plays
-  **nothing**. Always register the main checkout's
-  `kokoro-sapi\target\i686-pc-windows-msvc\release\KokoroSapi.dll`.
+  **nothing**. For a **dev** build, register the main checkout's
+  `kokoro-sapi\target\i686-pc-windows-msvc\release\KokoroSapi.dll`. The **installer** does
+  *not* register the bundled `resources\KokoroSapi.dll`: `voice-setup.ps1` first copies it
+  (and `kindle-voice-guard.ps1`) into an admin-owned, ACL-locked
+  `%ProgramData%\Kokoro Kindle Reader\engine\` and registers *that* — so the DLL that runs
+  elevated (regsvr32 → `DllRegisterServer`) and the one Kindle loads is never the
+  user-writable `%LOCALAPPDATA%` copy. **Never point the installer's registration back at a
+  user-writable path** — that reopens the local-EoP window below.
 - **Installer is `currentUser`, registration self-elevates.** `installMode: currentUser`
   keeps the app out of `C:\Program Files` and runs the installer unelevated, but
   `DllRegisterServer` writes HKLM and the Kindle guard does `reg load`, both needing admin
@@ -231,6 +237,19 @@ unwind into Kindle.
   satisfied with a **different** admin account, the guard's `$env:LOCALAPPDATA` points at
   that admin's profile and it won't find the installing user's Kindle hive (logs "hive not
   found", skips).
+- **Never run an elevated artifact from a user-writable path (local EoP).** `regsvr32`
+  runs a DLL's `DllRegisterServer` and the guard runs a `.ps1` — both **as admin**. If those
+  files sat in `%LOCALAPPDATA%` (writable by the possibly-lower-integrity user), a same-user
+  process could swap them and get code run as admin on the next install/uninstall. So
+  `voice-setup.ps1 -Action register` stages both into `%ProgramData%\Kokoro Kindle Reader\`
+  with an `icacls`-locked ACL (SYSTEM + Administrators Full, Users read/execute, owner =
+  Administrators **group** so an admin user's medium-integrity process can't reopen the ACL
+  via owner-`WRITE_DAC`), registers/runs the locked copies, and **fails closed** if the lock
+  can't be set. Unregister reverts the voice, unregisters, then removes that dir. Do the
+  privileged file placement from the **elevated** context, not from NSIS (which runs
+  unelevated). Residual, only closable by signing the installer: the resources\ *source* and
+  the entry-point `.ps1` are still user-writable, so first-install/entry-point tampering
+  needs a signed installer to fully close.
 - **Kindle (MSIX) shadows HKCU.** Its SAPI default voice (`DefaultTokenId`) comes from the
   package hive (`…\Packages\AMZNKindle…\SystemAppData\Helium\User.dat`), not real HKCU.
   Patch it via `reg load`/`unload` with Kindle stopped — `kindle-voice-guard.ps1 -Set

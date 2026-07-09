@@ -89,3 +89,9 @@ C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe -File .\kokoro-sapi\te
 Register from a **stable path**, never a git worktree — the token's `InprocServer32`
 stores the absolute DLL path it was registered from; if that path goes away, Kindle's
 `LoadLibrary` fails silently and Read Aloud plays **nothing**. `regsvr32 /u` to unregister.
+
+The **installer** doesn't register the bundled `resources\KokoroSapi.dll` directly:
+`voice-setup.ps1` copies it into an admin-owned, ACL-locked
+`%ProgramData%\Kokoro Kindle Reader\engine\` and registers that copy, so nothing runs
+elevated (or is loaded by Kindle) from user-writable `%LOCALAPPDATA%` — a local-EoP
+hardening. The dev flow above is unaffected.
