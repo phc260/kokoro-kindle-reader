@@ -73,10 +73,14 @@ fn embed_version_info(manifest: &Path, description: &str) {
     if icon.exists() {
         res.set_icon(icon.to_str().unwrap());
     }
+    // Windows version resources are four-part (MAJOR.MINOR.BUILD.REVISION); take the
+    // crate's semver from Cargo and pin the unused revision to 0, so the version lives
+    // in Cargo.toml alone (no hard-coded copy to keep in sync).
+    let version = format!("{}.0", env::var("CARGO_PKG_VERSION").unwrap());
     res.set("FileDescription", description);
     res.set("ProductName", "Kokoro Kindle Reader");
-    res.set("FileVersion", "0.3.0.0");
-    res.set("ProductVersion", "0.3.0.0");
+    res.set("FileVersion", &version);
+    res.set("ProductVersion", &version);
     res.set("LegalCopyright", "MIT licensed");
     if let Err(e) = res.compile() {
         println!("cargo:warning=winresource (host): {e}");
