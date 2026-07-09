@@ -5,9 +5,9 @@
 // toggle, and Preview (synth via the host pipe = WYSIWYG) are all here.
 //
 // The UI is declared in ui/panel.slint (compiled by build.rs); this file wires its
-// properties/callbacks to the framework-agnostic logic in download.rs / kindle.rs /
-// preview.rs. Background work (download, verify, elevated Kindle switch, preview)
-// runs on threads and pushes results back via `upgrade_in_event_loop`.
+// properties/callbacks to the framework-agnostic logic in download.rs / preview.rs.
+// Background work (download, verify, preview) runs on threads and pushes results back
+// via `upgrade_in_event_loop`. The Kindle-voice toggle just persists a flag (no thread).
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 

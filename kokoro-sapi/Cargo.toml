@@ -1,6 +1,6 @@
 [package]
 name = "kokoro-sapi"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2021"
 description = "Kokoro SAPI5 voice engine (x86 in-process COM shim, connect-only)"
 
