@@ -33,8 +33,8 @@ runs entirely on your machine. kokoro-kindle-reader is two things in one app:
    [**Releases**](https://github.com/phc260/kokoro-kindle-reader/releases) page (the
    `-setup.exe` under the newest version).
 2. Run it. It installs just for you (no machine-wide changes), then raises a single
-   Windows UAC prompt to register the Kokoro voice and — if Kindle is installed —
-   set Kokoro as Kindle's Read Aloud voice automatically.
+   Windows UAC prompt to register the Kokoro voice. Kindle narration with Kokoro is
+   on by default — the app enables it automatically the next time Kindle runs.
 3. Launch **kokoro-kindle-reader**. On first run it downloads the voice model
    (~430 MB) — a one-time setup wizard walks you through it. After that it works
    fully offline.
@@ -51,9 +51,9 @@ the SAPI voice) uses when it reads.
 
 1. Pick a **Narrator** with the three dropdowns (accent, gender, and name).
 2. Adjust **Speed** and **Volume**, and **Sentences per chunk** if you want.
-3. Tick **Use Kokoro as Kindle's default voice** to make Kindle read with Kokoro
-   (this asks for administrator rights — Windows requires that to change Kindle's
-   voice); untick it to hand Kindle back its built-in Microsoft voice.
+3. Tick **Narrate Kindle with Kokoro** to make Kindle read with Kokoro; untick it
+   to hand Kindle back its built-in voice. No admin prompt — the change takes
+   effect the next time you open Kindle.
 4. Click **Preview** to hear the selected narrator read a short sample line.
 
 Your choices are saved and applied to Kindle's **next page** automatically — no
@@ -63,8 +63,8 @@ restart needed.
 
 1. Make sure **kokoro-kindle-reader is running** (it's the voice engine — no app, no
    sound). It lives in the system tray and auto-starts at login.
-2. Tick **Use Kokoro as Kindle's default voice** in Settings if it isn't already
-   (see above). Untick it anytime to restore Kindle's built-in voice.
+2. Tick **Narrate Kindle with Kokoro** in Settings if it isn't already (it's on by
+   default). Untick it anytime to restore Kindle's built-in voice.
 3. **Reopen Kindle** after switching so it picks up the new voice.
 4. In Kindle, start **Read Aloud** as usual — it now speaks with Kokoro, using the
    narrator, speed, and volume you set in the app.
@@ -82,9 +82,8 @@ don't need to touch it.
 
 - **Kindle is silent / no Read Aloud sound** — the kokoro-kindle-reader app isn't
   running. Start it and try again. (There's no fallback voice by design.)
-- **Kindle reverted to the old robotic voice** — a Kindle update can reset its
-  voice. Open kokoro-kindle-reader and flip the Microsoft/Kokoro toggle back to Kokoro,
-  then reopen Kindle.
+- **Kindle reverted to the old robotic voice** — make sure **Narrate Kindle with
+  Kokoro** is ticked in Settings, confirm the app is running, then reopen Kindle.
 - **A switch didn't take effect** — fully close and reopen Kindle after changing
   the voice.
 - **First launch is slow** — that's the one-time model download (~430 MB).
@@ -96,6 +95,10 @@ The interesting part is letting 32-bit Kindle narrate with GPU TTS that lives in
 a separate 64-bit process: a thin x86 COM voice plugin loads inside Kindle and
 forwards each utterance over a named pipe to the kokoro-kindle-reader tray app, which
 synthesizes natively on your GPU (Dawn WebGPU) and streams the audio back.
+
+Recent Kindle builds (1.0.18632+) ignore the classic Windows voice setting and pick
+their own default, so the app also gives Kindle a nudge to select Kokoro each time it
+launches — which is why narration works with no manual voice-switching.
 
 If you're curious about the engine chain, the wire protocol, the Kindle voice
 registry/hive details, or want to **build from source**, see
