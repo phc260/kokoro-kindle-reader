@@ -46,8 +46,17 @@ fn load_manifest() -> Manifest {
     }
 }
 
-fn file_path(app_data: &Path, model_id: &str, rel: &str) -> PathBuf {
-    app_data.join(model_id).join(rel)
+/// Resolve a manifest file's on-disk path under `<app_data>/<model_id>/`. Returns
+/// `None` if `rel` isn't a plain relative path — every component must be `Normal`, so
+/// an absolute path, a drive prefix, or a `..` is rejected and can never escape the
+/// model dir. The manifest is embedded (trusted) today; this keeps a future
+/// externally-sourced manifest from becoming a path-traversal write primitive.
+fn file_path(app_data: &Path, model_id: &str, rel: &str) -> Option<PathBuf> {
+    use std::path::Component;
+    if rel.is_empty() || !Path::new(rel).components().all(|c| matches!(c, Component::Normal(_))) {
+        return None;
+    }
+    Some(app_data.join(model_id).join(rel))
 }
 
 fn present(path: &Path, size: u64) -> bool {
@@ -96,9 +105,12 @@ fn valid_with_progress(
 /// usable). Cheap — metadata only.
 pub fn model_complete(app_data: &Path) -> bool {
     let m = load_manifest();
-    m.files
-        .iter()
-        .all(|f| present(&file_path(app_data, &m.model_id, &f.path), f.size))
+    // An unrejectable/unsafe path -> treat the model as incomplete (fail closed).
+    m.files.iter().all(|f| {
+        file_path(app_data, &m.model_id, &f.path)
+            .map(|p| present(&p, f.size))
+            .unwrap_or(false)
+    })
 }
 
 /// Shared progress the UI polls while a download/verify runs.
@@ -154,7 +166,8 @@ fn download(
     let mut downloaded: u64 = 0;
 
     for f in &manifest.files {
-        let dest = file_path(app_data, &manifest.model_id, &f.path);
+        let dest = file_path(app_data, &manifest.model_id, &f.path)
+            .ok_or_else(|| format!("unsafe path in manifest: {}", f.path))?;
         {
             let mut p = progress.lock().unwrap();
             p.file = f.path.clone();
@@ -225,7 +238,13 @@ pub fn verify(app_data: &Path, mut on_progress: impl FnMut(u64, u64)) -> (usize,
     let mut base: u64 = 0;
     let mut repaired = 0;
     for f in &m.files {
-        let path = file_path(app_data, &m.model_id, &f.path);
+        let Some(path) = file_path(app_data, &m.model_id, &f.path) else {
+            // Unsafe manifest path: count it as needing repair, don't touch disk.
+            repaired += 1;
+            base += f.size;
+            on_progress(base, total);
+            continue;
+        };
         if !valid_with_progress(&path, f.size, &f.sha256, base, total, &mut on_progress) {
             let _ = std::fs::remove_file(&path);
             repaired += 1;
