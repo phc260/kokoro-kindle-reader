@@ -71,9 +71,12 @@ Section "Install"
   SetOutPath "$INSTDIR\espeak-ng-data"
   File /r "${STAGING}\espeak-ng-data\*.*"
 
-  ; Connect-only x86 SAPI engine + guard scripts (voice-setup.ps1 reads from here).
+  ; Connect-only x86 SAPI engine + guard scripts (voice-setup.ps1 reads from here),
+  ; plus the x86 Kindle-hook DLL + injector the host spawns to force the Kokoro voice.
   SetOutPath "$INSTDIR\resources"
   File "${STAGING}\resources\KokoroSapi.dll"
+  File "${STAGING}\resources\kokoro_hook.dll"
+  File "${STAGING}\resources\kokoro-inject.exe"
   File "${STAGING}\resources\kindle-voice-guard.ps1"
   File "${STAGING}\resources\voice-setup.ps1"
 

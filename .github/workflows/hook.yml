@@ -1,0 +1,29 @@
+name: hook (Kindle x86 hook + injector)
+
+# Compile-checks the two x86 artifacts kokoro-host injects into Kindle 18632+ to force the
+# Kokoro voice: kokoro_hook.dll (patches ISpVoice::SetVoice) and kokoro-inject.exe (the
+# LoadLibrary injector the host spawns). The selftest that proves the SetVoice vtable index
+# needs Kokoro registered, so it can't run on a bare runner -- it's a local/dev check.
+
+on:
+  push:
+    paths: ['kokoro-hook/**', 'kokoro-inject/**', '.github/workflows/hook.yml']
+  pull_request:
+    paths: ['kokoro-hook/**', 'kokoro-inject/**', '.github/workflows/hook.yml']
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: i686-pc-windows-msvc
+
+      - name: Build hook DLL (x86)
+        run: cargo build --release --target i686-pc-windows-msvc --manifest-path kokoro-hook/Cargo.toml
+
+      - name: Build injector (x86)
+        run: cargo build --release --target i686-pc-windows-msvc --manifest-path kokoro-inject/Cargo.toml

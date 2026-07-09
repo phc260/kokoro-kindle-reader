@@ -39,3 +39,9 @@ tray-icon = "0.19"
 auto-launch = "0.5"
 # Decode the bundled PNG into RGBA for the tray icon (png only — keep it light).
 image = { version = "0.25", default-features = false, features = ["png"] }
+# Kindle-watcher (kindle_watch.rs): enumerate processes to detect Kindle.exe. The actual
+# injection is done by the separate x86 kokoro-inject.exe the watcher spawns.
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_System_Diagnostics_ToolHelp",
+] }

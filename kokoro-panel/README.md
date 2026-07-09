@@ -3,8 +3,8 @@
 The native settings panel (Slint/Fluent), **spawned on demand** from the tray "Settings"
 item — there's **zero resident UI at idle**. Pick a narrator, tune speed/volume/chunk,
 **Preview** a voice (synthesizes a fixed per-voice intro via the host pipe + rodio =
-WYSIWYG, the same engine Kindle uses), download/verify the model, and toggle Kindle's
-default voice between Kokoro and Microsoft David.
+WYSIWYG, the same engine Kindle uses), download/verify the model, and toggle whether
+Kindle narrates with Kokoro (the host's watcher acts on the flag).
 
 There is **no free-text reading box** by design: the app's job is choosing and hosting
 the voice, not reading pasted text.
@@ -19,18 +19,17 @@ cargo run   # or launch it from the host's tray → Settings
 
 | File | What |
 |---|---|
-| `ui/panel.slint` | The Fluent UI (sliders, narrator dropdown, Preview, Kindle-voice checkbox). |
-| `src/main.rs` | Wires the Slint UI to the modules below; background work runs on threads and pushes results back via `upgrade_in_event_loop`. |
+| `ui/panel.slint` | The Fluent UI (sliders, narrator dropdown, Preview, "Narrate Kindle with Kokoro" checkbox). |
+| `src/main.rs` | Wires the Slint UI to the modules below; background work runs on threads and pushes results back via `upgrade_in_event_loop`. The Kindle checkbox just persists `kindle_kokoro`. |
 | `src/download.rs` | Model download/verify (framework-agnostic). |
-| `src/kindle.rs` | The elevated Kindle-voice guard (UAC → `kindle-voice-guard.ps1`). |
 | `src/preview.rs` | Synth via the host pipe + rodio playback. |
 
 ## Contract (do not rediscover)
 
-- The panel **writes `controls.json`**; the host reads it live. The keys written here
-  (`voice`, `speed`, `gain`, `chunk`, `kindle_kokoro`) must match what
-  `kokoro-host/src/native_synth.rs::read_controls` reads — a slider move lands on
-  Kindle's next page with no IPC or restart.
+- The panel **writes `controls.json`**; the host reads it live. The synth keys (`voice`,
+  `speed`, `gain`, `chunk`) must match what `kokoro-host/src/native_synth.rs::read_controls`
+  reads — a slider move lands on Kindle's next page with no IPC or restart. `kindle_kokoro`
+  is read by `kokoro-host/src/kindle_watch.rs` (gates Kindle auto-injection).
 - The narrator list is derived from the embedded `model-manifest.json` (accent from
   `id[0]` a/b, gender from `id[1]` f/m).
 - Slint `step` on a `Slider` only affects keyboard/scroll, not mouse drag — the dragged

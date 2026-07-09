@@ -46,6 +46,8 @@ jobs:
             kokoro-host
             kokoro-panel
             kokoro-sapi
+            kokoro-hook
+            kokoro-inject
 
       - name: Install NSIS
         run: choco install nsis -y --no-progress

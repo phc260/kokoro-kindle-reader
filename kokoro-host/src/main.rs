@@ -13,15 +13,17 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 mod espeak;
+mod kindle_watch;
 mod native_synth;
 mod split_text;
 mod text;
 
 mod pipe;
 
-use tao::event::Event;
+use tao::event::{Event, StartCause};
 use tao::event_loop::{ControlFlow, EventLoopBuilder};
 use tray_icon::menu::{Menu, MenuEvent, MenuItem};
 use tray_icon::{TrayIconBuilder, TrayIconEvent};
@@ -168,6 +170,12 @@ fn main() {
     // Track the panel child so a second Settings click doesn't pile up windows.
     let mut panel_child: Option<std::process::Child> = None;
 
+    // Kindle-watcher state: the event loop wakes on a timer and injects the hook once per
+    // Kindle instance (edge-triggered by PID). See kindle_watch.rs.
+    let app_data = app_data_dir();
+    let mut last_injected_pid: Option<u32> = None;
+    const KINDLE_POLL: Duration = Duration::from_secs(4);
+
     // Build the tray after the event loop exists (its message-only window needs the
     // loop's thread). Kept alive by moving into the run closure.
     let tray = TrayIconBuilder::new()
@@ -180,10 +188,14 @@ fn main() {
     eprintln!("[host] tray up; serving \\\\.\\pipe\\KokoroSapiSynth");
 
     event_loop.run(move |event, _, control_flow| {
-        *control_flow = ControlFlow::Wait;
+        *control_flow = ControlFlow::WaitUntil(Instant::now() + KINDLE_POLL);
         // Keep the tray alive for the loop's lifetime.
         let _ = &tray;
         match event {
+            // Timer wake (or first run): poll for Kindle and inject the hook if needed.
+            Event::NewEvents(StartCause::ResumeTimeReached { .. } | StartCause::Init) => {
+                kindle_watch::tick(&app_data, &mut last_injected_pid);
+            }
             Event::UserEvent(menu_event) => {
                 if menu_event.id == settings_id {
                     // Spawn the panel unless one is already open (try_wait -> None
