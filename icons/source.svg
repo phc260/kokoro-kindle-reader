@@ -1,5 +1,7 @@
 <svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
   <rect width="1024" height="1024" rx="221" fill="#E94F64"/>
+  <!-- Artwork (book + waves) scaled 1.25x about its own center and recentered on the canvas -->
+  <g transform="translate(-110.94 -128) scale(1.25)">
   <rect x="189" y="268" width="331" height="488" rx="55" fill="#ffffff"/>
   <line x1="252" y1="299" x2="252" y2="725" stroke="#E94F64" stroke-width="24"/>
   <line x1="307" y1="394" x2="465" y2="394" stroke="#E94F64" stroke-width="24" stroke-linecap="round"/>
@@ -8,5 +10,6 @@
     <path d="M583 422.2 A 94.5 94.5 0 0 1 583 585.8"/>
     <path d="M622.3 360.8 A 165.4 165.4 0 0 1 622.3 647.5"/>
     <path d="M661.7 299.3 A 236.3 236.3 0 0 1 661.7 709"/>
+  </g>
   </g>
 </svg>
