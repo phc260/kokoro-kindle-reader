@@ -58,12 +58,12 @@ component Waveform inherits Rectangle {
 export component AppWindow inherits Window {
     title: "Kokoro Kindle Reader — Settings";
     icon: @image-url("../../icons/128x128.png");
-    preferred-width: 360px;
+    preferred-width: 400px;
     preferred-height: 600px;
     // Floor of the narrator row: accent (100, fits "American") + gender (90,
     // fits "Female") + name (~120 min before its chevron clips) + 16 spacing +
     // 40 padding (symmetric 20px each side). Narrower and the chevron spills.
-    min-width: 360px;
+    min-width: 400px;
 
     // --- state (set from Rust) ---
     // Narrator as three cascading dropdowns: accent x gender selects the name list.
@@ -162,13 +162,13 @@ export component AppWindow inherits Window {
                 ComboBox {
                     model: root.accents;
                     current-index <=> root.accent-index;
-                    width: 100px;
+                    width: 120px;
                     selected => { root.accent-changed(self.current-index); }
                 }
                 ComboBox {
                     model: root.genders;
                     current-index <=> root.gender-index;
-                    width: 90px;
+                    width: 100px;
                     selected => { root.gender-changed(self.current-index); }
                 }
                 ComboBox {
