@@ -93,7 +93,7 @@ impl NativeSynth {
 
     /// Synthesize one already-cut chunk. Returns raw little-endian f32 PCM bytes
     /// (24 kHz mono) — same shape the webview `synth_result` used, so pipe_server's
-    /// framing is unchanged. None on init/synth failure (pipe host emits kSynthError).
+    /// framing is unchanged. None on init/synth failure (pipe host emits SYNTH_ERROR).
     pub async fn synth(&self, text: String, speed: f32, voice: String) -> Option<Vec<u8>> {
         let (reply, rx) = oneshot::channel();
         if self.tx.send(Req { text, speed, voice, reply }).is_err() {

@@ -60,8 +60,8 @@ The trick is letting a 32-bit app drive GPU TTS that lives in a *different*, 64-
 process. It does **not** connect to anything in the networking sense — COM loads our
 DLL straight into Kindle and calls its functions:
 
-1. **SAPI5 is a registry-discovered COM plugin.** `DllRegisterServer` (`Dll.cpp`)
-   writes `CLSID\{guid}\InprocServer32` → the DLL's path, and a voice token
+1. **SAPI5 is a registry-discovered COM plugin.** `DllRegisterServer`
+   (`kokoro-sapi/src/lib.rs`) writes `CLSID\{guid}\InprocServer32` → the DLL's path, and a voice token
    `…\Speech\Voices\Tokens\KokoroTTS` whose `CLSID` points back at that GUID. The
    32-bit `regsvr32` lands these in `WOW6432Node`, the view 32-bit Kindle reads.
 2. **Kindle loads the DLL in-process.** It resolves its default voice token → CLSID →
@@ -72,7 +72,7 @@ DLL straight into Kindle and calls its functions:
 3. **The DLL is a thin shim → the host.** `Speak` sends the *whole* utterance over the
    pipe `\\.\pipe\KokoroSapiSynth` (wire format: the `kokoro-protocol` crate) in one `'S'` request
    (`[rate][textBytes][text]`) and gets back a **stream** of PCM frames
-   (`[nSamples][gain][f32…]`, ended by a `kStreamEnd` / `kSynthError` marker — the u32
+   (`[nSamples][gain][f32…]`, ended by a `STREAM_END` / `SYNTH_ERROR` marker — the u32
    sentinels `0xFFFF_FFFE` / `0xFFFF_FFFF`). `kokoro-host`'s `pipe.rs` owns the
    chunking: it splits the text, renders each chunk on the native Dawn WebGPU synth,
    and streams the PCM back; the engine just writes each frame to Kindle's audio site.
@@ -132,7 +132,7 @@ gain, and per-chunk sentence count are user-facing.
 | `kokoro-panel/` | The native settings panel (Slint/Fluent): `ui/panel.slint` + `src/main.rs`, and the framework-agnostic `download.rs` / `preview.rs`. Writes `controls.json`. |
 | `kokoro-hook/` | x86 `cdylib` injected into Kindle 18632+: `DllMain` patches the shared `ISpVoice::SetVoice` vtable slot (index 18) → Kokoro token. `selftest` bin proves it Kindle-free. |
 | `kokoro-inject/` | x86 exe the host spawns: `LoadLibrary`-injects `kokoro_hook.dll` into `Kindle.exe`. |
-| `native-deps/` | Synth **dependency provisioning** only (no source): `tools/fetch-deps.ps1` populates `third_party/` — the Dawn/WebGPU runtime DLLs (from the `onnxruntime-webgpu` wheel) + espeak-ng (x64 build + import lib + `espeak-ng-data`). |
+| `native-deps/` | Synth **dependency provisioning** only (no source): `fetch-deps.ps1` populates the gitignored dep folders alongside itself (`native-deps/runtime/` + `espeak-ng-src/`) — the Dawn/WebGPU runtime DLLs (from the `onnxruntime-webgpu` wheel) + espeak-ng (x64 build + import lib + `espeak-ng-data`). |
 | `kokoro-sapi/` | The x86 SAPI engine — a Rust `cdylib` (thin COM shim + pipe client, no deps): `lib.rs` (COM exports + registration), `engine.rs` (`ISpTTSEngine`), `worker.rs` (pipe client), `sapi.rs` (hand-declared `sapiddk.h` interfaces). Plus the `voice-setup.ps1` / `kindle-voice-guard.ps1` (Kindle hive patch) / `test-speak.ps1` scripts. |
 | `kokoro-sapi-smoke/` | No-Kindle COM + Speak smoke test for the engine (`run-speak-test.ps1`). |
 | `kokoro-protocol/` | The named-pipe wire constants (pipe name, `'S'`/`'I'`, `STREAM_END`/`SYNTH_ERROR`, sample rate) as a small crate shared by **both** `kokoro-host` and `kokoro-sapi` — the single source of truth for the format. |
@@ -149,7 +149,7 @@ Studio with the MSVC toolchain + CMake, Python (for the onnxruntime-webgpu wheel
 ```powershell
 # 1. One-time: provision the synth runtime deps
 #    (Dawn runtime DLLs + espeak-ng x64 import lib/DLL + espeak-ng-data)
-.\native-deps\tools\fetch-deps.ps1
+.\native-deps\fetch-deps.ps1
 rustup target add i686-pc-windows-msvc   # for the x86 SAPI DLL
 
 # 2. Build + run the headless host (tray). Right-click the tray → Settings for the panel.

@@ -1,12 +1,12 @@
-# Reproducibly provision native-deps/third_party (the runtime DLLs the host stages +
+# Reproducibly provision native-deps/ (the runtime DLLs the host stages +
 # the espeak import lib it links) with no manual venv / hardcoded paths, so a fresh
 # clone or CI runner can build the synth. Populates:
 #
-#   third_party/runtime/*.dll               (Dawn/WebGPU onnxruntime.dll +
+#   native-deps/runtime/*.dll               (Dawn/WebGPU onnxruntime.dll +
 #                                            providers_shared + dxcompiler + dxil,
 #                                            from the onnxruntime-webgpu wheel;
 #                                            espeak-ng.dll from the espeak build)
-#   third_party/espeak-ng-src/...           (espeak-ng 1.52.0 x64 + horse-hoarse
+#   native-deps/espeak-ng-src/...           (espeak-ng 1.52.0 x64 + horse-hoarse
 #                                            revert + import lib, via build-espeak.ps1)
 #
 # The ONNX model runs on the `ort` crate's WebGPU EP via load-dynamic, so onnxruntime.dll
@@ -19,9 +19,7 @@ param(
     [switch]$Force
 )
 $ErrorActionPreference = 'Stop'
-$root = Split-Path -Parent $PSScriptRoot   # native-deps/
-$tp   = Join-Path $root 'third_party'
-$tools = $PSScriptRoot
+$tp   = $PSScriptRoot                       # native-deps/
 New-Item -ItemType Directory -Force $tp | Out-Null
 
 $ProgressPreference = 'SilentlyContinue'   # fast Invoke-WebRequest
@@ -61,11 +59,11 @@ if (-not (Test-Path (Join-Path $espkSrc '.git'))) {
 $espkDll = Join-Path $tp 'espeak-ng-src\build-x64\src\espeak-ng.dll'
 if ($Force -or -not (Test-Path $espkDll)) {
     Write-Host '==> Building espeak-ng (x64, 1.52.0 + horse-hoarse revert)'
-    & (Join-Path $tools 'build-espeak.ps1')
+    & (Join-Path $PSScriptRoot 'build-espeak.ps1')
     if ($LASTEXITCODE) { throw 'build-espeak.ps1 failed' }
 }
 Copy-Item $espkDll $runtime -Force
 
-Write-Host '==> third_party provisioned:'
+Write-Host '==> native-deps provisioned:'
 Write-Host ("    runtime DLLs    : {0}" -f (Get-ChildItem $runtime -Filter '*.dll').Count)
 Write-Host ("    espeak-ng.dll   : {0}" -f (Test-Path $espkDll))
