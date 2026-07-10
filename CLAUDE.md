@@ -70,7 +70,8 @@ C:\Windows\SysWOW64\regsvr32.exe "kokoro-sapi\target\i686-pc-windows-msvc\releas
 # (both exes + native runtime + the x86 DLL + guard scripts), then runs makensis. NSIS.
 packaging\build-installer.ps1
 # CI does this on a v* tag (.github/workflows/installer.yml); sapi.yml
-# builds the x86 DLL + runs the COM smoke test on kokoro-sapi/** changes.
+# builds the x86 DLL + runs the COM smoke test on kokoro-sapi/** changes; hook.yml
+# compile-checks the x86 hook + injector on kokoro-hook/** / kokoro-inject/** changes.
 
 # SAPI smoke test — no Kindle, no elevation: LoadLibrary the DLL + drive the COM object
 # model + Speak path (needs the host running for audio). See kokoro-sapi-smoke/.
