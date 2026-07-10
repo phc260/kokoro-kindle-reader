@@ -11,7 +11,9 @@ use windows::Win32::Storage::FileSystem::{
 };
 use windows_core::PCWSTR;
 
-use kokoro_protocol::{CMD_SYNTH, MAX_TEXT_BYTES, PIPE_NAME, STREAM_END, SYNTH_ERROR};
+use kokoro_protocol::{
+    CMD_SYNTH, MAX_FRAME_SAMPLES, MAX_TEXT_BYTES, PIPE_NAME, STREAM_END, SYNTH_ERROR,
+};
 
 /// Result of reading one frame of the 'S' response stream.
 pub enum Frame {
@@ -101,6 +103,13 @@ impl Worker {
         }
         if n == SYNTH_ERROR {
             return Frame::Error; // host keeps the stream open
+        }
+        // Bound what we'll allocate off a pipe-supplied header: the real host never
+        // sends frames this large, so anything over the cap means a corrupt/hostile
+        // stream (e.g. a squatted pipe). Reject rather than allocate n*4 bytes.
+        if n > MAX_FRAME_SAMPLES {
+            self.close();
+            return Frame::Error;
         }
 
         let mut g = [0u8; 4];

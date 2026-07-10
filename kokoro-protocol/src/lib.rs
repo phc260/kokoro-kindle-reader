@@ -36,5 +36,14 @@ pub const SYNTH_ERROR: u32 = 0xFFFF_FFFF;
 /// Sanity cap on a single request's text (1 MB).
 pub const MAX_TEXT_BYTES: u32 = 1 << 20;
 
+/// Sanity cap on a single response frame's sample count (~43 s of 24 kHz audio). The
+/// host only ever sends ~250 ms sub-frames (~6000 samples), so this is generous
+/// headroom — its purpose is to bound what the *client* (the x86 SAPI engine running
+/// inside Kindle) will allocate off a frame header it read from the pipe. Without it a
+/// process that squatted [`PIPE_NAME`] before the host could feed Kindle a huge
+/// `nSamples` and either overflow `n * 4` on 32-bit or force a multi-GB allocation
+/// (Kindle OOM/abort). Well under `u32`/`usize` range so `n * 4` can't overflow.
+pub const MAX_FRAME_SAMPLES: u32 = 1 << 20;
+
 /// Kokoro's native output rate (Hz); the stream is 24 kHz mono f32.
 pub const SAMPLE_RATE: u32 = 24_000;
