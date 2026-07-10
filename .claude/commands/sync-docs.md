@@ -30,7 +30,7 @@ this" material) — don't pad.
 Drift-prone claim types to check explicitly:
 - **File/path references** — every file named in prose or the Layout table still exists
   at that path (e.g. `kokoro-sapi/*.ps1`, the DLL path, `kokoro-host/src/*`,
-  `kokoro-panel/src/*`, `native-deps/tools/*`, `model-manifest.json`, `icons/`).
+  `kokoro-panel/src/*`, `native-deps/*.ps1`, `model-manifest.json`, `icons/`).
 - **Wire-protocol names** — the markers named in docs match the `kokoro-protocol` crate
   (`STREAM_END`/`SYNTH_ERROR` = `0xFFFF_FFFE`/`0xFFFF_FFFF`, the `'S'` request
   `[rate][textBytes][text]`, the `[nSamples][gain][f32…]` frame format).
@@ -39,7 +39,7 @@ Drift-prone claim types to check explicitly:
   are *not* in the file — they're fixed constants in `pipe.rs`, so docs must not describe
   them as user-tunable.
 - **Dependency pins / versions** — the ORT / `onnxruntime-webgpu` pin in
-  `native-deps/tools/fetch-deps.ps1` matches what the docs claim; the product version
+  `native-deps/fetch-deps.ps1` matches what the docs claim; the product version
   agrees across `packaging/installer.nsi` (`VERSION`) and the `FileVersion` in
   `kokoro-host/build.rs` + `kokoro-panel/build.rs`.
 - **Command snippets** — the PowerShell/cargo commands in fenced blocks still run as
@@ -62,9 +62,15 @@ fix whichever side is wrong (code is the source of truth; update the comment/doc
   what `kokoro-panel` embeds and derives its narrator dropdowns from.
 - **Version sync** — the product version in `packaging/installer.nsi` (`VERSION`) ⇆ the
   `FileVersion`/`ProductVersion` set in `kokoro-host/build.rs` + `kokoro-panel/build.rs`.
-- **Build ordering** — `native-deps/tools/fetch-deps.ps1` must run before building
-  `kokoro-host` (its `build.rs` panics without `third_party/`); `build-installer.ps1`
+- **Build ordering** — `native-deps/fetch-deps.ps1` must run before building
+  `kokoro-host` (its `build.rs` panics without the provisioned dep folders); `build-installer.ps1`
   builds the x86 SAPI DLL (`kokoro-sapi`, needs the `i686-pc-windows-msvc` target).
+- **Dep folder names** — the folders `native-deps/fetch-deps.ps1` provisions into
+  `native-deps/` (`runtime/`, `espeak-ng-src/`) ⇆ the paths `kokoro-host/build.rs` reads
+  (`native-deps/runtime`, `native-deps/espeak-ng-src/build-x64/...`) ⇆ the entries
+  `native-deps/.gitignore` lists. These live directly in `native-deps/` (no `third_party/`
+  wrapper), so a rename in one place must update all three or the deps get committed / the
+  build panics.
 - **Icons in LFS** — `icons/*` are tracked via Git LFS (`.gitattributes`); CI checks out
   with `lfs: true` so `icon.ico` bundles.
 

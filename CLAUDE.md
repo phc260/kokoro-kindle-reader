@@ -47,7 +47,7 @@ Kindle.exe (x86) ──in-proc COM (LoadLibrary + vtable)──▶ KokoroSapi.dl
 ```powershell
 # One-time: provision the synth runtime deps (Dawn ORT runtime DLLs + espeak-ng x64
 # import lib/DLL + espeak-ng-data). Must run before building kokoro-host.
-native-deps\tools\fetch-deps.ps1
+native-deps\fetch-deps.ps1
 
 # Build + run (Rust, x64). Right-click the tray → Settings to open the panel.
 cargo run --manifest-path kokoro-host\Cargo.toml     # windowless tray daemon
@@ -99,8 +99,9 @@ No Rust test suites; "testing" is Preview in the panel and Read Aloud in Kindle 
   segmentation + phoneme post-processing, on UTF-8 bytes; verified token-parity vs
   kokoro-js. `kokoro-host/src/espeak.rs` — the espeak-ng FFI + one-segment phoneme
   trace (temp-file trace via CRT `fopen`/`fclose`).
-- `native-deps/` is now just **dep provisioning**: `tools/fetch-deps.ps1` populates
-  `third_party/` (the `onnxruntime-webgpu` pip wheel → Dawn `onnxruntime.dll` +
+- `native-deps/` is now just **dep provisioning**: `fetch-deps.ps1` populates the
+  gitignored dep folders **alongside itself** (`native-deps/runtime/` + `espeak-ng-src/`;
+  the `onnxruntime-webgpu` pip wheel → Dawn `onnxruntime.dll` +
   `dxcompiler.dll` + `dxil.dll` + `onnxruntime_providers_shared.dll`; `build-espeak.ps1`
   → `espeak-ng.dll` + import lib + `espeak-ng-data`). No C++ source remains.
 
@@ -216,8 +217,8 @@ unwind into Kindle.
   `ort` session is owned by the worker), so ONE dedicated thread owns the synth; never
   call espeak / run the session from multiple threads.
 - **`fetch-deps.ps1` must run before building `kokoro-host`.** `build.rs` panics if
-  `native-deps/third_party/` (ORT + Dawn DLLs + espeak) is missing; that's what
-  `fetch-deps.ps1` provisions. It also stages the 5 runtime DLLs next to the exe.
+  the provisioned dep folders under `native-deps/` (ORT + Dawn DLLs + espeak) are missing;
+  that's what `fetch-deps.ps1` provisions. It also stages the 5 runtime DLLs next to the exe.
 - **Registration → `WOW6432Node`.** The 32-bit `regsvr32` writes `HKLM\SOFTWARE\Classes\…`
   into the WOW64 view — exactly what 32-bit Kindle reads.
 - **Register from a stable path, never a git worktree.** The token's `InprocServer32`

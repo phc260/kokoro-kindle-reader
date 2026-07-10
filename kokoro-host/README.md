@@ -14,7 +14,7 @@ is a thin shim that forwards each utterance here and streams PCM back. No host, 
 
 ```powershell
 # One-time: provision the synth runtime deps (must run first — build.rs panics without it).
-..\native-deps\tools\fetch-deps.ps1
+..\native-deps\fetch-deps.ps1
 
 cargo run   # windowless tray daemon; right-click the tray → Settings for the panel
 ```

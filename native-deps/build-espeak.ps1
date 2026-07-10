@@ -17,10 +17,9 @@
 # The Kokoro model was trained on phonemizer's output, so matching it (pre-merger)
 # is correct for THIS model even though `ɔː` is the more modern General American.
 #
-# third_party/espeak-ng-src is a gitignored clone; re-run this after a fresh clone.
+# espeak-ng-src is a gitignored clone next to this script; re-run after a fresh clone.
 $ErrorActionPreference = 'Stop'
-$root = Split-Path -Parent $PSScriptRoot                  # native-deps/
-$src  = Join-Path $root 'third_party\espeak-ng-src'
+$src  = Join-Path $PSScriptRoot 'espeak-ng-src'          # native-deps/espeak-ng-src
 if (-not (Test-Path (Join-Path $src '.git'))) {
     throw "espeak-ng source not at $src - clone it first:`n" +
           "  git clone https://github.com/espeak-ng/espeak-ng.git `"$src`""

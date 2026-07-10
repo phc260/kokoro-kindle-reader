@@ -45,7 +45,7 @@ commit, tag, or push (those are deliberate, separate steps).
 
 5. **Verify.** Grep the repo for both the old and new version and confirm: no stale
    occurrences of the old version remain outside `Cargo.lock`, `kokoro-hook`,
-   `kokoro-inject`, and `native-deps/third_party/`; and all 5 edited locations now show
+   `kokoro-inject`, and `native-deps/` dep folders; and all 5 edited locations now show
    the new version. Report a short table of the files changed (old → new) and remind me
    that building the installer, committing, and tagging are separate steps I run when
    ready.

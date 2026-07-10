@@ -1,13 +1,13 @@
 // Named-pipe server bridging the SAPI engine (running inside Kindle) to the native
 // Dawn WebGPU synth. The x86 KokoroSapi.dll connects to \\.\pipe\KokoroSapiSynth
-// and speaks the WorkerProtocol.h wire format ('S' = synth whole utterance, 'I' =
+// and speaks the kokoro-protocol wire format ('S' = synth whole utterance, 'I' =
 // info).
 //
 // This end owns all chunking: a single 'S' request carries the whole utterance; we
 // split it into sentence chunks (crate::split_text), synthesize each on the
 // serialized native worker with a depth-1 prefetch pipeline, and stream the PCM
 // back to the engine as ~sub-frame-sized frames ([nSamples][gain][samples...], then
-// a kStreamEnd / kSynthError marker), paced to ~real time. Narrator/speed/gain/chunk
+// a STREAM_END / SYNTH_ERROR marker), paced to ~real time. Narrator/speed/gain/chunk
 // come from controls.json in the app-data dir (no webview round-trips).
 
 use std::path::PathBuf;

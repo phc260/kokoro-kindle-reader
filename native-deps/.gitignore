@@ -1,5 +1,6 @@
-# Downloaded / built third-party artifacts + staged runtime DLLs
-# (all re-created by tools/*.ps1 and the staging step).
-third_party/
+# Downloaded / built third-party artifacts (all re-created by fetch-deps.ps1).
+espeak-ng-src/
+onnxruntime/
+runtime/
 # Build output
 build/
