@@ -17,7 +17,7 @@ commit, tag, or push (those are deliberate, separate steps).
 2. **Read the current version** from `packaging/installer.nsi` (the `!define VERSION`
    line) so you can report the old → new transition and match the exact old strings.
 
-3. **Edit these 5 locations** (the version was previously confirmed to live in exactly
+3. **Edit these 7 locations** (the version was previously confirmed to live in exactly
    these spots):
 
    Three-part `version = "X.Y.Z"` — the `[package]` `version` (line ~3) of:
@@ -25,6 +25,8 @@ commit, tag, or push (those are deliberate, separate steps).
    - `kokoro-panel/Cargo.toml`
    - `kokoro-sapi/Cargo.toml`
    - `kokoro-protocol/Cargo.toml`
+   - `kokoro-hook/Cargo.toml`
+   - `kokoro-inject/Cargo.toml`
 
    In `packaging/installer.nsi` — **both** the three-part define and the four-part
    product version:
@@ -40,12 +42,9 @@ commit, tag, or push (those are deliberate, separate steps).
      Cargo.toml bump flows through with no edit here.
    - `installer.nsi`'s `VIAddVersionKey "FileVersion" "${VERSION}"` — derived from the define.
    - all `Cargo.lock` files — the `version` entries refresh on the next `cargo build`.
-   - `kokoro-hook/Cargo.toml` / `kokoro-inject/Cargo.toml` — those crates version
-     independently (currently `0.1.0`), not with the product.
 
 5. **Verify.** Grep the repo for both the old and new version and confirm: no stale
-   occurrences of the old version remain outside `Cargo.lock`, `kokoro-hook`,
-   `kokoro-inject`, and `native-deps/` dep folders; and all 5 edited locations now show
-   the new version. Report a short table of the files changed (old → new) and remind me
-   that building the installer, committing, and tagging are separate steps I run when
-   ready.
+   occurrences of the old version remain outside `Cargo.lock` and `native-deps/` dep
+   folders; and all 7 edited locations now show the new version. Report a short table of
+   the files changed (old → new) and remind me that building the installer, committing,
+   and tagging are separate steps I run when ready.

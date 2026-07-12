@@ -1,6 +1,6 @@
 [package]
 name = "kokoro-inject"
-version = "0.1.0"
+version = "0.3.0"
 edition = "2021"
 description = "x86 helper kokoro-host spawns to LoadLibrary-inject kokoro_hook.dll into the running 32-bit Kindle.exe."
 
