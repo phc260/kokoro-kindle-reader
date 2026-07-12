@@ -7,15 +7,19 @@ component SliderRow inherits VerticalLayout {
     in property <float> minimum;
     in property <float> maximum;
     in property <float> step;
+    in property <bool> enabled: true;
     in-out property <float> value;
     callback changed(float);
     spacing: 3px;
+    // Dim the whole row (label + readout + slider) when disabled.
+    opacity: root.enabled ? 1.0 : 0.5;
     HorizontalLayout {
         Text { text: root.label; font-size: 13px; vertical-alignment: center; }
         Rectangle { horizontal-stretch: 1; }
         Text { text: root.value-text; font-size: 13px; color: #7a7a7a; vertical-alignment: center; }
     }
     Slider {
+        enabled: root.enabled;
         minimum: root.minimum;
         maximum: root.maximum;
         step: root.step;
@@ -29,6 +33,49 @@ component SliderRow inherits VerticalLayout {
             root.changed(root.value);
         }
     }
+}
+
+// The voice-Preview button: a borderless icon that flips between two modes.
+// Idle it shows a blue play_circle; while a preview is playing (`previewing`)
+// it shows a red stop_circle. Hover brightens the glyph to the full accent;
+// missing model dims it. The glyph itself is the whole button (no box). The
+// forwarded @children (a Tooltip) rides on top.
+component PreviewButton inherits Rectangle {
+    in property <bool> previewing;   // play (blue) vs stop (red)
+    in property <bool> enabled: true; // model-ready gate; dims when off
+    callback clicked;
+
+    // Play uses the theme accent (same color as the sliders); stop is red.
+    property <color> accent: root.previewing ? #ff4a3d : Palette.accent-background;
+
+    // Size the button to the glyph so the hover hit-area doesn't extend past it
+    // (a larger box would brighten the icon when hovering the empty padding).
+    width: 30px;
+    height: 30px;
+    opacity: root.enabled ? 1.0 : 0.5;
+
+    Image {
+        // Google Material Symbols play_circle / stop_circle, Weight 100 (thin
+        // outline). No box around it — the glyph itself is the button.
+        source: root.previewing
+            ? @image-url("stop-circle.svg")
+            : @image-url("play-circle.svg");
+        width: 30px;
+        height: 30px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        // Idle == the accent exactly (matches the sliders); hover brightens.
+        colorize: !root.enabled
+            ? #888888
+            : (touch.has-hover ? root.accent.brighter(0.2) : root.accent);
+        animate colorize { duration: 130ms; }
+    }
+    touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
+        clicked => { root.clicked(); }
+    }
+    @children
 }
 
 // A tiny animated voice meter: six rounded bars that ripple up and down like an
@@ -151,10 +198,39 @@ export component AppWindow inherits Window {
             }
         }
 
+        // Kindle toggle on the left, a compact icon-only voice Preview on the right.
+        HorizontalLayout {
+            spacing: 8px;
+            CheckBox {
+                // Drives auto-injection: the host's Kindle-watcher reads this flag
+                // (kindle_kokoro in controls.json) and injects the Kokoro hook on Kindle's
+                // next launch. Two-way (<=>) keeps property and widget in sync.
+                text: "Narrate Kindle with Kokoro";
+                checked <=> root.kindle-kokoro;
+                toggled => { root.kindle-toggled(self.checked); }
+            }
+            Rectangle { horizontal-stretch: 1; }
+            // Outlined play/stop Preview button. Stays interactive during preview
+            // (shows the red stop state on hover); only the missing model dims it.
+            PreviewButton {
+                previewing: root.previewing;
+                enabled: root.model-ready && root.kindle-kokoro;
+                clicked => { root.preview-clicked(); }
+                // Label lives in a hover tooltip. Tooltip.text is styled-text,
+                // so wrap the literal in @markdown.
+                Tooltip { text: @markdown("Preview voice"); }
+            }
+        }
+
         // Narrator: accent x gender -> name, all three on one row.
         VerticalLayout {
             spacing: 6px;
-            Text { text: "Narrator"; font-size: 13px; vertical-alignment: center; }
+            Text {
+                text: "Narrator";
+                font-size: 13px;
+                vertical-alignment: center;
+                opacity: root.kindle-kokoro ? 1.0 : 0.5; // dim heading with its dropdowns
+            }
             HorizontalLayout {
                 spacing: 8px;
                 // Accent / gender are short — size them to content; the name list
@@ -162,18 +238,21 @@ export component AppWindow inherits Window {
                 ComboBox {
                     model: root.accents;
                     current-index <=> root.accent-index;
+                    enabled: root.kindle-kokoro;
                     width: 120px;
                     selected => { root.accent-changed(self.current-index); }
                 }
                 ComboBox {
                     model: root.genders;
                     current-index <=> root.gender-index;
+                    enabled: root.kindle-kokoro;
                     width: 100px;
                     selected => { root.gender-changed(self.current-index); }
                 }
                 ComboBox {
                     model: root.names;
                     current-index <=> root.name-index;
+                    enabled: root.kindle-kokoro;
                     horizontal-stretch: 1;
 min-width: 100px;
                     selected => { root.name-changed(self.current-index); }
@@ -183,11 +262,12 @@ min-width: 100px;
 
         // Sliders
         SliderRow {
-            label: "Speed";
+            label: "Reading Speed";
             value-text: "\{Math.round(root.speed * 100)}%";
             minimum: 0.5;
             maximum: 2.0;
-            step: 0.05; // 5% increments
+            step: 0.10; // 10% increments
+            enabled: root.kindle-kokoro;
             value <=> root.speed;
             changed(v) => { root.speed-changed(v); }
         }
@@ -196,7 +276,8 @@ min-width: 100px;
             value-text: "\{Math.round(root.gain * 100)}%";
             minimum: 0.0;
             maximum: 2.0;
-            step: 0.05; // 5% increments
+            step: 0.10; // 10% increments
+            enabled: root.kindle-kokoro;
             value <=> root.gain;
             changed(v) => { root.gain-changed(v); }
         }
@@ -206,29 +287,9 @@ min-width: 100px;
             minimum: 1.0;
             maximum: 8.0;
             step: 1.0;
+            enabled: root.kindle-kokoro;
             value <=> root.chunk;
             changed(v) => { root.chunk-changed(v); }
-        }
-
-        CheckBox {
-            // Drives auto-injection: the host's Kindle-watcher reads this flag
-            // (kindle_kokoro in controls.json) and injects the Kokoro hook on Kindle's
-            // next launch. Two-way (<=>) keeps property and widget in sync.
-            text: "Narrate Kindle with Kokoro";
-            checked <=> root.kindle-kokoro;
-            toggled => { root.kindle-toggled(self.checked); }
-        }
-
-        // Preview
-        HorizontalLayout {
-            Button {
-                text: root.previewing ? "Synthesizing…" : "Preview voice";
-                icon: @image-url("play-circle.svg");
-                colorize-icon: true;
-                enabled: !root.previewing && root.model-ready;
-                clicked => { root.preview-clicked(); }
-            }
-            Rectangle { horizontal-stretch: 1; }
         }
 
         Rectangle { vertical-stretch: 1; }
