@@ -12,6 +12,11 @@ const PIPE_NAME: &str = r"\\.\pipe\KokoroSapiSynth";
 const CMD_SYNTH: u8 = b'S';
 const STREAM_END: u32 = 0xFFFF_FFFE;
 const SYNTH_ERROR: u32 = 0xFFFF_FFFF;
+// Per-chunk header the host emits before a chunk's audio: CHUNK_INFO then
+// [u32 utf16Len][u32 nSamples]. Preview doesn't place SAPI events, so it just
+// skips the 8-byte payload — but it MUST consume the marker or the next u32
+// read desyncs the whole stream.
+const CHUNK_INFO: u32 = 0xFFFF_FFFD;
 const SAMPLE_RATE: u32 = 24_000;
 // ERROR_PIPE_BUSY: all pipe instances are momentarily in use; wait and retry.
 const ERROR_PIPE_BUSY: i32 = 231;
@@ -41,8 +46,9 @@ fn read_exact(pipe: &mut std::fs::File, n: usize) -> Result<Vec<u8>, String> {
 }
 
 /// Synthesize `text` through the pipe and return 24 kHz mono f32 samples (gain
-/// already applied), or an error string.
-fn synth(text: &str) -> Result<Vec<f32>, String> {
+/// already applied), or an error string. Public so the panel can pre-synthesize
+/// a narrator intro into a buffer ahead of the user pressing Preview.
+pub fn synth(text: &str) -> Result<Vec<f32>, String> {
     let mut pipe = connect()?;
 
     // Request: [0x53][f32 rate=1.0][u32 textLen][utf8 text].
@@ -65,6 +71,10 @@ fn synth(text: &str) -> Result<Vec<f32>, String> {
         if n == SYNTH_ERROR {
             return Err("the host reported a synthesis error.".to_string());
         }
+        if n == CHUNK_INFO {
+            let _ = read_exact(&mut pipe, 8)?; // [u32 utf16Len][u32 nSamples] — unused here
+            continue;
+        }
         let gain = f32::from_le_bytes(read_exact(&mut pipe, 4)?.try_into().unwrap());
         let pcm = read_exact(&mut pipe, n as usize * 4)?;
         samples.reserve(n as usize);
@@ -76,9 +86,9 @@ fn synth(text: &str) -> Result<Vec<f32>, String> {
     Ok(samples)
 }
 
-/// Synthesize `text` via the pipe and play it to completion. Blocking.
-pub fn play(text: &str) -> Result<(), String> {
-    let samples = synth(text)?;
+/// Play already-synthesized 24 kHz mono samples to completion. Blocking. Lets the
+/// panel play a pre-synthesized intro straight from its buffer (no pipe round-trip).
+pub fn play_samples(samples: Vec<f32>) -> Result<(), String> {
     if samples.is_empty() {
         return Ok(());
     }
@@ -88,4 +98,9 @@ pub fn play(text: &str) -> Result<(), String> {
     sink.append(rodio::buffer::SamplesBuffer::new(1, SAMPLE_RATE, samples));
     sink.sleep_until_end(); // keep _stream alive until playback finishes
     Ok(())
+}
+
+/// Synthesize `text` via the pipe and play it to completion. Blocking.
+pub fn play(text: &str) -> Result<(), String> {
+    play_samples(synth(text)?)
 }

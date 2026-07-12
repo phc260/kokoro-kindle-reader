@@ -12,7 +12,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 mod download;
@@ -112,6 +112,39 @@ fn intro_for(voice: &str, voices: &[Voice]) -> String {
             )
         }
         None => "Hi, I'd be glad to read your text aloud.".to_string(),
+    }
+}
+
+/// Pre-synthesized narrator intro, so Preview plays instantly. Holds the voice id
+/// the samples were rendered for (playback validates it) or `None` when empty/stale.
+type PreviewCache = Arc<Mutex<Option<(String, Vec<f32>)>>>;
+
+/// Kick a background synth of `voice`'s intro line into `cache`. A generation
+/// counter (`gen`) makes the latest request win: an earlier, slower synth that
+/// finishes after a newer one started is discarded, so rapid narrator changes
+/// never cache a stale voice. Failure (e.g. host down) leaves the cache untouched.
+fn prefetch_intro(voice: &str, voices: &[Voice], cache: &PreviewCache, gen: &Arc<AtomicU64>) {
+    let text = intro_for(voice, voices);
+    let voice = voice.to_string();
+    let cache = cache.clone();
+    let gen = gen.clone();
+    let my_gen = gen.fetch_add(1, Ordering::SeqCst) + 1;
+    std::thread::spawn(move || {
+        if let Ok(samples) = preview::synth(&text) {
+            if gen.load(Ordering::SeqCst) == my_gen {
+                *cache.lock().unwrap() = Some((voice, samples));
+            }
+        }
+    });
+}
+
+/// Prefetch the intro for the UI's currently-selected narrator, but only once the
+/// engine is ready (otherwise a synth would just fail against an absent model).
+fn prefetch_for_current(ui: &AppWindow, voices: &[Voice], cache: &PreviewCache, gen: &Arc<AtomicU64>) {
+    if ui.get_model_ready() {
+        if let Some(v) = current_voice_id(ui, voices) {
+            prefetch_intro(&v, voices, cache, gen);
+        }
     }
 }
 
@@ -263,6 +296,12 @@ fn main() -> Result<(), slint::PlatformError> {
     let dl_progress = Arc::new(Mutex::new(download::Progress::default()));
     let verify_running = Arc::new(AtomicBool::new(false));
 
+    // Pre-synthesized narrator intro so Preview is instant. Populated when the
+    // engine becomes ready and on every narrator change; invalidated when speed/
+    // gain change (so the buffered clip never plays stale settings).
+    let preview_cache: PreviewCache = Arc::new(Mutex::new(None));
+    let preview_gen = Arc::new(AtomicU64::new(0));
+
     // --- controls callbacks (UI thread) ---
     // Narrator: accent/gender re-filter the name list (reset to its first entry);
     // any of the three commits the resulting voice to controls.json.
@@ -270,10 +309,13 @@ fn main() -> Result<(), slint::PlatformError> {
         let weak = ui.as_weak();
         let voices = voices.clone();
         let controls = controls.clone();
+        let cache = preview_cache.clone();
+        let gen = preview_gen.clone();
         ui.on_accent_changed(move |_| {
             if let Some(ui) = weak.upgrade() {
                 refilter(&ui, &voices, None);
                 commit_voice(&ui, &voices, &controls);
+                prefetch_for_current(&ui, &voices, &cache, &gen);
             }
         });
     }
@@ -281,10 +323,13 @@ fn main() -> Result<(), slint::PlatformError> {
         let weak = ui.as_weak();
         let voices = voices.clone();
         let controls = controls.clone();
+        let cache = preview_cache.clone();
+        let gen = preview_gen.clone();
         ui.on_gender_changed(move |_| {
             if let Some(ui) = weak.upgrade() {
                 refilter(&ui, &voices, None);
                 commit_voice(&ui, &voices, &controls);
+                prefetch_for_current(&ui, &voices, &cache, &gen);
             }
         });
     }
@@ -292,26 +337,39 @@ fn main() -> Result<(), slint::PlatformError> {
         let weak = ui.as_weak();
         let voices = voices.clone();
         let controls = controls.clone();
+        let cache = preview_cache.clone();
+        let gen = preview_gen.clone();
         ui.on_name_changed(move |_| {
             if let Some(ui) = weak.upgrade() {
                 commit_voice(&ui, &voices, &controls);
+                prefetch_for_current(&ui, &voices, &cache, &gen);
             }
         });
     }
     {
         let controls = controls.clone();
+        let cache = preview_cache.clone();
         ui.on_speed_changed(move |v| {
-            let mut c = controls.lock().unwrap();
-            c.speed = v;
-            c.save();
+            {
+                let mut c = controls.lock().unwrap();
+                c.speed = v;
+                c.save();
+            }
+            // Speed is baked into the synthesized samples — drop the stale buffer.
+            *cache.lock().unwrap() = None;
         });
     }
     {
         let controls = controls.clone();
+        let cache = preview_cache.clone();
         ui.on_gain_changed(move |v| {
-            let mut c = controls.lock().unwrap();
-            c.gain = v;
-            c.save();
+            {
+                let mut c = controls.lock().unwrap();
+                c.gain = v;
+                c.save();
+            }
+            // Gain is baked into the synthesized samples — drop the stale buffer.
+            *cache.lock().unwrap() = None;
         });
     }
     {
@@ -329,6 +387,9 @@ fn main() -> Result<(), slint::PlatformError> {
         let app_data = app_data.clone();
         let dl_running = dl_running.clone();
         let dl_progress = dl_progress.clone();
+        let voices = voices.clone();
+        let preview_cache = preview_cache.clone();
+        let preview_gen = preview_gen.clone();
         ui.on_download_clicked(move || {
             if dl_running.load(Ordering::SeqCst) {
                 return;
@@ -340,9 +401,15 @@ fn main() -> Result<(), slint::PlatformError> {
             let progress = dl_progress.clone();
             let app_data_r = app_data.clone();
             let weak = ui_weak.clone();
+            let voices = voices.clone();
+            let cache = preview_cache.clone();
+            let gen = preview_gen.clone();
             let repaint = move || {
                 let p = progress.lock().unwrap().clone();
                 let app_data = app_data_r.clone();
+                let voices = voices.clone();
+                let cache = cache.clone();
+                let gen = gen.clone();
                 let _ = weak.upgrade_in_event_loop(move |ui| {
                     let frac = if p.total > 0 {
                         p.downloaded as f32 / p.total as f32
@@ -366,6 +433,8 @@ fn main() -> Result<(), slint::PlatformError> {
                             Some(e) => format!("Download error: {e}").into(),
                             None => "Model downloaded.".into(),
                         });
+                        // Engine just became ready — warm the preview buffer.
+                        prefetch_for_current(&ui, &voices, &cache, &gen);
                     }
                 });
             };
@@ -385,6 +454,9 @@ fn main() -> Result<(), slint::PlatformError> {
         let app_data_r = app_data.clone();
         let weak = ui.as_weak();
         let running = verify_running.clone();
+        let voices_v = voices.clone();
+        let cache_v = preview_cache.clone();
+        let gen_v = preview_gen.clone();
         std::thread::spawn(move || {
             // Push a frame only when the whole-percent changes — hashing reports
             // every 64 KB, far more often than the UI needs to repaint.
@@ -409,6 +481,8 @@ fn main() -> Result<(), slint::PlatformError> {
                         .into(),
                     );
                 }
+                // Engine is ready (model verified) — warm the preview buffer.
+                prefetch_for_current(&ui, &voices_v, &cache_v, &gen_v);
             });
         });
     }
@@ -439,11 +513,12 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     }
 
-    // --- Preview (synth via the host pipe) ---
+    // --- Preview (buffered if pre-synthesized, else synth via the host pipe) ---
     {
         let ui_weak = ui.as_weak();
         let controls = controls.clone();
         let voices = voices.clone();
+        let cache = preview_cache.clone();
         ui.on_preview_clicked(move || {
             let already = ui_weak.upgrade().map(|ui| ui.get_previewing()).unwrap_or(true);
             if already {
@@ -453,10 +528,20 @@ fn main() -> Result<(), slint::PlatformError> {
                 ui.set_previewing(true);
                 ui.set_status(slint::SharedString::new());
             }
-            let text = intro_for(&controls.lock().unwrap().voice, &voices);
+            let voice = controls.lock().unwrap().voice.clone();
+            // Use the pre-synthesized buffer if it matches the current voice;
+            // otherwise fall back to an on-demand synth of the intro.
+            let buffered = match &*cache.lock().unwrap() {
+                Some((v, s)) if *v == voice && !s.is_empty() => Some(s.clone()),
+                _ => None,
+            };
+            let text = intro_for(&voice, &voices);
             let weak = ui_weak.clone();
             std::thread::spawn(move || {
-                let res = preview::play(&text);
+                let res = match buffered {
+                    Some(samples) => preview::play_samples(samples),
+                    None => preview::play(&text),
+                };
                 let _ = weak.upgrade_in_event_loop(move |ui| {
                     ui.set_previewing(false);
                     if let Err(e) = res {
