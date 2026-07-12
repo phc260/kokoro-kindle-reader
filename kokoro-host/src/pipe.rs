@@ -19,7 +19,9 @@ use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
 use crate::native_synth::{self, NativeSynth};
 use crate::split_text::split_text;
 // The named-pipe wire format is shared with the SAPI engine (one source of truth).
-use kokoro_protocol::{CMD_INFO, CMD_SYNTH, MAX_TEXT_BYTES, PIPE_NAME, STREAM_END, SYNTH_ERROR};
+use kokoro_protocol::{
+    CHUNK_INFO, CMD_INFO, CMD_SYNTH, MAX_TEXT_BYTES, PIPE_NAME, STREAM_END, SYNTH_ERROR,
+};
 
 // Default send-pacing lead (ms): keep at most this much audio ahead of real time so
 // SAPI doesn't buffer a whole chunk of gain-baked PCM ahead of the speaker — a
@@ -149,6 +151,14 @@ async fn serve_client(mut pipe: NamedPipeServer, ctx: Ctx) -> std::io::Result<()
                     // gain (re-read ≈ when the engine plays it, so a slider move
                     // isn't frozen into prefetched PCM).
                     let total = pcm.len() / 4; // bytes -> f32 sample count
+
+                    // Chunk header: its UTF-16 length + sample count, so the engine can
+                    // map word/bookmark events to true audio offsets while streaming.
+                    let chunk_u16 = chunks[k].encode_utf16().count() as u32;
+                    pipe.write_all(&CHUNK_INFO.to_le_bytes()).await?;
+                    pipe.write_all(&chunk_u16.to_le_bytes()).await?;
+                    pipe.write_all(&(total as u32).to_le_bytes()).await?;
+
                     let mut off = 0usize; // sample offset within the chunk
                     while off < total {
                         let n = subframe_samples.min(total - off);

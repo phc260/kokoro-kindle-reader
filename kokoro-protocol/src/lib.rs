@@ -7,9 +7,10 @@
 //!
 //! - [`CMD_SYNTH`] (`'S'`): synth the whole utterance.
 //!   - request:  `[u8 'S'][f32 rate][u32 textBytes][utf8 text]`
-//!   - response: a STREAM of frames, one per synthesized chunk —
-//!     `[u32 nSamples][f32 gain][f32 samples...]` (24 kHz mono, [-1, 1]) —
-//!     terminated by a marker whose leading u32 is [`STREAM_END`] (complete) or
+//!   - response: a STREAM of frames. Each synthesized chunk begins with a
+//!     [`CHUNK_INFO`] marker + `[u32 utf16Len][u32 nSamples]`, then that chunk's audio
+//!     sub-frames `[u32 nSamples][f32 gain][f32 samples...]` (24 kHz mono, [-1, 1]). The
+//!     stream ends with a marker whose leading u32 is [`STREAM_END`] (complete) or
 //!     [`SYNTH_ERROR`] (a chunk failed). `rate` is the host's rate-derived speed
 //!     multiplier; the host owns the narrator + folds in the user's own speed, so
 //!     those don't cross the wire. `gain` (the user's volume, fresh per chunk) rides
@@ -32,6 +33,13 @@ pub const CMD_INFO: u8 = b'I';
 pub const STREAM_END: u32 = 0xFFFF_FFFE;
 /// Frame-stream marker: a chunk failed; playback stops.
 pub const SYNTH_ERROR: u32 = 0xFFFF_FFFF;
+/// Frame-stream marker: the start of a new chunk, sent *before* that chunk's audio
+/// sub-frames. Followed by `[u32 utf16Len][u32 nSamples]` — the chunk's length in UTF-16
+/// code units of the request text and its total sample count. The SAPI engine uses this
+/// to map each word/bookmark event to its true audio-stream offset while streaming (so
+/// Kindle's per-word bookmark narrator stays in sync without the engine buffering the
+/// whole utterance). A leading u32 >= [`STREAM_END`] is always a control marker.
+pub const CHUNK_INFO: u32 = 0xFFFF_FFFD;
 
 /// Sanity cap on a single request's text (1 MB).
 pub const MAX_TEXT_BYTES: u32 = 1 << 20;

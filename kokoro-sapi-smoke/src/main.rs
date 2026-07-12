@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex};
 
 use windows::Win32::Foundation::{E_NOTIMPL, S_OK};
 use windows::Win32::Media::Audio::WAVEFORMATEX;
-use windows::Win32::Media::Speech::{SPVA_Speak, SPVSTATE, SPVTEXTFRAG};
+use windows::Win32::Media::Speech::{SPVA_Bookmark, SPVA_Speak, SPVSTATE, SPVTEXTFRAG};
 use windows::Win32::System::Com::IClassFactory;
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 use windows_core::{implement, interface, s, Interface, GUID, HRESULT, IUnknown, IUnknown_Vtbl, PCWSTR};
@@ -56,18 +56,31 @@ unsafe trait ISpTTSEngineSite: IUnknown {
     pub unsafe fn CompleteSkip(&self, skipped: i32) -> HRESULT;
 }
 
+// SPEVENT (x86): eEventId is the low 16 bits of the leading i32 bitfield.
+const SPEI_TTS_BOOKMARK: u16 = 4;
+const SPEI_WORD_BOUNDARY: u16 = 5;
+
 #[implement(ISpTTSEngineSite)]
 struct TestSite {
-    pcm: Arc<Mutex<Vec<u8>>>, // bytes the engine writes (int16 mono @ 24 kHz)
+    pcm: Arc<Mutex<Vec<u8>>>,       // bytes the engine writes (int16 mono @ 24 kHz)
+    events: Arc<Mutex<Vec<u16>>>,   // eEventIds the engine reports via AddEvents
 }
 
 impl ISpTTSEngineSite_Impl for TestSite_Impl {
-    unsafe fn AddEvents(&self, _e: *const c_void, _c: u32) -> HRESULT {
+    unsafe fn AddEvents(&self, e: *const c_void, c: u32) -> HRESULT {
+        // Each SPEVENT is 24 bytes on x86; the first field is the eEventId|elParamType
+        // bitfield, so the low 16 bits are the event id.
+        if !e.is_null() {
+            for k in 0..c as usize {
+                let id = *(e as *const u8).add(k * 24).cast::<u16>();
+                self.events.lock().unwrap().push(id);
+            }
+        }
         S_OK
     }
     unsafe fn GetEventInterest(&self, i: *mut u64) -> HRESULT {
         if !i.is_null() {
-            *i = 0;
+            *i = u64::MAX; // interested in every event (a real host sets specific bits)
         }
         S_OK
     }
@@ -136,13 +149,28 @@ fn write_wav(path: &str, pcm: &[u8]) -> std::io::Result<()> {
 /// pipe (Speak returns E_FAIL with no audio).
 unsafe fn speak_test(engine: &ISpTTSEngine, wav: Option<&str>) {
     let pcm = Arc::new(Mutex::new(Vec::<u8>::new()));
-    let site: ISpTTSEngineSite = TestSite { pcm: pcm.clone() }.into();
+    let events = Arc::new(Mutex::new(Vec::<u16>::new()));
+    let site: ISpTTSEngineSite = TestSite { pcm: pcm.clone(), events: events.clone() }.into();
 
+    // A multi-word utterance followed by a bookmark fragment — exactly the shape Kindle
+    // 18632's narrator sends (SSML text + <bookmark>). The engine must report word
+    // boundaries and the bookmark back, or an event-driven narrator can't advance past
+    // the first sentence.
     let text: Vec<u16> = "This is a Kokoro speech test.".encode_utf16().collect();
+    let mark: Vec<u16> = "1".encode_utf16().collect();
+    let mut mark_state: SPVSTATE = core::mem::zeroed();
+    mark_state.eAction = SPVA_Bookmark;
+    let bookmark = SPVTEXTFRAG {
+        pNext: null_mut(),
+        State: mark_state,
+        pTextStart: PCWSTR(mark.as_ptr()),
+        ulTextLen: mark.len() as u32,
+        ulTextSrcOffset: text.len() as u32,
+    };
     let mut state: SPVSTATE = core::mem::zeroed();
     state.eAction = SPVA_Speak;
     let frag = SPVTEXTFRAG {
-        pNext: null_mut(),
+        pNext: &bookmark as *const SPVTEXTFRAG as *mut SPVTEXTFRAG,
         State: state,
         pTextStart: PCWSTR(text.as_ptr()),
         ulTextLen: text.len() as u32,
@@ -166,6 +194,19 @@ unsafe fn speak_test(engine: &ISpTTSEngine, wav: Option<&str>) {
     check(
         &format!("Speak streamed PCM ({bytes} bytes ≈ {ms} ms) hr={hr:?}"),
         hr.is_ok() && bytes > 0,
+    );
+
+    // The fix: the engine reports SAPI events so Kindle's narrator can advance/highlight.
+    let ev = events.lock().unwrap();
+    let words = ev.iter().filter(|&&e| e == SPEI_WORD_BOUNDARY).count();
+    let bookmarks = ev.iter().filter(|&&e| e == SPEI_TTS_BOOKMARK).count();
+    check(
+        &format!("reported word-boundary events ({words} words)"),
+        words >= 5, // "This is a Kokoro speech test." = 6 words
+    );
+    check(
+        &format!("reported the bookmark event ({bookmarks})"),
+        bookmarks == 1,
     );
 
     if let (Some(path), true) = (wav, bytes > 0) {

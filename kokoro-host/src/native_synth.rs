@@ -22,6 +22,9 @@ use tokio::sync::oneshot;
 
 const STYLE_DIM: usize = 256;
 const VOICE_ROWS: usize = 510;
+/// Max content tokens (excluding BOS/EOS) per model run. Kokoro's ONNX graph fails the
+/// BERT `Expand` node past ~510 tokens, so longer chunks are sub-split to this window.
+const MAX_CONTENT_TOKENS: usize = 500;
 
 /// The per-utterance settings the pipe host reads from controls.json (replacing the
 /// webview's localStorage). `speed`/`gain` default to 1, `chunk` to 4 sentences.
@@ -294,7 +297,6 @@ fn worker_loop(rx: mpsc::Receiver<Req>, base: PathBuf, espeak_data: PathBuf) {
             }
         }
 
-        let session_ref = session.as_mut().unwrap();
         let vocab_ref = vocab.as_ref().unwrap();
 
         // Phonemize -> tokens.
@@ -305,23 +307,63 @@ fn worker_loop(rx: mpsc::Receiver<Req>, base: PathBuf, espeak_data: PathBuf) {
             continue;
         }
 
-        // style row = clamp(nTokens-2, 0, 509) (kokoro-js generate_from_ids).
-        let row = (ids.len() as i64 - 2).clamp(0, VOICE_ROWS as i64 - 1) as usize;
-        let style = &voice_data[row * STYLE_DIM..(row + 1) * STYLE_DIM];
+        // Kokoro's model accepts at most ~512 tokens (510 content + BOS/EOS); a longer
+        // sequence fails the BERT `Expand` node ("invalid expand shape"). Chunks can be
+        // several sentences (controls `chunk`), so a long chunk must be sub-split into
+        // <=MAX_CONTENT_TOKENS windows — each wrapped in its own BOS/EOS — and their PCM
+        // concatenated. A window boundary lands at a token seam (rare, brief).
+        let content = &ids[1..ids.len() - 1];
+        let mut bytes: Vec<u8> = Vec::new();
+        let mut failed = false;
+        for window in content.chunks(MAX_CONTENT_TOKENS) {
+            let mut wids = Vec::with_capacity(window.len() + 2);
+            wids.push(0); // BOS
+            wids.extend_from_slice(window);
+            wids.push(0); // EOS
 
-        let out = match run_model(session_ref, &ids, style, req.speed) {
-            Ok(pcm) => {
-                let mut bytes = Vec::with_capacity(pcm.len() * 4);
-                for s in pcm {
-                    bytes.extend_from_slice(&s.to_le_bytes());
+            // style row = clamp(nTokens-2, 0, 509) (kokoro-js generate_from_ids).
+            let row = (wids.len() as i64 - 2).clamp(0, VOICE_ROWS as i64 - 1) as usize;
+            let style = &voice_data[row * STYLE_DIM..(row + 1) * STYLE_DIM];
+
+            // Small retry for a transient Dawn WebGPU device error (rebuild the session
+            // before the last attempt); an over-long window is deterministic and won't be
+            // rescued by retry, which is why the sub-split above matters.
+            let mut window_pcm = None;
+            for attempt in 0..3u32 {
+                match run_model(session.as_mut().unwrap(), &wids, style, req.speed) {
+                    Ok(pcm) => {
+                        window_pcm = Some(pcm);
+                        break;
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "[native-synth] synth attempt {} failed ({} tokens): {e}",
+                            attempt + 1,
+                            wids.len()
+                        );
+                        if attempt == 1 {
+                            match build_session(&model) {
+                                Ok(s) => *session.as_mut().unwrap() = s,
+                                Err(be) => eprintln!("[native-synth] session rebuild failed: {be}"),
+                            }
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(80));
+                    }
                 }
-                Some(bytes)
             }
-            Err(e) => {
-                eprintln!("[native-synth] synth failed: {e}");
-                None
+            match window_pcm {
+                Some(pcm) => {
+                    bytes.reserve(pcm.len() * 4);
+                    for s in pcm {
+                        bytes.extend_from_slice(&s.to_le_bytes());
+                    }
+                }
+                None => {
+                    failed = true;
+                    break;
+                }
             }
-        };
-        let _ = req.reply.send(out);
+        }
+        let _ = req.reply.send(if failed { None } else { Some(bytes) });
     }
 }
