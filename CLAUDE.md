@@ -94,7 +94,10 @@ No Rust test suites; "testing" is Preview in the panel and Read Aloud in Kindle 
   here), so **all synthesis is serialized onto one dedicated worker thread** that owns
   the session for the process lifetime; requests arrive over an mpsc channel and replies
   come back on tokio oneshots so the async pipe tasks never block. It also owns the
-  `controls.json` reader (`read_controls`).
+  `controls.json` reader (`read_controls`). **The model fails the BERT `Expand` node past
+  ~510 tokens**, so a chunk's tokens are sub-split into `MAX_CONTENT_TOKENS`(=500) windows
+  (each wrapped in its own BOS/EOS) and the PCM concatenated; a run also retries a couple
+  times (rebuilding the session on the last try) to ride out a transient Dawn device error.
 - `kokoro-host/src/text.rs` — Kokoro-js text normalization (11 passes) + punctuation
   segmentation + phoneme post-processing, on UTF-8 bytes; verified token-parity vs
   kokoro-js. `kokoro-host/src/espeak.rs` — the espeak-ng FFI + one-segment phoneme
@@ -114,12 +117,16 @@ No Rust test suites; "testing" is Preview in the panel and Read Aloud in Kindle 
   server at `\\.\pipe\KokoroSapiSynth` speaking the wire format from the `kokoro-protocol`
   crate (pipe name, `'S'`/`'I'` commands, `STREAM_END`/`SYNTH_ERROR` markers). Each
   `'S'` request carries the **whole utterance**; `split_text` cuts it into sentence
-  chunks (first chunk = 1 sentence for a fast start, then `chunk` sentences each), a
+  chunks whose size **ramps 1, 2, 4, … up to `chunk`** (a tiny first chunk starts audio
+  fast, then doubling builds a play buffer so the synth pipeline never starves), a
   **depth-1 prefetch pipeline** renders each chunk via `native_synth`, and the PCM is
-  streamed back **frame by frame** (`[nSamples][gain][f32…]`, then a `STREAM_END` /
-  `SYNTH_ERROR` marker — the u32 sentinels `0xFFFF_FFFE` / `0xFFFF_FFFF`). Gain is read
-  from `controls.json` **per sub-frame**; the pacing lead (500 ms) and sub-frame size
-  (250 ms) are **fixed built-in defaults** (`DEFAULT_LEAD_MS` / `DEFAULT_SUBFRAME_MS`).
+  streamed back: each chunk is prefixed with a `CHUNK_INFO` marker + `[u32 utf16Len][u32
+  nSamples]` (so the engine can place word/bookmark events at true audio offsets), then
+  the chunk's audio sub-frames **frame by frame** (`[nSamples][gain][f32…]`), then a
+  `STREAM_END` / `SYNTH_ERROR` marker (the u32 sentinels `0xFFFF_FFFE` / `0xFFFF_FFFF`;
+  `CHUNK_INFO` = `0xFFFF_FFFD`). Gain is read from `controls.json` **per sub-frame**; the
+  pacing lead (500 ms) and sub-frame size (250 ms) are **fixed built-in defaults**
+  (`DEFAULT_LEAD_MS` / `DEFAULT_SUBFRAME_MS`).
 - `native_synth.rs` + `text.rs` + `espeak.rs` + `split_text.rs` — live in
   `kokoro-host/src/` (plain modules). `build.rs` links the prebuilt espeak-ng import lib
   (for the `espeak.rs` FFI) and stages the 5 runtime DLLs + `espeak-ng-data` next to the
@@ -168,9 +175,19 @@ unwind into Kindle.
   `DllRegisterServer` / `DllUnregisterServer`), `DllMain`, the class factory, and
   registration (writes the CLSID `InprocServer32` + the `KokoroTTS` voice token).
   `#[no_mangle] extern "system"` exports them undecorated, so **no `.def` file is needed**.
-- `engine.rs` — `KokoroEngine` (`ISpTTSEngine` + `ISpObjectWithToken`), a pure streaming
-  sink: `Speak` forwards the whole utterance over the pipe, loops the response frames,
-  applies carried gain × host volume, and writes ~250 ms blocks with `SPVES_ABORT` checks.
+- `engine.rs` — `KokoroEngine` (`ISpTTSEngine` + `ISpObjectWithToken`): `Speak` forwards
+  the whole utterance over the pipe and **streams** the response sub-frames straight to the
+  SAPI site in ~250 ms blocks (gain baked per sub-frame, host volume per block, `SPVES_ABORT`
+  checks) — no buffering, so audio starts fast and never gaps (Kindle sends the whole page
+  in one `Speak` and drops the stream if it goes quiet). As it writes each block it **reports
+  SAPI events** (`SPEI_WORD_BOUNDARY` per word, `SPEI_SENTENCE_BOUNDARY` per fragment,
+  `SPEI_TTS_BOOKMARK` for each `<bookmark>` SAPI parsed) at their true audio-stream offsets:
+  each `CHUNK_INFO` frame carries the chunk's UTF-16 span + sample count, so an event's char
+  position maps linearly onto that chunk's audio. **Kindle 18632's narrator is event-driven**
+  (`WordBoundaryListHandler` + bookmark matching in `xrm120.dll`) — without these events it
+  speaks the first sentence of a page and never advances. If the host reports a mid-stream
+  `SYNTH_ERROR` *after* audio was delivered, `Speak` ends with `S_OK` (Kindle finishes the
+  delivered audio and turns the page) rather than halting.
 - `worker.rs` — the pipe **client** (connect-only, no spawn); `sapi.rs` — the interface
   declarations; the wire format is the shared **`kokoro-protocol`** crate (used by both
   the DLL and `pipe.rs` — one source of truth).

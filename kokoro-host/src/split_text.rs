@@ -94,9 +94,13 @@ pub fn split_text(text: &str, sentences_per_chunk: usize) -> Vec<String> {
         }
 
         if boundary_end != 0 {
-            // Count the sentence; emit once we've collected `target` of them.
+            // Count the sentence; emit once we've collected `target` of them. `target`
+            // ramps 1, 2, 4, ... up to k_sentences: a tiny first chunk starts audio fast,
+            // and doubling each chunk builds a playback buffer before big chunks so the
+            // synth pipeline never starves (a small first chunk followed straight by a big
+            // one leaves a silent gap after the first sentence while the big one renders).
             sentences += 1;
-            let target = if chunks.is_empty() { FIRST_SENTENCES } else { k_sentences };
+            let target = (1usize << chunks.len().min(20)).min(k_sentences).max(FIRST_SENTENCES);
             if sentences >= target {
                 flush(
                     &mut chunks,

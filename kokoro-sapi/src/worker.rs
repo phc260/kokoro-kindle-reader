@@ -12,13 +12,17 @@ use windows::Win32::Storage::FileSystem::{
 use windows_core::PCWSTR;
 
 use kokoro_protocol::{
-    CMD_SYNTH, MAX_FRAME_SAMPLES, MAX_TEXT_BYTES, PIPE_NAME, STREAM_END, SYNTH_ERROR,
+    CHUNK_INFO, CMD_SYNTH, MAX_FRAME_SAMPLES, MAX_TEXT_BYTES, PIPE_NAME, STREAM_END, SYNTH_ERROR,
 };
 
 /// Result of reading one frame of the 'S' response stream.
 pub enum Frame {
     /// A chunk's PCM (24 kHz float, [-1, 1]) + its fresh gain.
     Data { samples: Vec<f32>, gain: f32 },
+    /// Start of a new chunk: its length in UTF-16 units of the request text + its total
+    /// sample count. Precedes the chunk's `Data` sub-frames so the engine can place
+    /// word/bookmark events at true audio offsets.
+    Chunk { u16_len: u32, samples: u32 },
     /// Clean end of the utterance.
     End,
     /// Failed / broken stream (the pipe is closed).
@@ -103,6 +107,19 @@ impl Worker {
         }
         if n == SYNTH_ERROR {
             return Frame::Error; // host keeps the stream open
+        }
+        if n == CHUNK_INFO {
+            // Chunk header: [u32 utf16Len][u32 nSamples].
+            let mut a = [0u8; 4];
+            let mut b = [0u8; 4];
+            if !self.read_all(&mut a) || !self.read_all(&mut b) {
+                self.close();
+                return Frame::Error;
+            }
+            return Frame::Chunk {
+                u16_len: u32::from_le_bytes(a),
+                samples: u32::from_le_bytes(b),
+            };
         }
         // Bound what we'll allocate off a pipe-supplied header: the real host never
         // sends frames this large, so anything over the cap means a corrupt/hostile
