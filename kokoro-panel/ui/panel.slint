@@ -10,6 +10,9 @@ component SliderRow inherits VerticalLayout {
     in property <bool> enabled: true;
     in-out property <float> value;
     callback changed(float);
+    // Scratch: the current drag value snapped to `step`. Compared against `value`
+    // so we only commit/persist on a real step change (see the Slider below).
+    property <float> snapped;
     spacing: 3px;
     // Dim the whole row (label + readout + slider) when disabled.
     opacity: root.enabled ? 1.0 : 0.5;
@@ -24,13 +27,19 @@ component SliderRow inherits VerticalLayout {
         maximum: root.maximum;
         step: root.step;
         value: root.value;
-        // Slint's `step` only affects keyboard/scroll, not mouse drag — snap the
-        // dragged value to the nearest step (relative to minimum) ourselves.
+        // A drag fires `changed` per pixel; Slint's `step` only snaps keyboard/
+        // scroll, not the drag. Snap the value ourselves and only propagate when
+        // the snapped step actually changes — otherwise every sub-step mouse move
+        // would re-set the value and re-write controls.json to disk (on the UI
+        // thread), which makes the slider stutter and feel unresponsive.
         changed(v) => {
-            root.value = root.step > 0
+            root.snapped = root.step > 0
                 ? root.minimum + Math.round((v - root.minimum) / root.step) * root.step
                 : v;
-            root.changed(root.value);
+            if root.snapped != root.value {
+                root.value = root.snapped;
+                root.changed(root.snapped);
+            }
         }
     }
 }
