@@ -28,16 +28,19 @@ const MAX_CONTENT_TOKENS: usize = 500;
 
 /// The per-utterance settings the pipe host reads from controls.json (replacing the
 /// webview's localStorage). `speed`/`gain` default to 1, `chunk` to 4 sentences.
+/// `paused` is a live command (not really a setting): while true the pipe stalls the
+/// audio stream mid-page so playback pauses without Kindle turning the page.
 #[derive(Clone, Copy)]
 pub struct Controls {
     pub speed: f32,
     pub gain: f32,
     pub chunk: u32,
+    pub paused: bool,
 }
 
 impl Default for Controls {
     fn default() -> Self {
-        Controls { speed: 1.0, gain: 1.0, chunk: 4 }
+        Controls { speed: 1.0, gain: 1.0, chunk: 4, paused: false }
     }
 }
 
@@ -60,6 +63,9 @@ pub fn read_controls(app_data: &Path) -> (String, Controls) {
             }
             if let Some(x) = v.get("chunk").and_then(|x| x.as_u64()) {
                 c.chunk = x as u32;
+            }
+            if let Some(x) = v.get("paused").and_then(|x| x.as_bool()) {
+                c.paused = x;
             }
         }
     }
