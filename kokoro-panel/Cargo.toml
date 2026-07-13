@@ -31,3 +31,7 @@ rodio = { version = "0.19", default-features = false }
 # SHA-256-verified before commit.
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "blocking"] }
 sha2 = "0.10"
+# Drive Kindle's "Assistive reader" (Read Aloud) toggle via UI Automation — the new
+# Kindle exposes it as a UIA ToggleButton, so the x64 panel can flip it in the x86
+# Kindle (UIA is an OS service, cross-bitness). Wraps the painful COM/VARIANT plumbing.
+uiautomation = "0.25"
