@@ -16,6 +16,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 mod download;
+mod kindle_reader;
 mod preview;
 
 slint::include_modules!();
@@ -545,6 +546,35 @@ fn main() -> Result<(), slint::PlatformError> {
                 let _ = weak.upgrade_in_event_loop(move |ui| {
                     ui.set_previewing(false);
                     if let Err(e) = res {
+                        ui.set_status(e.into());
+                    }
+                });
+            });
+        });
+    }
+
+    // --- Read Aloud (drive Kindle's Assistive reader via UI Automation) ---
+    // The switch already flipped `reading` optimistically; `want` is that new value.
+    // Drive Kindle to match, then write back the real state (revert on failure).
+    {
+        let ui_weak = ui.as_weak();
+        ui.on_read_aloud_clicked(move |want| {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_status(slint::SharedString::new());
+            }
+            let weak = ui_weak.clone();
+            std::thread::spawn(move || {
+                let res = kindle_reader::set_read_aloud(want);
+                let _ = weak.upgrade_in_event_loop(move |ui| match res {
+                    Ok(reading) => {
+                        ui.set_reading(reading);
+                        ui.set_status(
+                            if reading { "Reading started in Kindle." } else { "Reading stopped." }
+                                .into(),
+                        );
+                    }
+                    Err(e) => {
+                        ui.set_reading(!want); // revert the optimistic switch flip
                         ui.set_status(e.into());
                     }
                 });

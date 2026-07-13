@@ -1,4 +1,4 @@
-import { Button, ComboBox, Slider, CheckBox, ProgressIndicator, Palette } from "std-widgets.slint";
+import { Button, ComboBox, Slider, CheckBox, Switch, ProgressIndicator, Palette } from "std-widgets.slint";
 
 // A labelled slider row: title on the left, live value on the right, slider below.
 component SliderRow inherits VerticalLayout {
@@ -133,6 +133,7 @@ export component AppWindow inherits Window {
     in-out property <float> gain;
     in-out property <float> chunk;
     in-out property <bool> kindle-kokoro;
+    in-out property <bool> reading;   // Kindle's Assistive reader is on (best-effort)
     in property <bool> model-ready;
     in property <bool> downloading;
     in property <float> download-frac;
@@ -152,6 +153,7 @@ export component AppWindow inherits Window {
     callback download-clicked();
     callback kindle-toggled(bool);
     callback preview-clicked();
+    callback read-aloud-clicked(bool); // desired state (the switch's new value)
 
     VerticalLayout {
         padding: 20px;
@@ -230,6 +232,20 @@ export component AppWindow inherits Window {
                 // Label lives in a hover tooltip. Tooltip.text is styled-text,
                 // so wrap the literal in @markdown.
                 Tooltip { text: @markdown("Preview voice"); }
+            }
+        }
+
+        // Start/stop Kindle's Read Aloud (its "Assistive reader" toggle) from the
+        // panel, as a switch that mirrors Kindle's own control. Flipping it drives
+        // the Kindle toggle via UI Automation; the handler writes back the real state
+        // (so it self-corrects if Read Aloud was toggled inside Kindle directly).
+        HorizontalLayout {
+            spacing: 8px;
+            alignment: start;
+            Text { text: "Read Aloud"; font-size: 13px; vertical-alignment: center; }
+            Switch {
+                checked <=> root.reading;
+                toggled => { root.read-aloud-clicked(self.checked); }
             }
         }
 
