@@ -61,15 +61,28 @@ fn gain(ctx: &Ctx) -> f32 {
     native_synth::read_controls(&ctx.app_data).1.gain
 }
 
+/// A prefetched chunk synth plus the inputs it was rendered with, so the streaming
+/// loop can tell whether a later controls change (narrator/speed) made it stale and
+/// re-synthesize it — speed is baked into the PCM (it's a model input), so a slider
+/// move can only land on a chunk not yet synthesized.
+struct Prefetch {
+    voice: String,
+    speed: f32,
+    handle: tokio::task::JoinHandle<Option<Vec<u8>>>,
+}
+
 /// Synthesize one already-cut chunk on the serialized native worker, as a detached
 /// task so it overlaps the (backpressured) write of the previous chunk's frame —
 /// the depth-1 prefetch. Narrator + speed come from controls.json (speed = host
-/// `rate` × controls speed). None on timeout/failure.
-fn spawn_synth(ctx: &Ctx, text: String, rate: f32) -> tokio::task::JoinHandle<Option<Vec<u8>>> {
+/// `rate` × controls speed), returned alongside the handle so the loop can detect a
+/// stale chunk. None on timeout/failure.
+fn spawn_synth(ctx: &Ctx, text: String, rate: f32) -> Prefetch {
     let (voice, controls) = native_synth::read_controls(&ctx.app_data);
     let speed = rate * controls.speed;
     let native = ctx.native.clone();
-    tokio::spawn(async move { native.synth(text, speed, voice).await })
+    let voice2 = voice.clone();
+    let handle = tokio::spawn(async move { native.synth(text, speed, voice2).await });
+    Prefetch { voice, speed, handle }
 }
 
 /// Serve the pipe forever. Returns only on a fatal pipe error (e.g. another server
@@ -135,7 +148,17 @@ async fn serve_client(mut pipe: NamedPipeServer, ctx: Ctx) -> std::io::Result<()
                 let mut clock: Option<Instant> = None;
                 let mut samples_sent: u64 = 0;
                 for k in 0..chunks.len() {
-                    let pcm = pending.take().unwrap().await.ok().flatten();
+                    let mut pf = pending.take().unwrap();
+                    // Freshness: if the narrator/speed changed since chunk k was
+                    // prefetched, its PCM is stale (speed is baked into synthesis) —
+                    // abort it and re-synth at the current settings so the change lands
+                    // on this chunk instead of one or two chunks later.
+                    let (cur_voice, cur_ctrls) = native_synth::read_controls(&ctx.app_data);
+                    if pf.speed != rate * cur_ctrls.speed || pf.voice != cur_voice {
+                        pf.handle.abort();
+                        pf = spawn_synth(&ctx, chunks[k].clone(), rate);
+                    }
+                    let pcm = pf.handle.await.ok().flatten();
                     if k + 1 < chunks.len() {
                         pending = Some(spawn_synth(&ctx, chunks[k + 1].clone(), rate));
                     }
