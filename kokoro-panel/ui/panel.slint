@@ -83,8 +83,8 @@ component PreviewButton inherits Rectangle {
 // screen (the "ready" state) and costs nothing otherwise. Each bar is phase-offset
 // from its neighbour, giving a travelling-wave look.
 component Waveform inherits Rectangle {
-    min-width: 46px;
-    max-width: 46px;
+    min-width: 48px;
+    max-width: 48px;
     min-height: 20px;
     max-height: 20px;
     // Bar colour follows its height: a short bar sits at the base green, a tall one
@@ -198,9 +198,12 @@ export component AppWindow inherits Window {
             }
         }
 
-        // Kindle toggle on the left, a compact icon-only voice Preview on the right.
+        // Kindle toggle with the voice Preview button right beside it. `alignment:
+        // start` packs them left at their natural sizes (otherwise the checkbox
+        // stretches and shoves the button to the far edge).
         HorizontalLayout {
             spacing: 8px;
+            alignment: start;
             CheckBox {
                 // Drives auto-injection: the host's Kindle-watcher reads this flag
                 // (kindle_kokoro in controls.json) and injects the Kokoro hook on Kindle's
@@ -209,9 +212,8 @@ export component AppWindow inherits Window {
                 checked <=> root.kindle-kokoro;
                 toggled => { root.kindle-toggled(self.checked); }
             }
-            Rectangle { horizontal-stretch: 1; }
-            // Outlined play/stop Preview button. Stays interactive during preview
-            // (shows the red stop state on hover); only the missing model dims it.
+            // Outlined play/stop Preview button, right next to the checkbox. Stays
+            // interactive during preview (red stop on hover); missing model dims it.
             PreviewButton {
                 previewing: root.previewing;
                 enabled: root.model-ready && root.kindle-kokoro;
