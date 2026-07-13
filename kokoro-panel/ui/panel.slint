@@ -134,6 +134,7 @@ export component AppWindow inherits Window {
     in-out property <float> chunk;
     in-out property <bool> kindle-kokoro;
     in-out property <bool> reading;   // Kindle's Assistive reader is on (best-effort)
+    in-out property <bool> paused;    // playback stalled mid-page (controls.json `paused`)
     in property <bool> model-ready;
     in property <bool> downloading;
     in property <float> download-frac;
@@ -154,6 +155,7 @@ export component AppWindow inherits Window {
     callback kindle-toggled(bool);
     callback preview-clicked();
     callback read-aloud-clicked(bool); // desired state (the switch's new value)
+    callback pause-toggled(bool);      // desired paused state
 
     VerticalLayout {
         padding: 20px;
@@ -246,6 +248,14 @@ export component AppWindow inherits Window {
             Switch {
                 checked <=> root.reading;
                 toggled => { root.read-aloud-clicked(self.checked); }
+            }
+            // Pause / resume playback mid-page (stalls the host's audio stream via
+            // controls.json `paused`; Kindle keeps the page). Independent of the
+            // switch, but only meaningful while reading.
+            Button {
+                text: root.paused ? "Resume" : "Pause";
+                enabled: root.model-ready && root.kindle-kokoro;
+                clicked => { root.pause-toggled(!root.paused); }
             }
         }
 

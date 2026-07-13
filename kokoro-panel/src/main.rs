@@ -213,6 +213,10 @@ struct Controls {
     gain: f32,
     chunk: u32,
     kindle_kokoro: bool,
+    // Live pause command, not a persisted setting: while true the host stalls the
+    // audio stream mid-page. Kept in the struct (and save()) so an unrelated save
+    // (e.g. a volume change) doesn't drop the key and silently un-pause the host.
+    paused: bool,
 }
 
 impl Default for Controls {
@@ -223,6 +227,7 @@ impl Default for Controls {
             gain: 1.0,
             chunk: 2,
             kindle_kokoro: true,
+            paused: false,
         }
     }
 }
@@ -247,6 +252,9 @@ impl Controls {
                 if let Some(x) = v.get("kindle_kokoro").and_then(|x| x.as_bool()) {
                     c.kindle_kokoro = x;
                 }
+                if let Some(x) = v.get("paused").and_then(|x| x.as_bool()) {
+                    c.paused = x;
+                }
             }
         }
         c
@@ -261,6 +269,7 @@ impl Controls {
             "gain": self.gain,
             "chunk": self.chunk,
             "kindle_kokoro": self.kindle_kokoro,
+            "paused": self.paused,
         });
         let txt = serde_json::to_string_pretty(&json).unwrap_or_default();
         let _ = std::fs::write(dir.join("controls.json"), txt);
@@ -289,6 +298,7 @@ fn main() -> Result<(), slint::PlatformError> {
         ui.set_gain((c.gain / 0.05).round() * 0.05);
         ui.set_chunk(c.chunk as f32);
         ui.set_kindle_kokoro(c.kindle_kokoro);
+        ui.set_paused(c.paused);
     }
     ui.set_model_ready(download::model_complete(&app_data));
 
@@ -558,8 +568,17 @@ fn main() -> Result<(), slint::PlatformError> {
     // Drive Kindle to match, then write back the real state (revert on failure).
     {
         let ui_weak = ui.as_weak();
+        let controls = controls.clone();
         ui.on_read_aloud_clicked(move |want| {
+            // Starting or stopping reading always clears any pause, so a fresh
+            // Read Aloud never begins stalled and a stop leaves no lingering pause.
+            {
+                let mut c = controls.lock().unwrap();
+                c.paused = false;
+                c.save();
+            }
             if let Some(ui) = ui_weak.upgrade() {
+                ui.set_paused(false);
                 ui.set_status(slint::SharedString::new());
             }
             let weak = ui_weak.clone();
@@ -579,6 +598,25 @@ fn main() -> Result<(), slint::PlatformError> {
                     }
                 });
             });
+        });
+    }
+
+    // --- Pause / Resume (stall the host's audio stream via controls.json `paused`) ---
+    // Just persists `paused`; the host reads it live per sub-frame and stalls the
+    // stream mid-page (Kindle keeps the page). No UIA, no thread needed.
+    {
+        let controls = controls.clone();
+        let weak = ui.as_weak();
+        ui.on_pause_toggled(move |want| {
+            {
+                let mut c = controls.lock().unwrap();
+                c.paused = want;
+                c.save();
+            }
+            if let Some(ui) = weak.upgrade() {
+                ui.set_paused(want);
+                ui.set_status(if want { "Paused." } else { "Resumed." }.into());
+            }
         });
     }
 

@@ -184,6 +184,25 @@ async fn serve_client(mut pipe: NamedPipeServer, ctx: Ctx) -> std::io::Result<()
 
                     let mut off = 0usize; // sample offset within the chunk
                     while off < total {
+                        // Pause: while controls.json `paused` is set, stall the stream —
+                        // keep the pipe open, send nothing — so playback pauses mid-page
+                        // without Kindle deciding the page is done and turning it (its
+                        // narrator tolerates a long silent gap; verified up to ~12 s). We
+                        // re-read the flag ~10x/s and hold the exact sample position. If
+                        // Kindle aborts during a pause we don't notice here, but the first
+                        // real write after resume fails and unwinds the stream.
+                        if native_synth::read_controls(&ctx.app_data).1.paused {
+                            let paused_at = Instant::now();
+                            while native_synth::read_controls(&ctx.app_data).1.paused {
+                                tokio::time::sleep(Duration::from_millis(100)).await;
+                            }
+                            // Don't count paused time against the pacing clock, or we'd
+                            // blast a catch-up burst on resume.
+                            if let Some(c) = clock.as_mut() {
+                                *c += paused_at.elapsed();
+                            }
+                        }
+
                         let n = subframe_samples.min(total - off);
                         let g = gain(&ctx);
                         pipe.write_all(&(n as u32).to_le_bytes()).await?;
