@@ -268,34 +268,37 @@ export component AppWindow inherits Window {
             }
         }
 
-        // Playback transport: Preview the narrator, and Pause / Resume Kindle's
-        // reading mid-page (the amber Pause and Tiffany Resume drive controls.json
-        // `paused` via pause-toggled — the host stalls its audio stream and Kindle
-        // keeps the page). Stop halts a running preview.
+        // Playback transport — one context-dependent button at a time:
+        //   Read Aloud OFF (not reading): Preview the narrator. Play to audition;
+        //     while it plays, Stop replaces Play.
+        //   Read Aloud ON  (reading):     Pause / Resume Kindle's reading mid-page
+        //     (drives controls.json `paused` via pause-toggled — the host stalls its
+        //     audio stream and Kindle keeps the page). Pause while playing; once
+        //     paused, Resume replaces Pause.
         HorizontalLayout {
             spacing: 8px;
             alignment: start;
-            PlayButton {
+            if !root.reading && !root.previewing: PlayButton {
                 enabled: root.model-ready && root.kindle-kokoro;
                 clicked => { root.preview-clicked(); }
                 // Label lives in a hover tooltip. Tooltip.text is styled-text,
                 // so wrap the literal in @markdown.
                 Tooltip { text: @markdown("Preview voice"); }
             }
-            ResumeButton {
+            if !root.reading && root.previewing: StopButton {
                 enabled: root.model-ready && root.kindle-kokoro;
-                clicked => { root.pause-toggled(false); }
-                Tooltip { text: @markdown("Resume"); }
+                clicked => { root.stop-clicked(); }
+                Tooltip { text: @markdown("Stop preview"); }
             }
-            PauseButton {
+            if root.reading && !root.paused: PauseButton {
                 enabled: root.model-ready && root.kindle-kokoro;
                 clicked => { root.pause-toggled(true); }
                 Tooltip { text: @markdown("Pause"); }
             }
-            StopButton {
+            if root.reading && root.paused: ResumeButton {
                 enabled: root.model-ready && root.kindle-kokoro;
-                clicked => { root.stop-clicked(); }
-                Tooltip { text: @markdown("Stop preview"); }
+                clicked => { root.pause-toggled(false); }
+                Tooltip { text: @markdown("Resume"); }
             }
         }
 
