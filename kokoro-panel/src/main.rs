@@ -14,6 +14,7 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 mod download;
 mod kindle_reader;
@@ -563,12 +564,17 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     }
 
+    // Set while the panel is driving Kindle's toggle (and briefly after), so the
+    // state poll below doesn't read a stale value mid-flip and fight the switch.
+    let reader_busy = Arc::new(AtomicBool::new(false));
+
     // --- Read Aloud (drive Kindle's Assistive reader via UI Automation) ---
     // The switch already flipped `reading` optimistically; `want` is that new value.
     // Drive Kindle to match, then write back the real state (revert on failure).
     {
         let ui_weak = ui.as_weak();
         let controls = controls.clone();
+        let reader_busy = reader_busy.clone();
         ui.on_read_aloud_clicked(move |want| {
             // Starting or stopping reading always clears any pause, so a fresh
             // Read Aloud never begins stalled and a stop leaves no lingering pause.
@@ -582,6 +588,8 @@ fn main() -> Result<(), slint::PlatformError> {
                 ui.set_status(slint::SharedString::new());
             }
             let weak = ui_weak.clone();
+            let reader_busy = reader_busy.clone();
+            reader_busy.store(true, Ordering::SeqCst);
             std::thread::spawn(move || {
                 let res = kindle_reader::set_read_aloud(want);
                 let _ = weak.upgrade_in_event_loop(move |ui| match res {
@@ -597,6 +605,11 @@ fn main() -> Result<(), slint::PlatformError> {
                         ui.set_status(e.into());
                     }
                 });
+                // Kindle updates the toggle's UIA state asynchronously; hold the
+                // poll off a moment longer so it doesn't read the pre-flip value
+                // and bounce the switch back.
+                std::thread::sleep(Duration::from_millis(1500));
+                reader_busy.store(false, Ordering::SeqCst);
             });
         });
     }
@@ -617,6 +630,45 @@ fn main() -> Result<(), slint::PlatformError> {
                 ui.set_paused(want);
                 ui.set_status(if want { "Paused." } else { "Resumed." }.into());
             }
+        });
+    }
+
+    // --- Sync the Read Aloud switch when Assistive reader is toggled in Kindle ---
+    // The panel only ever drives Kindle; nothing read Kindle's state back, so a
+    // toggle made inside Kindle left the switch stale. Poll the toggle's state on a
+    // timer and mirror it onto the switch. Best-effort: a `None` read (toolbar
+    // hidden / Kindle closed) keeps the last known state; we skip while the panel is
+    // itself driving the toggle (reader_busy) and never spawn overlapping polls.
+    let poll_timer = slint::Timer::default();
+    {
+        let weak = ui.as_weak();
+        let poll_busy = Arc::new(AtomicBool::new(false));
+        let reader_busy = reader_busy.clone();
+        poll_timer.start(slint::TimerMode::Repeated, Duration::from_millis(1000), move || {
+            if reader_busy.load(Ordering::SeqCst) {
+                return;
+            }
+            if poll_busy.swap(true, Ordering::SeqCst) {
+                return; // a previous poll is still running
+            }
+            let weak = weak.clone();
+            let poll_busy = poll_busy.clone();
+            let reader_busy = reader_busy.clone();
+            std::thread::spawn(move || {
+                let state = kindle_reader::read_state();
+                let _ = weak.upgrade_in_event_loop(move |ui| {
+                    // Re-check reader_busy: a user flip may have started while we
+                    // were reading. Only apply a definite state that differs.
+                    if !reader_busy.load(Ordering::SeqCst) {
+                        if let Some(on) = state {
+                            if ui.get_reading() != on {
+                                ui.set_reading(on);
+                            }
+                        }
+                    }
+                });
+                poll_busy.store(false, Ordering::SeqCst);
+            });
         });
     }
 
