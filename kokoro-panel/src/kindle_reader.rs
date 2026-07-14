@@ -62,6 +62,28 @@ pub fn set_read_aloud(want: bool) -> Result<bool, String> {
 }
 
 
+/// Best-effort read of Kindle's Assistive reader state, without disturbing the UI
+/// (never opens the aa menu). Used to keep the panel switch in sync when Read Aloud
+/// is toggled inside Kindle directly. Returns `None` when Kindle or the toggle isn't
+/// currently in the UIA tree (e.g. the toolbar is hidden) — callers must treat that
+/// as "unknown, keep the last known state", not "off".
+pub fn read_state() -> Option<bool> {
+    let auto = UIAutomation::new().ok()?;
+    let kindle = auto
+        .create_matcher()
+        .name("Kindle")
+        .timeout(800)
+        .find_first()
+        .ok()?;
+    let toggle = find_by_id(&auto, &kindle, TOGGLE_ID)?;
+    let pattern: UITogglePattern = toggle.get_pattern().ok()?;
+    match pattern.get_toggle_state() {
+        Ok(ToggleState::On) => Some(true),
+        Ok(ToggleState::Off) => Some(false),
+        _ => None,
+    }
+}
+
 /// Find a descendant of `root` whose AutomationId equals `id` (the crate's matcher
 /// has no built-in AutomationId filter, so use a closure filter).
 fn find_by_id(auto: &UIAutomation, root: &UIElement, id: &'static str) -> Option<UIElement> {
