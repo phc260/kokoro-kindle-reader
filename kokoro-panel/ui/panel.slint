@@ -249,9 +249,15 @@ export component AppWindow inherits Window {
                 checked <=> root.reading;
                 toggled => { root.read-aloud-clicked(self.checked); }
             }
-            // Pause / resume playback mid-page (stalls the host's audio stream via
-            // controls.json `paused`; Kindle keeps the page). Independent of the
-            // switch, but only meaningful while reading.
+        }
+
+        // Pause / resume playback mid-page (stalls the host's audio stream via
+        // controls.json `paused`; Kindle keeps the page). On its own row: a
+        // focusable Button packed into the Read Aloud Switch's layout row bounced
+        // the Switch's toggle commit, so keep it separate.
+        HorizontalLayout {
+            spacing: 8px;
+            alignment: start;
             Button {
                 text: root.paused ? "Resume" : "Pause";
                 enabled: root.model-ready && root.kindle-kokoro;
