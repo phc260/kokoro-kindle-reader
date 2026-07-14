@@ -587,7 +587,13 @@ fn main() -> Result<(), slint::PlatformError> {
         let ui_weak = ui.as_weak();
         let controls = controls.clone();
         let reader_busy = reader_busy.clone();
+        let active_sink = active_sink.clone();
         ui.on_read_aloud_clicked(move |want| {
+            // Toggling the reader hands the transport over to Kindle, so silence any
+            // preview still playing — its thread then clears `previewing`. Otherwise a
+            // preview started before Read Aloud would keep playing over Kindle's
+            // narration with its Stop button hidden by the reading-state view.
+            preview::stop(&active_sink);
             // Starting or stopping reading always clears any pause, so a fresh
             // Read Aloud never begins stalled and a stop leaves no lingering pause.
             {

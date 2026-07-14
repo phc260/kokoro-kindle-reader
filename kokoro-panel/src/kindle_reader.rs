@@ -1,29 +1,33 @@
 // Toggle Kindle's "Assistive reader" (Read Aloud) from the panel via UI Automation.
 //
-// The new Kindle for Windows exposes its reader control as a UIA ToggleButton
-// (AutomationId "ToggleButton-Assistive reader toggle") that lives in the Page-
-// settings ("aa") menu. We find Kindle's window, find that toggle — opening the aa
-// menu first if it isn't already in the tree — and flip it with the TogglePattern.
-// UI Automation is an OS-level service, so the x64 panel drives the x86 Kindle
-// across the bitness boundary with no hooking. Brittle across Kindle updates: if
-// Amazon renames the control this fails gracefully with a message.
+// Kindle for Windows exposes its reader control as a UIA ToggleButton (AutomationId
+// "ToggleButton-Assistive reader toggle") that lives inside the Page-settings ("Aa")
+// menu. UI Automation is an OS-level service, so the x64 panel drives the x86 Kindle
+// across the bitness boundary with no hooking, and TogglePattern::toggle() flips the
+// control cleanly.
+//
+// Caveat (Kindle 1.0.18632.0): that Aa flyout can't be opened programmatically. Its
+// button exposes no Invoke pattern, and its ExpandCollapse pattern is a no-op (it
+// reports state but won't actually open/close the menu); the flyout opens only on a
+// real click. So the toggle is reachable ONLY while the Aa menu is already open. When
+// it isn't in the tree we return a hint telling the user to open the menu, rather than
+// silently doing nothing.
 //
 // Blocking + COM-heavy; call it on a background thread (COM is initialised per
 // thread by UIAutomation::new()), never on the Slint UI thread.
 
-use std::time::Duration;
 use uiautomation::filters::FnFilter;
-use uiautomation::patterns::{UIInvokePattern, UITogglePattern};
+use uiautomation::patterns::UITogglePattern;
 use uiautomation::types::ToggleState;
 use uiautomation::{UIAutomation, UIElement};
 
 const TOGGLE_ID: &str = "ToggleButton-Assistive reader toggle";
-const AA_MENU_ID: &str = "aaMenuButton";
 
 /// Drive Kindle's Assistive reader (Read Aloud) to `want` (true = reading). Reads
 /// the control's current state and only flips it when needed, so the panel switch
 /// stays correct even if Read Aloud was toggled inside Kindle directly. Returns the
-/// resulting state. Err with a user-facing message on any failure.
+/// resulting state. Err with a user-facing message on any failure — including when
+/// Kindle's Aa menu (which hosts the toggle) isn't open, since we can't open it.
 pub fn set_read_aloud(want: bool) -> Result<bool, String> {
     let auto = UIAutomation::new().map_err(|e| format!("UI Automation init failed: {e}"))?;
     let kindle = auto
@@ -33,17 +37,12 @@ pub fn set_read_aloud(want: bool) -> Result<bool, String> {
         .find_first()
         .map_err(|_| "Kindle window not found — is Kindle running?".to_string())?;
 
-    // The toggle is usually already in the tree; if not, open the Page-settings menu
-    // (which hosts it) and look again.
-    let toggle = match find_by_id(&auto, &kindle, TOGGLE_ID) {
-        Some(t) => t,
-        None => {
-            open_aa_menu(&auto, &kindle);
-            find_by_id(&auto, &kindle, TOGGLE_ID).ok_or_else(|| {
-                "Couldn't find Kindle's Assistive reader control — open a book first.".to_string()
-            })?
-        }
-    };
+    // The toggle is only in the tree while the Aa menu is open, and we can't open the
+    // menu ourselves on this Kindle build — so a miss means "open it yourself first".
+    let toggle = find_by_id(&auto, &kindle, TOGGLE_ID).ok_or_else(|| {
+        "Open Kindle's \"Aa\" (Page settings) menu, then flip this to start Read Aloud."
+            .to_string()
+    })?;
 
     let pattern: UITogglePattern = toggle
         .get_pattern()
@@ -97,13 +96,4 @@ fn find_by_id(auto: &UIAutomation, root: &UIElement, id: &'static str) -> Option
         .timeout(1000)
         .find_first()
         .ok()
-}
-
-fn open_aa_menu(auto: &UIAutomation, kindle: &UIElement) {
-    if let Some(aa) = find_by_id(auto, kindle, AA_MENU_ID) {
-        if let Ok(invoke) = aa.get_pattern::<UIInvokePattern>() {
-            let _ = invoke.invoke();
-            std::thread::sleep(Duration::from_millis(400)); // let the menu render
-        }
-    }
 }
