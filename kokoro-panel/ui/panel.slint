@@ -17,9 +17,9 @@ component SliderRow inherits VerticalLayout {
     // Dim the whole row (label + readout + slider) when disabled.
     opacity: root.enabled ? 1.0 : 0.5;
     HorizontalLayout {
-        Text { text: root.label; font-size: 13px; vertical-alignment: center; }
+        Text { text: root.label; font-size: 15px; vertical-alignment: center; }
         Rectangle { horizontal-stretch: 1; }
-        Text { text: root.value-text; font-size: 13px; color: #7a7a7a; vertical-alignment: center; }
+        Text { text: root.value-text; font-size: 15px; color: #7a7a7a; vertical-alignment: center; }
     }
     Slider {
         enabled: root.enabled;
@@ -114,6 +114,7 @@ component Waveform inherits Rectangle {
 export component AppWindow inherits Window {
     title: "Kokoro Kindle Reader — Settings";
     icon: @image-url("../../icons/128x128.png");
+    default-font-size: 15px;
     preferred-width: 400px;
     preferred-height: 600px;
     // Floor of the narrator row: accent (100, fits "American") + gender (90,
@@ -174,7 +175,7 @@ export component AppWindow inherits Window {
                 spacing: 8px;
                 if root.downloading: VerticalLayout {
                     spacing: 8px;
-                    Text { text: root.download-label; font-size: 12px; }
+                    Text { text: root.download-label; font-size: 14px; }
                     ProgressIndicator { progress: root.download-frac; height: 6px; }
                 }
                 // Startup integrity check: a determinate bar of how much of the
@@ -183,7 +184,7 @@ export component AppWindow inherits Window {
                     spacing: 8px;
                     Text {
                         text: "Checking model files — \{Math.round(root.verify-frac * 100)}%";
-                        font-size: 12px;
+                        font-size: 14px;
                     }
                     ProgressIndicator { progress: root.verify-frac; height: 6px; }
                 }
@@ -244,7 +245,7 @@ export component AppWindow inherits Window {
         HorizontalLayout {
             spacing: 8px;
             alignment: start;
-            Text { text: "Read Aloud"; font-size: 13px; vertical-alignment: center; }
+            Text { text: "Read Aloud"; font-size: 15px; vertical-alignment: center; }
             Switch {
                 checked <=> root.reading;
                 toggled => { root.read-aloud-clicked(self.checked); }
@@ -270,7 +271,7 @@ export component AppWindow inherits Window {
             spacing: 6px;
             Text {
                 text: "Narrator";
-                font-size: 13px;
+                font-size: 15px;
                 vertical-alignment: center;
                 opacity: root.kindle-kokoro ? 1.0 : 0.5; // dim heading with its dropdowns
             }
@@ -339,14 +340,14 @@ min-width: 100px;
 
         if root.status != "": Text {
             text: root.status;
-            font-size: 12px;
+            font-size: 14px;
             color: #5a5a5a;
             wrap: word-wrap;
         }
 
         Text {
             text: "Keep Kokoro Kindle Reader running (tray) for Kindle to narrate.";
-            font-size: 11px;
+            font-size: 13px;
             color: #a0a0a0;
             wrap: word-wrap;
         }
