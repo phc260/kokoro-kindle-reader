@@ -526,11 +526,14 @@ fn main() -> Result<(), slint::PlatformError> {
     }
 
     // --- Preview (buffered if pre-synthesized, else synth via the host pipe) ---
+    // Shared handle to the playing sink so the Stop button can halt it mid-line.
+    let active_sink = preview::new_active();
     {
         let ui_weak = ui.as_weak();
         let controls = controls.clone();
         let voices = voices.clone();
         let cache = preview_cache.clone();
+        let active_sink = active_sink.clone();
         ui.on_preview_clicked(move || {
             let already = ui_weak.upgrade().map(|ui| ui.get_previewing()).unwrap_or(true);
             if already {
@@ -549,10 +552,11 @@ fn main() -> Result<(), slint::PlatformError> {
             };
             let text = intro_for(&voice, &voices);
             let weak = ui_weak.clone();
+            let active_sink = active_sink.clone();
             std::thread::spawn(move || {
                 let res = match buffered {
-                    Some(samples) => preview::play_samples(samples),
-                    None => preview::play(&text),
+                    Some(samples) => preview::play_samples(samples, &active_sink),
+                    None => preview::play(&text, &active_sink),
                 };
                 let _ = weak.upgrade_in_event_loop(move |ui| {
                     ui.set_previewing(false);
@@ -561,6 +565,14 @@ fn main() -> Result<(), slint::PlatformError> {
                     }
                 });
             });
+        });
+    }
+
+    // --- Stop preview (halt the sink; the playing thread clears `previewing`) ---
+    {
+        let active_sink = active_sink.clone();
+        ui.on_stop_clicked(move || {
+            preview::stop(&active_sink);
         });
     }
 

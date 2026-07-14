@@ -44,33 +44,35 @@ component SliderRow inherits VerticalLayout {
     }
 }
 
-// The voice-Preview button: a borderless icon that flips between two modes.
-// Idle it shows a blue play_circle; while a preview is playing (`previewing`)
-// it shows a red stop_circle. Hover brightens the glyph to the full accent;
-// missing model dims it. The glyph itself is the whole button (no box). The
-// forwarded @children (a Tooltip) rides on top.
-component PreviewButton inherits Rectangle {
-    in property <bool> previewing;   // play (blue) vs stop (red)
+// A square icon button: a Material Symbols glyph inside a rounded-square border,
+// both tinted with `accent`. Hover brightens the glyph and border and gives the
+// box a faint accent fill; disabled dims the whole thing and greys the glyph.
+// PlayButton / StopButton below are thin instances that set the icon + accent.
+// The forwarded @children (a Tooltip) rides on top.
+component IconButton inherits Rectangle {
+    in property <image> icon;
+    in property <color> accent: Palette.accent-background;
     in property <bool> enabled: true; // model-ready gate; dims when off
     callback clicked;
 
-    // Play uses the theme accent (same color as the sliders); stop is red.
-    property <color> accent: root.previewing ? #ff4a3d : Palette.accent-background;
-
-    // Size the button to the glyph so the hover hit-area doesn't extend past it
-    // (a larger box would brighten the icon when hovering the empty padding).
-    width: 30px;
-    height: 30px;
+    width: 34px;
+    height: 34px;
     opacity: root.enabled ? 1.0 : 0.5;
 
+    // Rounded-square outline in the accent (primary) color; picks up a faint
+    // accent fill on hover.
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: !root.enabled
+        ? Palette.border
+        : (touch.has-hover ? root.accent.brighter(0.2) : root.accent);
+    background: (root.enabled && touch.has-hover) ? root.accent.transparentize(0.88) : transparent;
+    animate border-color, background { duration: 130ms; }
+
     Image {
-        // Google Material Symbols play_circle / stop_circle, Weight 100 (thin
-        // outline). No box around it — the glyph itself is the button.
-        source: root.previewing
-            ? @image-url("stop-circle.svg")
-            : @image-url("play-circle.svg");
-        width: 30px;
-        height: 30px;
+        source: root.icon;
+        width: 24px;
+        height: 24px;
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         // Idle == the accent exactly (matches the sliders); hover brightens.
@@ -85,6 +87,19 @@ component PreviewButton inherits Rectangle {
         clicked => { root.clicked(); }
     }
     @children
+}
+
+// Preview: start playback. Google Material Symbols play_arrow (Rounded), theme
+// accent (same blue as the sliders).
+component PlayButton inherits IconButton {
+    icon: @image-url("play-arrow.svg");
+    accent: Palette.accent-background;
+}
+
+// Preview: stop playback. Google Material Symbols stop (Rounded), red.
+component StopButton inherits IconButton {
+    icon: @image-url("stop.svg");
+    accent: #ff4a3d;
 }
 
 // A tiny animated voice meter: six rounded bars that ripple up and down like an
@@ -155,6 +170,7 @@ export component AppWindow inherits Window {
     callback download-clicked();
     callback kindle-toggled(bool);
     callback preview-clicked();
+    callback stop-clicked();
     callback read-aloud-clicked(bool); // desired state (the switch's new value)
     callback pause-toggled(bool);      // desired paused state
 
@@ -212,9 +228,7 @@ export component AppWindow inherits Window {
             }
         }
 
-        // Kindle toggle with the voice Preview button right beside it. `alignment:
-        // start` packs them left at their natural sizes (otherwise the checkbox
-        // stretches and shoves the button to the far edge).
+        // Kindle narration toggle.
         HorizontalLayout {
             spacing: 8px;
             alignment: start;
@@ -225,16 +239,6 @@ export component AppWindow inherits Window {
                 text: "Narrate Kindle with Kokoro";
                 checked <=> root.kindle-kokoro;
                 toggled => { root.kindle-toggled(self.checked); }
-            }
-            // Outlined play/stop Preview button, right next to the checkbox. Stays
-            // interactive during preview (red stop on hover); missing model dims it.
-            PreviewButton {
-                previewing: root.previewing;
-                enabled: root.model-ready && root.kindle-kokoro;
-                clicked => { root.preview-clicked(); }
-                // Label lives in a hover tooltip. Tooltip.text is styled-text,
-                // so wrap the literal in @markdown.
-                Tooltip { text: @markdown("Preview voice"); }
             }
         }
 
@@ -263,6 +267,26 @@ export component AppWindow inherits Window {
                 text: root.paused ? "Resume" : "Pause";
                 enabled: root.model-ready && root.kindle-kokoro;
                 clicked => { root.pause-toggled(!root.paused); }
+            }
+        }
+
+        // Voice Preview: audition the narrator with a fixed intro line, below the
+        // Pause button. Separate Play / Stop buttons — Play is live while idle, Stop
+        // while a preview is playing; missing model dims both.
+        HorizontalLayout {
+            spacing: 8px;
+            alignment: start;
+            PlayButton {
+                enabled: root.model-ready && root.kindle-kokoro && !root.previewing;
+                clicked => { root.preview-clicked(); }
+                // Label lives in a hover tooltip. Tooltip.text is styled-text,
+                // so wrap the literal in @markdown.
+                Tooltip { text: @markdown("Preview voice"); }
+            }
+            StopButton {
+                enabled: root.model-ready && root.kindle-kokoro && root.previewing;
+                clicked => { root.stop-clicked(); }
+                Tooltip { text: @markdown("Stop preview"); }
             }
         }
 
