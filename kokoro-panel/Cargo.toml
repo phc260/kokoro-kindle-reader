@@ -38,3 +38,6 @@ sha2 = "0.10"
 # Kindle exposes it as a UIA ToggleButton, so the x64 panel can flip it in the x86
 # Kindle (UIA is an OS service, cross-bitness). Wraps the painful COM/VARIANT plumbing.
 uiautomation = "0.25"
+# Hands-free Read Aloud: foreground the x86 Kindle window (AttachThreadInput) and send
+# its Ctrl+A toggle shortcut via raw SendInput. Same version uiautomation already pulls.
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_Threading"] }

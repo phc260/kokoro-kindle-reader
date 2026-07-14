@@ -2832,6 +2832,7 @@ dependencies = [
  "slint",
  "slint-build",
  "uiautomation",
+ "windows 0.62.2",
  "winresource",
 ]
 
