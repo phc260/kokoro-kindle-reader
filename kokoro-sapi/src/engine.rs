@@ -1,8 +1,9 @@
 //! The SAPI5 voice engine object + its class factory. `Speak` forwards the whole
-//! utterance to kokoro-host over the pipe, buffers the returned PCM, then writes it to
-//! the SAPI site in ~250 ms blocks while reporting SAPI events (word/sentence
-//! boundaries + `<bookmark>`s) as it goes. The event reporting is what lets Kindle
-//! 18632's event-driven narrator advance and highlight past the first sentence.
+//! utterance to kokoro-host over the pipe and streams the returned sub-frames straight
+//! to the SAPI site in ~250 ms blocks (no buffering) while reporting SAPI events
+//! (word/sentence boundaries + `<bookmark>`s) as it goes. The event reporting is what
+//! lets Kindle 18632's event-driven narrator advance and highlight past the first
+//! sentence.
 
 use core::ffi::c_void;
 use core::ptr::null_mut;

@@ -41,9 +41,10 @@ cargo run   # windowless tray daemon; right-click the tray → Settings for the 
   and isn't thread-safe, and the `ort` session lives there — never run the session or
   call espeak from multiple threads.
 - **`controls.json` is the single source of truth, read live** (`%APPDATA%\com.phc260.kokoro-kindle-reader\`).
-  The keys `kokoro-panel` writes (`voice`, `speed`, `gain`, `chunk`, `kindle_kokoro`) must each
-  be read by a host reader: `read_controls` for the synth fields, `kindle_watch::enabled` for
-  `kindle_kokoro` — change them together.
+  The keys `kokoro-panel` writes (`voice`, `speed`, `gain`, `chunk`, `kindle_kokoro`, `paused`) must
+  each be read by a host reader: `read_controls` for the synth fields (including `paused`, which
+  `pipe.rs` consumes per sub-frame to stall the stream), `kindle_watch::enabled` for `kindle_kokoro`
+  — change them together.
 - The pacing lead (500 ms) and sub-frame (250 ms) are **fixed constants** in `pipe.rs`
   (`DEFAULT_LEAD_MS` / `DEFAULT_SUBFRAME_MS`), not user-tunable.
 
