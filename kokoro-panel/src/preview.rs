@@ -9,17 +9,16 @@ use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-const PIPE_NAME: &str = r"\\.\pipe\KokoroSapiSynth";
-const CMD_SYNTH: u8 = b'S';
-const STREAM_END: u32 = 0xFFFF_FFFE;
-const SYNTH_ERROR: u32 = 0xFFFF_FFFF;
-// Per-chunk header the host emits before a chunk's audio: CHUNK_INFO then
-// [u32 utf16Len][u32 nSamples]. Preview doesn't place SAPI events, so it just
-// skips the 8-byte payload — but it MUST consume the marker or the next u32
-// read desyncs the whole stream.
-const CHUNK_INFO: u32 = 0xFFFF_FFFD;
-const SAMPLE_RATE: u32 = 24_000;
-// ERROR_PIPE_BUSY: all pipe instances are momentarily in use; wait and retry.
+// Wire-format constants come from the shared `kokoro-protocol` crate (the same source
+// kokoro-host/pipe.rs and the SAPI engine use), so Preview can't drift from them.
+// CHUNK_INFO marks the per-chunk header the host emits before a chunk's audio:
+// CHUNK_INFO then [u32 utf16Len][u32 nSamples]. Preview doesn't place SAPI events, so it
+// just skips the 8-byte payload — but it MUST consume the marker or the next u32 read
+// desyncs the whole stream.
+use kokoro_protocol::{CHUNK_INFO, CMD_SYNTH, PIPE_NAME, SAMPLE_RATE, STREAM_END, SYNTH_ERROR};
+
+// ERROR_PIPE_BUSY: all pipe instances are momentarily in use; wait and retry. (A
+// Windows error code, not part of the wire protocol, so it stays local.)
 const ERROR_PIPE_BUSY: i32 = 231;
 
 /// Connect to the pipe, retrying briefly while all instances are busy.
