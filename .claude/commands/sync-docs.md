@@ -35,9 +35,10 @@ Drift-prone claim types to check explicitly:
   (`STREAM_END`/`SYNTH_ERROR` = `0xFFFF_FFFE`/`0xFFFF_FFFF`, the `'S'` request
   `[rate][textBytes][text]`, the `[nSamples][gain][f32…]` frame format).
 - **`controls.json` keys** — the keys the docs list are the ones actually written/read
-  (`voice`, `speed`, `gain`, `chunk`, `kindle_kokoro`). Note the pacing lead / sub-frame
-  are *not* in the file — they're fixed constants in `pipe.rs`, so docs must not describe
-  them as user-tunable.
+  (`voice`, `speed`, `gain`, `chunk`, `kindle_kokoro`, `paused`). `paused` is a live pause
+  command (not a persisted setting): the panel writes it and `pipe.rs` consumes it per
+  sub-frame to stall the stream. Note the pacing lead / sub-frame are *not* in the file —
+  they're fixed constants in `pipe.rs`, so docs must not describe them as user-tunable.
 - **Dependency pins / versions** — the ORT / `onnxruntime-webgpu` pin in
   `native-deps/fetch-deps.ps1` matches what the docs claim; the product version
   agrees across `packaging/installer.nsi` (`VERSION`) and the `FileVersion` in
