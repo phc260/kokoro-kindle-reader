@@ -96,6 +96,18 @@ component PlayButton inherits IconButton {
     accent: Palette.accent-background;
 }
 
+// Preview: resume playback. Google Material Symbols resume (Rounded), Tiffany blue.
+component ResumeButton inherits IconButton {
+    icon: @image-url("resume.svg");
+    accent: #0abab5;
+}
+
+// Preview: pause playback. Google Material Symbols pause (Rounded), amber.
+component PauseButton inherits IconButton {
+    icon: @image-url("pause.svg");
+    accent: #f5a623;
+}
+
 // Preview: stop playback. Google Material Symbols stop (Rounded), red.
 component StopButton inherits IconButton {
     icon: @image-url("stop.svg");
@@ -256,35 +268,32 @@ export component AppWindow inherits Window {
             }
         }
 
-        // Pause / resume playback mid-page (stalls the host's audio stream via
-        // controls.json `paused`; Kindle keeps the page). On its own row: a
-        // focusable Button packed into the Read Aloud Switch's layout row bounced
-        // the Switch's toggle commit, so keep it separate.
-        HorizontalLayout {
-            spacing: 8px;
-            alignment: start;
-            Button {
-                text: root.paused ? "Resume" : "Pause";
-                enabled: root.model-ready && root.kindle-kokoro;
-                clicked => { root.pause-toggled(!root.paused); }
-            }
-        }
-
-        // Voice Preview: audition the narrator with a fixed intro line, below the
-        // Pause button. Separate Play / Stop buttons — Play is live while idle, Stop
-        // while a preview is playing; missing model dims both.
+        // Playback transport: Preview the narrator, and Pause / Resume Kindle's
+        // reading mid-page (the amber Pause and Tiffany Resume drive controls.json
+        // `paused` via pause-toggled — the host stalls its audio stream and Kindle
+        // keeps the page). Stop halts a running preview.
         HorizontalLayout {
             spacing: 8px;
             alignment: start;
             PlayButton {
-                enabled: root.model-ready && root.kindle-kokoro && !root.previewing;
+                enabled: root.model-ready && root.kindle-kokoro;
                 clicked => { root.preview-clicked(); }
                 // Label lives in a hover tooltip. Tooltip.text is styled-text,
                 // so wrap the literal in @markdown.
                 Tooltip { text: @markdown("Preview voice"); }
             }
+            ResumeButton {
+                enabled: root.model-ready && root.kindle-kokoro;
+                clicked => { root.pause-toggled(false); }
+                Tooltip { text: @markdown("Resume"); }
+            }
+            PauseButton {
+                enabled: root.model-ready && root.kindle-kokoro;
+                clicked => { root.pause-toggled(true); }
+                Tooltip { text: @markdown("Pause"); }
+            }
             StopButton {
-                enabled: root.model-ready && root.kindle-kokoro && root.previewing;
+                enabled: root.model-ready && root.kindle-kokoro;
                 clicked => { root.stop-clicked(); }
                 Tooltip { text: @markdown("Stop preview"); }
             }
