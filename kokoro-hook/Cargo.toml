@@ -1,6 +1,6 @@
 [package]
 name = "kokoro-hook"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
 description = "x86 hook DLL injected into Kindle 18632+: forces its new SpVoiceEngine to narrate with the Kokoro SAPI5 voice by patching the shared ISpVoice::SetVoice vtable slot."
 
