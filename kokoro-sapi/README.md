@@ -30,7 +30,7 @@ points undecorated (`DllGetClassObject`, `DllCanUnloadNow`, `DllRegisterServer`,
 | File | What |
 |---|---|
 | `lib.rs` | The four COM exports + `DllMain`, the class factory, and registration (writes the CLSID `InprocServer32` + the `KokoroTTS` voice token). |
-| `engine.rs` | `KokoroEngine` — `ISpTTSEngine` + `ISpObjectWithToken`; forwards `Speak` over the pipe, buffers the PCM, then writes ~250 ms blocks back with `SPVES_ABORT` checks while reporting SAPI word/bookmark events (so Kindle's event-driven narrator advances past sentence one). |
+| `engine.rs` | `KokoroEngine` — `ISpTTSEngine` + `ISpObjectWithToken`; forwards `Speak` over the pipe and streams the returned sub-frames straight to the SAPI site in ~250 ms blocks (no buffering) with `SPVES_ABORT` checks, while reporting SAPI word/bookmark events (so Kindle's event-driven narrator advances past sentence one). |
 | `worker.rs` | The pipe **client** (connect-only, no spawn). |
 | `sapi.rs` | The `sapiddk.h` interfaces (`ISpTTSEngine`, `ISpTTSEngineSite`, `ISpObjectWithToken`), hand-declared via `#[interface]` because `windows-rs` ships only the SAPI *SDK* surface. |
 

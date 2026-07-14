@@ -72,6 +72,18 @@ restart needed.
 The installer sets this up for you the first time; the in-app checkbox is for
 switching back and forth later.
 
+### Controlling narration from the panel (optional)
+
+Once narration is underway you can **Pause** and **Resume** it from the panel without
+switching windows — playback stalls in place and picks up exactly where it left off, so
+you never lose your spot.
+
+The panel also has a **Read Aloud** switch that can start and stop Kindle's narration.
+Because of how recent Kindle builds (1.0.18632+) are made, it can only flip that control
+while Kindle's **Aa** (Page settings) menu is open — with the menu closed, just start
+Read Aloud from Kindle itself as above. Either way the switch mirrors Read Aloud's
+current state so it stays in sync with what you do inside Kindle.
+
 ### Tuning Kindle playback
 
 **Sentences per chunk** controls how Kindle narration streams: higher is smoother but

@@ -143,10 +143,12 @@ No Rust test suites; "testing" is Preview in the panel and Read Aloud in Kindle 
 
 ### Settings — `controls.json` (single source of truth)
 - Lives at `%APPDATA%\com.phc260.kokoro-kindle-reader\controls.json`. Fields: **`voice`,
-  `speed`, `gain`, `chunk`, `kindle_kokoro`**. The panel writes it; the host reads it
+  `speed`, `gain`, `chunk`, `kindle_kokoro`, `paused`**. The panel writes it; the host reads it
   **live** — `voice`/`speed`/`gain`/`chunk` per utterance/sub-frame (so a change lands on
-  Kindle's **next page**, no IPC/restart), and `kindle_kokoro` per watcher tick in
-  `kindle_watch.rs` (gates auto-injection; default `true`). (The pacing lead/sub-frame are
+  Kindle's **next page**, no IPC/restart), `kindle_kokoro` per watcher tick in
+  `kindle_watch.rs` (gates auto-injection; default `true`), and `paused` per sub-frame in
+  `pipe.rs` — a live pause command (not a persisted setting): while set, the stream stalls
+  with the pipe held open and Kindle keeps the page. (The pacing lead/sub-frame are
   *not* in the file; they're fixed constants in `pipe.rs`.)
 
 ### Kindle 18632 hook (`kokoro-host/src/kindle_watch.rs` + `kokoro-hook/` + `kokoro-inject/`)
@@ -223,13 +225,15 @@ unwind into Kindle.
   in-process by registry path. It **cannot** be merged into the x64 host; it's a separate
   file, bundled + registered by the installer.
 - **`controls.json` is the single source of truth, read live.** The panel writes
-  `voice`/`speed`/`gain`/`chunk`/`kindle_kokoro`; the host re-reads `voice`/`speed`/`chunk`
-  per utterance and `gain` per sub-frame (via `native_synth::read_controls`), so a slider
-  move lands on the next chunk/page — not frozen into prefetched samples. `kindle_kokoro` is
-  read separately, per watcher tick, by `kindle_watch::enabled` (default `true`).
+  `voice`/`speed`/`gain`/`chunk`/`kindle_kokoro`/`paused`; the host re-reads `voice`/`speed`/`chunk`
+  per utterance and `gain`/`paused` per sub-frame (via `native_synth::read_controls`), so a slider
+  move lands on the next chunk/page — not frozen into prefetched samples (and `paused` stalls the
+  stream live). `kindle_kokoro` is read separately, per watcher tick, by `kindle_watch::enabled`
+  (default `true`).
   **Invariant: every key the panel writes must be read by whichever host reader consumes it —
-  `read_controls` for the synth fields, `kindle_watch` for `kindle_kokoro` — keep them in
-  sync.** The pacing lead / sub-frame size are **not** user-tunable; fixed constants in `pipe.rs`.
+  `read_controls` for the synth fields (`paused` among them, consumed in `pipe.rs`), `kindle_watch`
+  for `kindle_kokoro` — keep them in sync.** The pacing lead / sub-frame size are **not**
+  user-tunable; fixed constants in `pipe.rs`.
 - **Native synth is serialized.** espeak has global state + isn't thread-safe (and the
   `ort` session is owned by the worker), so ONE dedicated thread owns the synth; never
   call espeak / run the session from multiple threads.
