@@ -17,6 +17,15 @@
 //!     along in each frame and the engine applies it when converting to int16.
 //!
 //! - [`CMD_INFO`] (`'I'`): `-> [u16 jsonBytes][utf8 json]`.
+//!
+//! - [`CMD_STATUS`] (`'T'`): `-> [u32 msSinceLastAudio]`. Milliseconds since the host
+//!   last wrote audio to *any* client, or [`u32::MAX`] if it never has. Answered inline
+//!   (not on the serialized synth worker), so it returns immediately even while another
+//!   client is mid-utterance — the pipe server is multi-instance, so a status query and
+//!   an in-flight `CMD_SYNTH` ride separate connections. Lets a peer (the settings panel)
+//!   tell whether Kokoro is *currently* producing audio; the caller applies its own
+//!   debounce, since a reader like Kindle sends one `CMD_SYNTH` per page and this value
+//!   dips between pages rather than going fully idle.
 
 #![no_std]
 
@@ -27,6 +36,9 @@ pub const PIPE_NAME: &str = r"\\.\pipe\KokoroSapiSynth";
 pub const CMD_SYNTH: u8 = b'S';
 /// Command byte: return a small JSON info blob.
 pub const CMD_INFO: u8 = b'I';
+/// Command byte: report `[u32 msSinceLastAudio]` — how long since the host last wrote
+/// audio to any client (`u32::MAX` if never). See the module docs.
+pub const CMD_STATUS: u8 = b'T';
 
 /// Frame-stream marker: the utterance is complete (no gain/samples follow). A leading
 /// u32 >= [`STREAM_END`] is always a control marker, never a real sample count.

@@ -681,7 +681,19 @@ fn main() -> Result<(), slint::PlatformError> {
             let reader_busy = reader_busy.clone();
             std::thread::spawn(move || {
                 let state = kindle_reader::read_state();
+                // Is the host streaming audio right now? Drives the live "Speaking"
+                // indicator. None (host unreachable) reads as not speaking. But the panel's
+                // own intro prefetch also streams from the host (playing nothing), stamping
+                // the same clock — so discount a host reading we just caused ourselves.
+                let host_speaking = preview::host_speaking().unwrap_or(false);
+                let self_synth = preview::self_synth_recent();
                 let _ = weak.upgrade_in_event_loop(move |ui| {
+                    // Speaking = an audible Preview (tracked by `previewing`) OR the host
+                    // streaming for Kindle (host reading that wasn't our own prefetch).
+                    let speaking = ui.get_previewing() || (host_speaking && !self_synth);
+                    if ui.get_speaking() != speaking {
+                        ui.set_speaking(speaking);
+                    }
                     // Re-check reader_busy: a user flip may have started while we
                     // were reading. Only apply a definite state that differs.
                     if !reader_busy.load(Ordering::SeqCst) {
