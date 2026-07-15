@@ -11,7 +11,9 @@
 // come from controls.json in the app-data dir (no webview round-trips).
 
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
@@ -20,7 +22,8 @@ use crate::native_synth::{self, NativeSynth};
 use crate::split_text::split_text;
 // The named-pipe wire format is shared with the SAPI engine (one source of truth).
 use kokoro_protocol::{
-    CHUNK_INFO, CMD_INFO, CMD_SYNTH, MAX_TEXT_BYTES, PIPE_NAME, STREAM_END, SYNTH_ERROR,
+    CHUNK_INFO, CMD_INFO, CMD_STATUS, CMD_SYNTH, MAX_TEXT_BYTES, PIPE_NAME, STREAM_END,
+    SYNTH_ERROR,
 };
 
 // Default send-pacing lead (ms): keep at most this much audio ahead of real time so
@@ -41,6 +44,22 @@ const SAMPLE_RATE: f64 = kokoro_protocol::SAMPLE_RATE as f64;
 pub struct Ctx {
     pub app_data: PathBuf,
     pub native: NativeSynth,
+    /// Wall-clock ms (Unix epoch) when the host last wrote an audio sub-frame to any
+    /// client; 0 until the first synth. Shared across all client tasks (the struct is
+    /// cloned per connection but the `Arc` is one cell), so a `CMD_STATUS` query on the
+    /// panel's connection sees audio streamed on Kindle's connection. Answers "is Kokoro
+    /// producing audio right now?" without any handshake on the synth worker.
+    pub last_audio_ms: Arc<AtomicU64>,
+}
+
+/// Wall-clock milliseconds since the Unix epoch (0 if the clock is before it). Used
+/// for `last_audio_ms`: both the stamp and the `CMD_STATUS` elapsed math run in this
+/// one process, so it needn't be monotonic — a ~2 s debounce tolerates minor skew.
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 /// Per-chunk sentence count from controls.json ("chunk"); pacing lead / sub-frame
@@ -114,6 +133,14 @@ async fn serve_client(mut pipe: NamedPipeServer, ctx: Ctx) -> std::io::Result<()
                 let json = br#"{"provider":"WebGPU(native)","voice":""}"#;
                 pipe.write_all(&(json.len() as u16).to_le_bytes()).await?;
                 pipe.write_all(json).await?;
+            }
+            CMD_STATUS => {
+                // Milliseconds since we last wrote audio to any client (saturating to
+                // u32::MAX, which also covers "never synthesized" where last == 0).
+                // Runs on this client's task, independent of any in-flight CMD_SYNTH.
+                let last = ctx.last_audio_ms.load(Ordering::Relaxed);
+                let elapsed = now_ms().saturating_sub(last).min(u32::MAX as u64) as u32;
+                pipe.write_all(&elapsed.to_le_bytes()).await?;
             }
             CMD_SYNTH => {
                 let mut b4 = [0u8; 4];
@@ -208,6 +235,10 @@ async fn serve_client(mut pipe: NamedPipeServer, ctx: Ctx) -> std::io::Result<()
                         pipe.write_all(&(n as u32).to_le_bytes()).await?;
                         pipe.write_all(&g.to_le_bytes()).await?;
                         pipe.write_all(&pcm[off * 4..(off + n) * 4]).await?;
+                        // Stamp "audio just went out" so a peer's CMD_STATUS can tell
+                        // Kokoro is speaking. Also naturally reads idle while paused
+                        // (the pause branch above writes nothing).
+                        ctx.last_audio_ms.store(now_ms(), Ordering::Relaxed);
                         off += n;
 
                         // Pace: sleep if we're more than `pacing_lead` ahead of real

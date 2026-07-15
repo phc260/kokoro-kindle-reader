@@ -71,7 +71,12 @@ fn start_pipe_server() {
     }
 
     let native = native_synth::NativeSynth::spawn(base, espeak);
-    let ctx = pipe::Ctx { app_data, native };
+    let ctx = pipe::Ctx {
+        app_data,
+        native,
+        // Shared "last audio written" clock the pipe answers CMD_STATUS from.
+        last_audio_ms: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+    };
 
     std::thread::Builder::new()
         .name("kokoro-pipe".into())

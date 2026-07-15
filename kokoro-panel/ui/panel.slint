@@ -162,6 +162,7 @@ export component AppWindow inherits Window {
     in-out property <float> chunk;
     in-out property <bool> kindle-kokoro;
     in-out property <bool> reading;   // Kindle's Assistive reader is on (best-effort)
+    in property <bool> speaking;      // host is streaming audio right now (CMD_STATUS)
     in-out property <bool> paused;    // playback stalled mid-page (controls.json `paused`)
     in property <bool> model-ready;
     in property <bool> downloading;
@@ -231,7 +232,10 @@ export component AppWindow inherits Window {
                     alignment: start;
                     Waveform { }
                     Text {
-                        text: "Voice Engine Ready";
+                        // Doubles as the live "Kokoro is speaking now" readout: the host's
+                        // CMD_STATUS (polled on the reading-state timer) flips `speaking`, and
+                        // the same green equalizer is already animating, so we just retitle it.
+                        text: root.speaking ? "Speaking" : "Voice Engine Ready";
                         color: #7cfc00; // Lawn Green
                         font-weight: 600;
                         vertical-alignment: center;

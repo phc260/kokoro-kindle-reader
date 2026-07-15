@@ -6,8 +6,9 @@
 
 use std::fs::OpenOptions;
 use std::io::{Read, Write};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 // Wire-format constants come from the shared `kokoro-protocol` crate (the same source
 // kokoro-host/pipe.rs and the SAPI engine use), so Preview can't drift from them.
@@ -15,11 +16,33 @@ use std::time::Duration;
 // CHUNK_INFO then [u32 utf16Len][u32 nSamples]. Preview doesn't place SAPI events, so it
 // just skips the 8-byte payload — but it MUST consume the marker or the next u32 read
 // desyncs the whole stream.
-use kokoro_protocol::{CHUNK_INFO, CMD_SYNTH, PIPE_NAME, SAMPLE_RATE, STREAM_END, SYNTH_ERROR};
+use kokoro_protocol::{
+    CHUNK_INFO, CMD_STATUS, CMD_SYNTH, PIPE_NAME, SAMPLE_RATE, STREAM_END, SYNTH_ERROR,
+};
 
 // ERROR_PIPE_BUSY: all pipe instances are momentarily in use; wait and retry. (A
 // Windows error code, not part of the wire protocol, so it stays local.)
 const ERROR_PIPE_BUSY: i32 = 231;
+
+// How recently the host must have written audio for us to call it "speaking". Kindle
+// sends one CMD_SYNTH per page, so CMD_STATUS dips between pages but not to zero — this
+// grace window bridges the page gap so the indicator doesn't flicker off mid-read.
+const SPEAKING_DEBOUNCE_MS: u32 = 1500;
+
+// This panel's OWN synths (Preview + the silent narrator-intro prefetch) also stream
+// audio from the host, so they stamp the very same clock CMD_STATUS reports on — the
+// host can't tell them apart from Kindle. We record when we last synthesized so the
+// "speaking" reading can discount our own prefetch (which plays nothing). The window
+// covers the host's debounce plus slack so a stamp we caused can't linger as "speaking".
+const SELF_SYNTH_GRACE_MS: u64 = SPEAKING_DEBOUNCE_MS as u64 + 500;
+static LAST_SELF_SYNTH_MS: AtomicU64 = AtomicU64::new(0);
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
 
 /// Connect to the pipe, retrying briefly while all instances are busy.
 fn connect() -> Result<std::fs::File, String> {
@@ -49,6 +72,10 @@ fn read_exact(pipe: &mut std::fs::File, n: usize) -> Result<Vec<u8>, String> {
 /// already applied), or an error string. Public so the panel can pre-synthesize
 /// a narrator intro into a buffer ahead of the user pressing Preview.
 pub fn synth(text: &str) -> Result<Vec<f32>, String> {
+    // Mark that WE are about to make the host stream audio, so a status poll that lands
+    // while this runs won't mistake our own synth for Kindle. Stamped again on success
+    // below to also cover the host's post-synth debounce window.
+    LAST_SELF_SYNTH_MS.store(now_ms(), Ordering::Relaxed);
     let mut pipe = connect()?;
 
     // Request: [0x53][f32 rate=1.0][u32 textLen][utf8 text].
@@ -83,7 +110,32 @@ pub fn synth(text: &str) -> Result<Vec<f32>, String> {
             samples.push(v);
         }
     }
+    LAST_SELF_SYNTH_MS.store(now_ms(), Ordering::Relaxed); // cover the host's debounce tail
     Ok(samples)
+}
+
+/// True if this panel ran its own synth (Preview or the intro prefetch) recently enough
+/// that the host would still report "speaking" from it. The poll uses this to discount
+/// our own buffer-warming prefetch — which streams from the host but plays nothing — so
+/// it never lights the indicator. (Preview *playback* is shown via the `previewing`
+/// property instead, so suppressing our synth here doesn't hide a real Preview.)
+pub fn self_synth_recent() -> bool {
+    now_ms().saturating_sub(LAST_SELF_SYNTH_MS.load(Ordering::Relaxed)) < SELF_SYNTH_GRACE_MS
+}
+
+/// Ask the host whether Kokoro is producing audio right now. `Some(true)` if the host
+/// wrote audio within `SPEAKING_DEBOUNCE_MS`, `Some(false)` if it's reachable but idle,
+/// `None` if it can't be reached (host not running). Cheap and non-blocking: a single
+/// connect attempt (no busy-retry) plus a 1-byte request and 4-byte reply, so it's safe
+/// to call on a status-poll tick. The pipe server is multi-instance, so this answers
+/// even while Kindle is mid-page on its own connection.
+pub fn host_speaking() -> Option<bool> {
+    let mut pipe = OpenOptions::new().read(true).write(true).open(PIPE_NAME).ok()?;
+    pipe.write_all(&[CMD_STATUS]).ok()?;
+    pipe.flush().ok()?;
+    let mut b4 = [0u8; 4];
+    pipe.read_exact(&mut b4).ok()?;
+    Some(u32::from_le_bytes(b4) < SPEAKING_DEBOUNCE_MS)
 }
 
 /// Handle to the preview sink that's currently playing (if any), shared between the
