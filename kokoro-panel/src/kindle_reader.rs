@@ -19,11 +19,13 @@
 //   * We do NOT call SetFocus / UIA set_focus: that steals focus from Kindle's content
 //     child, so the shortcut misses. SetForegroundWindow restores the window's own child
 //     focus (the reader), and raw SendInput lands there.
-//   * If the Aa flyout is open it's a focus trap that eats Ctrl+A (the user typically
-//     opened it to reach the Read Aloud toggle by hand). We dismiss it first: the flyout
-//     light-dismisses on Escape, and its presence is observable because the assistive-
-//     reader toggle is only in the UIA tree while the flyout is open (same signal
-//     read_state() uses). So we press Escape until the toggle vanishes, then send Ctrl+A.
+//   * If the Aa flyout OR the Table-of-contents flyout is open, it's a focus trap that
+//     eats Ctrl+A (the user may have opened either one by hand). We dismiss whichever is
+//     open first: both are Kindle's "SideMenu" flyout component (same focus-trap-sentinel
+//     structure), and light-dismiss on Escape. Presence is observable via a distinctive
+//     child AutomationId each hosts - the assistive-reader toggle for Aa (same signal
+//     read_state() uses), the "ToC" group itself for the contents panel. So we press
+//     Escape until neither is present, then send Ctrl+A.
 //
 // State readback is unreliable (the toggle is only in the tree while the Aa menu is
 // open), so the panel switch is a blind toggle that tracks its own intent; read_state()
@@ -40,6 +42,9 @@ use uiautomation::types::ToggleState;
 use uiautomation::{UIAutomation, UIElement};
 
 const TOGGLE_ID: &str = "ToggleButton-Assistive reader toggle";
+// The Table-of-contents flyout has no toggle to key off (unlike the Aa flyout), but the
+// flyout's own AutomationId is just as distinctive and only appears while it's open.
+const TOC_ID: &str = "ToC";
 
 /// Drive Kindle's Assistive reader (Read Aloud) to `want` (true = reading) by
 /// foregrounding Kindle and sending its Ctrl+A toggle shortcut. Since Ctrl+A blindly
@@ -61,8 +66,8 @@ pub fn set_read_aloud(want: bool) -> Result<bool, String> {
     foreground(hwnd.into());
     // Let the foreground switch settle so the keystroke lands on Kindle's reader.
     std::thread::sleep(Duration::from_millis(300));
-    // If the Aa flyout is open it traps Ctrl+A; dismiss it first (see module note).
-    dismiss_aa_flyout(&auto, &kindle);
+    // If the Aa or ToC flyout is open it traps Ctrl+A; dismiss it first (see module note).
+    dismiss_open_flyout(&auto, &kindle);
     send_ctrl_a();
 
     Ok(want)
@@ -120,15 +125,18 @@ fn foreground(hwnd: windows::Win32::Foundation::HWND) {
     }
 }
 
-/// If Kindle's Page-settings ("Aa") flyout is open it swallows the Ctrl+A toggle, so
-/// close it before sending the shortcut. The flyout light-dismisses on Escape, and it's
-/// open exactly when the assistive-reader toggle is present in the UIA tree (the flyout
-/// hosts it). Press Escape until the toggle disappears (up to a few tries), so we never
+/// If Kindle's Page-settings ("Aa") or Table-of-contents flyout is open it swallows the
+/// Ctrl+A toggle, so close it before sending the shortcut. Both are the same "SideMenu"
+/// flyout component and light-dismiss on Escape; each is open exactly when its
+/// distinctive child (the assistive-reader toggle, or the ToC group itself) is present in
+/// the UIA tree. Press Escape until neither is present (up to a few tries), so we never
 /// send a stray Escape into the reader when no flyout is open. Best-effort: if it won't
 /// close we fall through and send Ctrl+A anyway.
-fn dismiss_aa_flyout(auto: &UIAutomation, kindle: &UIElement) {
+fn dismiss_open_flyout(auto: &UIAutomation, kindle: &UIElement) {
     for _ in 0..3 {
-        if find_by_id(auto, kindle, TOGGLE_ID).is_none() {
+        let open = find_by_id(auto, kindle, TOGGLE_ID).is_some()
+            || find_by_id(auto, kindle, TOC_ID).is_some();
+        if !open {
             return; // no flyout open — leave the reader untouched
         }
         send_escape();
