@@ -19,8 +19,11 @@
 //   * We do NOT call SetFocus / UIA set_focus: that steals focus from Kindle's content
 //     child, so the shortcut misses. SetForegroundWindow restores the window's own child
 //     focus (the reader), and raw SendInput lands there.
-//   * If the Aa flyout happens to be open it's a focus trap that eats Ctrl+A. That's not
-//     a normal reading state, so we don't guard for it; the switch just flips again.
+//   * If the Aa flyout is open it's a focus trap that eats Ctrl+A (the user typically
+//     opened it to reach the Read Aloud toggle by hand). We dismiss it first: the flyout
+//     light-dismisses on Escape, and its presence is observable because the assistive-
+//     reader toggle is only in the UIA tree while the flyout is open (same signal
+//     read_state() uses). So we press Escape until the toggle vanishes, then send Ctrl+A.
 //
 // State readback is unreliable (the toggle is only in the tree while the Aa menu is
 // open), so the panel switch is a blind toggle that tracks its own intent; read_state()
@@ -58,6 +61,8 @@ pub fn set_read_aloud(want: bool) -> Result<bool, String> {
     foreground(hwnd.into());
     // Let the foreground switch settle so the keystroke lands on Kindle's reader.
     std::thread::sleep(Duration::from_millis(300));
+    // If the Aa flyout is open it traps Ctrl+A; dismiss it first (see module note).
+    dismiss_aa_flyout(&auto, &kindle);
     send_ctrl_a();
 
     Ok(want)
@@ -112,6 +117,50 @@ fn foreground(hwnd: windows::Win32::Foundation::HWND) {
         let _ = BringWindowToTop(hwnd);
         let _ = AttachThreadInput(cur, fg_thread, false);
         let _ = AttachThreadInput(cur, target_thread, false);
+    }
+}
+
+/// If Kindle's Page-settings ("Aa") flyout is open it swallows the Ctrl+A toggle, so
+/// close it before sending the shortcut. The flyout light-dismisses on Escape, and it's
+/// open exactly when the assistive-reader toggle is present in the UIA tree (the flyout
+/// hosts it). Press Escape until the toggle disappears (up to a few tries), so we never
+/// send a stray Escape into the reader when no flyout is open. Best-effort: if it won't
+/// close we fall through and send Ctrl+A anyway.
+fn dismiss_aa_flyout(auto: &UIAutomation, kindle: &UIElement) {
+    for _ in 0..3 {
+        if find_by_id(auto, kindle, TOGGLE_ID).is_none() {
+            return; // no flyout open — leave the reader untouched
+        }
+        send_escape();
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
+/// Synthesize a single Escape keypress with raw SendInput (same rationale as send_ctrl_a:
+/// bypass the uiautomation crate's focus-stealing send_keys). Lands on Kindle's reader,
+/// light-dismissing any open flyout.
+fn send_escape() {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
+        VIRTUAL_KEY, VK_ESCAPE,
+    };
+    fn key(vk: u16, up: bool) -> INPUT {
+        INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: VIRTUAL_KEY(vk),
+                    wScan: 0,
+                    dwFlags: if up { KEYEVENTF_KEYUP } else { KEYBD_EVENT_FLAGS(0) },
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        }
+    }
+    let inputs = [key(VK_ESCAPE.0, false), key(VK_ESCAPE.0, true)];
+    unsafe {
+        SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
     }
 }
 
