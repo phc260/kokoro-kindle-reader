@@ -459,7 +459,14 @@ fn main() -> Result<(), slint::PlatformError> {
     // driving a determinate progress bar (verify-frac) as the data is checked, and
     // repair-flag any corrupt files. Success is silent (the card returns to "Model
     // ready"); only a repair surfaces a status line.
-    if download::model_complete(&app_data) {
+    //
+    // Debug builds skip this hash-check: re-reading the whole multi-hundred-MB model on
+    // every relaunch is wasted work in dev, and `model_complete` above already reported
+    // the model ready. We still warm the preview buffer as the verify path would on
+    // success. (`cfg!` keeps both arms compiling, so `verify_running` stays live.)
+    if download::model_complete(&app_data) && cfg!(debug_assertions) {
+        prefetch_for_current(&ui, &voices, &preview_cache, &preview_gen);
+    } else if download::model_complete(&app_data) {
         verify_running.store(true, Ordering::SeqCst);
         ui.set_verifying(true);
         ui.set_verify_frac(0.0);
