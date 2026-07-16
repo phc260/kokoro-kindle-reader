@@ -6,7 +6,7 @@
 
 use std::fs::OpenOptions;
 use std::io::{Read, Write};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -36,6 +36,30 @@ const SPEAKING_DEBOUNCE_MS: u32 = 1500;
 // covers the host's debounce plus slack so a stamp we caused can't linger as "speaking".
 const SELF_SYNTH_GRACE_MS: u64 = SPEAKING_DEBOUNCE_MS as u64 + 500;
 static LAST_SELF_SYNTH_MS: AtomicU64 = AtomicU64::new(0);
+
+// Whether a self-synth is in flight right now. A cold first synth (model/WebGPU
+// warm-up) can run well past SELF_SYNTH_GRACE_MS, so the time-window check alone
+// isn't enough to cover its whole duration — this flag closes that gap regardless
+// of how long the synth takes.
+static SELF_SYNTH_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+/// Marks a self-synth as active for its lifetime; stamps the grace-window clock on drop
+/// (covering the host's post-synth debounce tail) whether the synth succeeded or errored.
+struct SelfSynthGuard;
+
+impl SelfSynthGuard {
+    fn start() -> Self {
+        SELF_SYNTH_ACTIVE.store(true, Ordering::Relaxed);
+        SelfSynthGuard
+    }
+}
+
+impl Drop for SelfSynthGuard {
+    fn drop(&mut self) {
+        LAST_SELF_SYNTH_MS.store(now_ms(), Ordering::Relaxed);
+        SELF_SYNTH_ACTIVE.store(false, Ordering::Relaxed);
+    }
+}
 
 fn now_ms() -> u64 {
     SystemTime::now()
@@ -73,9 +97,10 @@ fn read_exact(pipe: &mut std::fs::File, n: usize) -> Result<Vec<u8>, String> {
 /// a narrator intro into a buffer ahead of the user pressing Preview.
 pub fn synth(text: &str) -> Result<Vec<f32>, String> {
     // Mark that WE are about to make the host stream audio, so a status poll that lands
-    // while this runs won't mistake our own synth for Kindle. Stamped again on success
-    // below to also cover the host's post-synth debounce window.
-    LAST_SELF_SYNTH_MS.store(now_ms(), Ordering::Relaxed);
+    // while this runs won't mistake our own synth for Kindle. Held for the whole call
+    // (guard drops on every return path, success or `?`), so a slow cold-start synth
+    // stays covered instead of only the first SELF_SYNTH_GRACE_MS.
+    let _guard = SelfSynthGuard::start();
     let mut pipe = connect()?;
 
     // Request: [0x53][f32 rate=1.0][u32 textLen][utf8 text].
@@ -110,7 +135,6 @@ pub fn synth(text: &str) -> Result<Vec<f32>, String> {
             samples.push(v);
         }
     }
-    LAST_SELF_SYNTH_MS.store(now_ms(), Ordering::Relaxed); // cover the host's debounce tail
     Ok(samples)
 }
 
@@ -120,7 +144,8 @@ pub fn synth(text: &str) -> Result<Vec<f32>, String> {
 /// it never lights the indicator. (Preview *playback* is shown via the `previewing`
 /// property instead, so suppressing our synth here doesn't hide a real Preview.)
 pub fn self_synth_recent() -> bool {
-    now_ms().saturating_sub(LAST_SELF_SYNTH_MS.load(Ordering::Relaxed)) < SELF_SYNTH_GRACE_MS
+    SELF_SYNTH_ACTIVE.load(Ordering::Relaxed)
+        || now_ms().saturating_sub(LAST_SELF_SYNTH_MS.load(Ordering::Relaxed)) < SELF_SYNTH_GRACE_MS
 }
 
 /// Ask the host whether Kokoro is producing audio right now. `Some(true)` if the host
