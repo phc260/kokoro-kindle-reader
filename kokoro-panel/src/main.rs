@@ -506,29 +506,73 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     }
 
-    // --- Kindle-voice toggle (persist only) ---
-    // Just records `kindle_kokoro` in controls.json. The host's Kindle-watcher reads this
-    // flag live and injects (or doesn't) the Kokoro hook on Kindle's next launch — no UAC,
-    // no elevated guard, nothing to fail, so no busy state or revert.
+    // Set while the panel is driving Kindle (toggle flips, closing) and briefly after,
+    // so the state poll below doesn't read a stale value mid-flip and fight the switch.
+    let reader_busy = Arc::new(AtomicBool::new(false));
+
+    // --- Kindle-voice toggle (confirm, persist, close Kindle) ---
+    // The `kindle_kokoro` flag only lands on Kindle's next launch (the host's watcher
+    // injects — or doesn't — the hook then), so a click first raises a Yes/No dialog:
+    // Yes persists the flag and closes Kindle (the user reopens it, picking up the
+    // change); No reverts the checkbox and persists nothing.
+    {
+        let ui_weak = ui.as_weak();
+        ui.on_kindle_toggled(move |desired| {
+            // The checkbox already flipped optimistically (two-way binding); hold the
+            // desired value in the dialog, unpersisted, until the user confirms.
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_confirm_target(desired);
+                ui.set_confirm_visible(true);
+            }
+        });
+    }
     {
         let ui_weak = ui.as_weak();
         let controls = controls.clone();
-        ui.on_kindle_toggled(move |desired| {
+        let reader_busy = reader_busy.clone();
+        ui.on_confirm_kindle(move |accepted| {
+            let Some(ui) = ui_weak.upgrade() else { return };
+            ui.set_confirm_visible(false);
+            let desired = ui.get_confirm_target();
+            if !accepted {
+                ui.set_kindle_kokoro(!desired); // undo the optimistic checkbox flip
+                return;
+            }
             {
                 let mut c = controls.lock().unwrap();
                 c.kindle_kokoro = desired;
                 c.save();
             }
-            if let Some(ui) = ui_weak.upgrade() {
-                ui.set_status(
-                    if desired {
-                        "Kokoro will narrate Kindle. Reopen Kindle if it's already open."
-                    } else {
-                        "Kindle will use its own voice on next launch."
-                    }
-                    .into(),
-                );
-            }
+            ui.set_status(
+                if desired {
+                    "Kokoro will narrate Kindle. Closing Kindle..."
+                } else {
+                    "Kindle will use its own voice. Closing Kindle..."
+                }
+                .into(),
+            );
+            // Close Kindle on a background thread (blocking Win32). reader_busy keeps
+            // the state poll from racing a UIA lookup against Kindle disappearing.
+            reader_busy.store(true, Ordering::SeqCst);
+            let weak = ui_weak.clone();
+            let reader_busy = reader_busy.clone();
+            std::thread::spawn(move || {
+                let res = kindle_reader::close();
+                let _ = weak.upgrade_in_event_loop(move |ui| {
+                    ui.set_status(
+                        match res {
+                            Ok(()) => {
+                                "Kindle closed - reopen it to pick up the change.".to_string()
+                            }
+                            Err(e) => {
+                                format!("{e} The change applies the next time Kindle opens.")
+                            }
+                        }
+                        .into(),
+                    );
+                });
+                reader_busy.store(false, Ordering::SeqCst);
+            });
         });
     }
 
@@ -583,10 +627,6 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     }
 
-    // Set while the panel is driving Kindle's toggle (and briefly after), so the
-    // state poll below doesn't read a stale value mid-flip and fight the switch.
-    let reader_busy = Arc::new(AtomicBool::new(false));
-
     // --- Read Aloud (drive Kindle's Assistive reader via UI Automation) ---
     // The switch already flipped `reading` optimistically; `want` is that new value.
     // Drive Kindle to match, then write back the real state (revert on failure).
@@ -633,7 +673,7 @@ fn main() -> Result<(), slint::PlatformError> {
                 // Kindle updates the toggle's UIA state asynchronously; hold the
                 // poll off a moment longer so it doesn't read the pre-flip value
                 // and bounce the switch back.
-                std::thread::sleep(Duration::from_millis(100));
+                std::thread::sleep(Duration::from_millis(500));
                 reader_busy.store(false, Ordering::SeqCst);
             });
         });
@@ -669,7 +709,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let weak = ui.as_weak();
         let poll_busy = Arc::new(AtomicBool::new(false));
         let reader_busy = reader_busy.clone();
-        poll_timer.start(slint::TimerMode::Repeated, Duration::from_millis(100), move || {
+        poll_timer.start(slint::TimerMode::Repeated, Duration::from_millis(500), move || {
             if reader_busy.load(Ordering::SeqCst) {
                 return;
             }
@@ -701,6 +741,13 @@ fn main() -> Result<(), slint::PlatformError> {
                             if ui.get_reading() != on {
                                 ui.set_reading(on);
                             }
+                        } else if host_speaking && !self_synth && !ui.get_reading() {
+                            // No definite toggle state (Aa menu closed — the common case),
+                            // but the host is streaming for Kindle, which only happens
+                            // during Read Aloud: flip the switch on. Covers a panel opened
+                            // mid-narration, which would otherwise start (and stay) off.
+                            // One-way: quiet ≠ not reading (page gaps, pause, slow synth).
+                            ui.set_reading(true);
                         }
                     }
                 });

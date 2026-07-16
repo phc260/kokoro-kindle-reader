@@ -34,17 +34,75 @@
 // Blocking + COM-heavy; call it on a background thread (COM is initialised per thread by
 // UIAutomation::new()), never on the Slint UI thread.
 
+use std::mem::size_of;
 use std::time::Duration;
 
 use uiautomation::filters::FnFilter;
 use uiautomation::patterns::UITogglePattern;
 use uiautomation::types::ToggleState;
 use uiautomation::{UIAutomation, UIElement};
+use windows::core::BOOL;
+use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM};
+use windows::Win32::System::Diagnostics::ToolHelp::{
+    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
+};
 
 const TOGGLE_ID: &str = "ToggleButton-Assistive reader toggle";
 // The Table-of-contents flyout has no toggle to key off (unlike the Aa flyout), but the
 // flyout's own AutomationId is just as distinctive and only appears while it's open.
 const TOC_ID: &str = "ToC";
+const TARGET_EXE: &str = "Kindle.exe";
+
+/// PID of the first process named `name`, if running. Matches the process **image
+/// name**, not a window title — locale-independent, unlike the UIA "Kindle"-named-window
+/// matcher this module otherwise uses. Same technique as kokoro-host's kindle-watch and
+/// kokoro-inject, which already rely on it to find Kindle.
+fn find_pid(name: &str) -> Option<u32> {
+    unsafe {
+        let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0).ok()?;
+        let mut pe = PROCESSENTRY32W { dwSize: size_of::<PROCESSENTRY32W>() as u32, ..Default::default() };
+        let mut found = None;
+        if Process32FirstW(snap, &mut pe).is_ok() {
+            loop {
+                let end = pe.szExeFile.iter().position(|&c| c == 0).unwrap_or(pe.szExeFile.len());
+                if String::from_utf16_lossy(&pe.szExeFile[..end]).eq_ignore_ascii_case(name) {
+                    found = Some(pe.th32ProcessID);
+                    break;
+                }
+                if Process32NextW(snap, &mut pe).is_err() {
+                    break;
+                }
+            }
+        }
+        let _ = CloseHandle(snap);
+        found
+    }
+}
+
+/// Find a visible top-level window owned by `pid` — Kindle's main window. A process can
+/// own several windows (tooltips, hidden helpers); filtering on `IsWindowVisible` picks
+/// the one that's actually on screen.
+fn find_window_for_pid(pid: u32) -> Option<HWND> {
+    unsafe extern "system" fn callback(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        use windows::Win32::UI::WindowsAndMessaging::{GetWindowThreadProcessId, IsWindowVisible};
+        let ctx = unsafe { &mut *(lparam.0 as *mut (u32, Option<HWND>)) };
+        let mut window_pid = 0u32;
+        unsafe { GetWindowThreadProcessId(hwnd, Some(&mut window_pid)) };
+        if window_pid == ctx.0 && unsafe { IsWindowVisible(hwnd) }.as_bool() {
+            ctx.1 = Some(hwnd);
+            return BOOL(0); // found it — stop enumeration
+        }
+        BOOL(1) // keep going
+    }
+    use windows::Win32::UI::WindowsAndMessaging::EnumWindows;
+    let mut ctx: (u32, Option<HWND>) = (pid, None);
+    unsafe {
+        // EnumWindows returns an error when the callback stops early (BOOL(0)) — that's
+        // our success path, not a failure, so the result is intentionally discarded.
+        let _ = EnumWindows(Some(callback), LPARAM(&mut ctx as *mut _ as isize));
+    }
+    ctx.1
+}
 
 /// Drive Kindle's Assistive reader (Read Aloud) to `want` (true = reading) by
 /// foregrounding Kindle and sending its Ctrl+A toggle shortcut. Since Ctrl+A blindly
@@ -93,6 +151,26 @@ pub fn read_state() -> Option<bool> {
         Ok(ToggleState::Off) => Some(false),
         _ => None,
     }
+}
+
+/// Close Kindle — for testing kindle-watch's hook re-injection, which only fires on
+/// Kindle's *next launch* (the in-memory SetVoice patch has no persistence, so flipping
+/// "Narrate Kindle with Kokoro" while Kindle is already open has no effect until it
+/// restarts). Relaunching is left to the user — MSIX/Desktop-Bridge packaged apps aren't
+/// reliably relaunched via a raw CreateProcess on their exe path, so this only closes.
+/// Best-effort: returns Err with a user-facing message on any failure; never panics.
+/// Blocking — call on a background thread, same as the rest of this module.
+pub fn close() -> Result<(), String> {
+    use windows::Win32::Foundation::WPARAM;
+    use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_CLOSE};
+
+    let pid = find_pid(TARGET_EXE).ok_or_else(|| "Kindle isn't running.".to_string())?;
+    let hwnd =
+        find_window_for_pid(pid).ok_or_else(|| "couldn't find Kindle's window.".to_string())?;
+
+    // WM_CLOSE (not TerminateProcess) so Kindle gets to save/prompt like a normal quit.
+    unsafe { PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0)) }
+        .map_err(|e| format!("couldn't close Kindle: {e}"))
 }
 
 /// Force `hwnd` to the foreground, defeating Windows' foreground-lock (which blocks a
