@@ -173,6 +173,12 @@ export component AppWindow inherits Window {
     in property <bool> previewing;
     in property <string> status;
 
+    // Lower controls (narrator + sliders + transport) are live only when the engine
+    // card reads "Voice Engine Ready" (model present, not mid download/verify) AND
+    // Kindle narration is enabled. Mirrors the "Voice Engine Ready" card's condition
+    // so the controls light up exactly when it does.
+    property <bool> controls-active: root.model-ready && !root.downloading && !root.verifying && root.kindle-kokoro;
+
     // --- events (handled in Rust) ---
     callback accent-changed(int);
     callback gender-changed(int);
@@ -283,24 +289,24 @@ export component AppWindow inherits Window {
             spacing: 8px;
             alignment: start;
             if !root.reading && !root.previewing: PlayButton {
-                enabled: root.model-ready && root.kindle-kokoro;
+                enabled: root.controls-active;
                 clicked => { root.preview-clicked(); }
                 // Label lives in a hover tooltip. Tooltip.text is styled-text,
                 // so wrap the literal in @markdown.
                 Tooltip { text: @markdown("Preview voice"); }
             }
             if !root.reading && root.previewing: StopButton {
-                enabled: root.model-ready && root.kindle-kokoro;
+                enabled: root.controls-active;
                 clicked => { root.stop-clicked(); }
                 Tooltip { text: @markdown("Stop preview"); }
             }
             if root.reading && !root.paused: PauseButton {
-                enabled: root.model-ready && root.kindle-kokoro;
+                enabled: root.controls-active;
                 clicked => { root.pause-toggled(true); }
                 Tooltip { text: @markdown("Pause"); }
             }
             if root.reading && root.paused: ResumeButton {
-                enabled: root.model-ready && root.kindle-kokoro;
+                enabled: root.controls-active;
                 clicked => { root.pause-toggled(false); }
                 Tooltip { text: @markdown("Resume"); }
             }
@@ -313,7 +319,7 @@ export component AppWindow inherits Window {
                 text: "Narrator";
                 font-size: 15px;
                 vertical-alignment: center;
-                opacity: root.kindle-kokoro ? 1.0 : 0.5; // dim heading with its dropdowns
+                opacity: root.controls-active ? 1.0 : 0.5; // dim heading with its dropdowns
             }
             HorizontalLayout {
                 spacing: 8px;
@@ -322,21 +328,21 @@ export component AppWindow inherits Window {
                 ComboBox {
                     model: root.accents;
                     current-index <=> root.accent-index;
-                    enabled: root.kindle-kokoro;
+                    enabled: root.controls-active;
                     width: 120px;
                     selected => { root.accent-changed(self.current-index); }
                 }
                 ComboBox {
                     model: root.genders;
                     current-index <=> root.gender-index;
-                    enabled: root.kindle-kokoro;
+                    enabled: root.controls-active;
                     width: 100px;
                     selected => { root.gender-changed(self.current-index); }
                 }
                 ComboBox {
                     model: root.names;
                     current-index <=> root.name-index;
-                    enabled: root.kindle-kokoro;
+                    enabled: root.controls-active;
                     horizontal-stretch: 1;
 min-width: 100px;
                     selected => { root.name-changed(self.current-index); }
@@ -351,7 +357,7 @@ min-width: 100px;
             minimum: 0.5;
             maximum: 2.0;
             step: 0.10; // 10% increments
-            enabled: root.kindle-kokoro;
+            enabled: root.controls-active;
             value <=> root.speed;
             changed(v) => { root.speed-changed(v); }
         }
@@ -361,7 +367,7 @@ min-width: 100px;
             minimum: 0.0;
             maximum: 2.0;
             step: 0.10; // 10% increments
-            enabled: root.kindle-kokoro;
+            enabled: root.controls-active;
             value <=> root.gain;
             changed(v) => { root.gain-changed(v); }
         }
@@ -371,7 +377,7 @@ min-width: 100px;
             minimum: 1.0;
             maximum: 8.0;
             step: 1.0;
-            enabled: root.kindle-kokoro;
+            enabled: root.controls-active;
             value <=> root.chunk;
             changed(v) => { root.chunk-changed(v); }
         }
