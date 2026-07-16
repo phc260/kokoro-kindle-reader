@@ -6,9 +6,9 @@ Verify that the project's **documentation and cross-file invariants** still matc
 current code, and fix anything stale. This is a *targeted accuracy pass*, not a rewrite
 and not a repo-wide comment audit — only change what is actually wrong or newly missing.
 
-Scope is deliberately bounded to two things: the three doc files, and a short list of
-facts that are duplicated across files (so editing one file can silently invalidate
-another). Do **not** scan every inline comment — comments adjacent to code are fixed at
+Scope is deliberately bounded to two things: the doc files listed below, and a short
+list of facts that are duplicated across files (so editing one file can silently
+invalidate another). Do **not** scan every inline comment — comments adjacent to code are fixed at
 edit time and caught by `/code-review` on the diff.
 
 ## 1. Documentation files
@@ -20,8 +20,13 @@ this" material) — don't pad.
   controls it describes, tuning advice, badges/links resolve.
 - `CLAUDE.md` — the gotchas/invariants and the architecture descriptions.
 - `ARCHITECTURE.md` — the engine chain, streaming/pacing model, Layout table, build steps.
+- `DEVELOPMENT.md` — contributor workflow: the CI table matches the workflows under
+  `.github/workflows/` (triggers + what each builds), the release steps match
+  `installer.yml` (v* tag → draft release; publishing stays manual), and the
+  clone-don't-use-release-archives guidance (Git LFS) stays true.
 - **Per-crate READMEs** — `kokoro-host/`, `kokoro-panel/`, `kokoro-protocol/`,
-  `kokoro-sapi/`, `kokoro-sapi-smoke/`, `native-deps/`. These are deliberately *thin
+  `kokoro-sapi/`, `kokoro-sapi-smoke/`, `kokoro-hook/`, `kokoro-inject/`, `native-deps/`.
+  These are deliberately *thin
   pointers* (orient + the load-bearing gotcha + a link to `CLAUDE.md`/`ARCHITECTURE.md`),
   so keep them thin: check their Layout tables list the files that actually exist, their
   build/run snippets still run, and any invariant they restate agrees with `CLAUDE.md`.

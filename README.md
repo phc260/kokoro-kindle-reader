@@ -35,9 +35,10 @@ runs entirely on your machine. kokoro-kindle-reader is two things in one app:
 2. Run it. It installs just for you (no machine-wide changes), then raises a single
    Windows UAC prompt to register the Kokoro voice. Kindle narration with Kokoro is
    on by default — the app enables it automatically the next time Kindle runs.
-3. Launch **kokoro-kindle-reader**. On first run it downloads the voice model
-   (~430 MB) — a one-time setup wizard walks you through it. After that it works
-   fully offline.
+3. Let the installer start the app (or launch **kokoro-kindle-reader** yourself) — it
+   runs quietly in the **system tray**, no window. Right-click the tray icon, choose
+   **Settings**, and click **Download** to fetch the voice model (~430 MB, one time).
+   After that it works fully offline.
 
 The app synthesizes on your GPU via WebGPU, so a **discrete GPU** (e.g. NVIDIA/AMD)
 gives smooth, faster-than-realtime narration — tested smooth on an NVIDIA GTX 1060.
@@ -50,6 +51,11 @@ kokoro-kindle-reader runs in the **system tray**. Right-click the tray icon and 
 **Settings** to open the control panel — it's where you choose and audition the
 voice, not a place to paste text. Whatever you set here is exactly what Kindle (and
 the SAPI voice) uses when it reads.
+
+The card at the top is the engine's status: it shows the model download, a quick
+**file check** on each launch, then **Voice Engine Ready** — and flips to **Speaking**
+live whenever Kokoro is narrating. The narrator and slider controls below stay greyed
+out until the engine is ready and **Narrate Kindle with Kokoro** is ticked.
 
 1. Pick a **Narrator** with the three dropdowns (accent, gender, and name).
 2. Adjust **Speed** and **Volume**, and **Sentences per chunk** if you want.
@@ -100,8 +106,15 @@ don't need to touch it.
   Kokoro** is ticked in Settings, confirm the app is running, then reopen Kindle.
 - **A switch didn't take effect** — fully close and reopen Kindle after changing
   the voice.
-- **First launch is slow** — that's the one-time model download (~430 MB).
-  Subsequent launches are fast and offline.
+- **The narrator and sliders are greyed out** — the engine isn't ready yet (model
+  still downloading, or the launch-time "Checking model files" pass is running) or
+  **Narrate Kindle with Kokoro** is unticked. They light up when the status card
+  says **Voice Engine Ready** and the box is ticked.
+- **Settings shows "Checking model files" for a while after opening** — that's a
+  quick integrity check of the downloaded model, normal on every launch. If it finds
+  a corrupt file it asks you to click Download to repair it.
+- **First run needs a download** — the voice model (~430 MB) fetches once, via the
+  Download button in Settings. Everything is offline after that.
 - **Narration lags behind pages / synthesis feels slow** — synthesis runs on your
   GPU; on a laptop with no discrete GPU (integrated graphics only) it can run
   slower than realtime. There's no CPU fallback, so this is expected on that
@@ -120,4 +133,5 @@ launches — which is why narration works with no manual voice-switching.
 
 If you're curious about the engine chain, the wire protocol, the Kindle voice
 registry/hive details, or want to **build from source**, see
-[**ARCHITECTURE.md**](ARCHITECTURE.md).
+[**ARCHITECTURE.md**](ARCHITECTURE.md). Contributor workflow (getting the source,
+CI, releasing) is in [**DEVELOPMENT.md**](DEVELOPMENT.md).
