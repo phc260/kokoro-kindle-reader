@@ -83,7 +83,7 @@ pub fn read_state() -> Option<bool> {
     let kindle = auto
         .create_matcher()
         .name("Kindle")
-        .timeout(800)
+        .timeout(1000)
         .find_first()
         .ok()?;
     let toggle = find_by_id(&auto, &kindle, TOGGLE_ID)?;
@@ -140,7 +140,7 @@ fn dismiss_open_flyout(auto: &UIAutomation, kindle: &UIElement) {
             return; // no flyout open — leave the reader untouched
         }
         send_escape();
-        std::thread::sleep(Duration::from_millis(200));
+        std::thread::sleep(Duration::from_millis(1000));
     }
 }
 
