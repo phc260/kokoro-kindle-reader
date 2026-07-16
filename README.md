@@ -39,8 +39,10 @@ runs entirely on your machine. kokoro-kindle-reader is two things in one app:
    (~430 MB) — a one-time setup wizard walks you through it. After that it works
    fully offline.
 
-The app synthesizes on your GPU via WebGPU, so a reasonably modern GPU gives the
-best results.
+The app synthesizes on your GPU via WebGPU, so a **discrete GPU** (e.g. NVIDIA/AMD)
+gives smooth, faster-than-realtime narration — tested smooth on an NVIDIA GTX 1060.
+Laptops with only an **integrated GPU and no dedicated one** can fall well behind
+realtime — narration will work, but may lag noticeably behind Kindle's pages.
 
 ## Using the app
 
@@ -52,8 +54,8 @@ the SAPI voice) uses when it reads.
 1. Pick a **Narrator** with the three dropdowns (accent, gender, and name).
 2. Adjust **Speed** and **Volume**, and **Sentences per chunk** if you want.
 3. Tick **Narrate Kindle with Kokoro** to make Kindle read with Kokoro; untick it
-   to hand Kindle back its built-in voice. No admin prompt — the change takes
-   effect the next time you open Kindle.
+   to hand Kindle back its built-in voice. No admin prompt. A Yes/No prompt confirms
+   the change and closes Kindle for you — reopen it afterward to pick up the new voice.
 4. Click **Preview** to hear the selected narrator read a short sample line.
 
 Your choices are saved and applied to Kindle's **next page** automatically — no
@@ -64,8 +66,9 @@ restart needed.
 1. Make sure **kokoro-kindle-reader is running** (it's the voice engine — no app, no
    sound). It lives in the system tray and auto-starts at login.
 2. Tick **Narrate Kindle with Kokoro** in Settings if it isn't already (it's on by
-   default). Untick it anytime to restore Kindle's built-in voice.
-3. **Reopen Kindle** after switching so it picks up the new voice.
+   default). Untick it anytime to restore Kindle's built-in voice. Either way,
+   confirming the prompt closes Kindle for you.
+3. **Reopen Kindle** so it picks up the new voice.
 4. In Kindle, start **Read Aloud** as usual — it now speaks with Kokoro, using the
    narrator, speed, and volume you set in the app.
 
@@ -78,11 +81,10 @@ Once narration is underway you can **Pause** and **Resume** it from the panel wi
 switching windows — playback stalls in place and picks up exactly where it left off, so
 you never lose your spot.
 
-The panel also has a **Read Aloud** switch that can start and stop Kindle's narration.
-Because of how recent Kindle builds (1.0.18632+) are made, it can only flip that control
-while Kindle's **Aa** (Page settings) menu is open — with the menu closed, just start
-Read Aloud from Kindle itself as above. Either way the switch mirrors Read Aloud's
-current state so it stays in sync with what you do inside Kindle.
+The panel also has a **Read Aloud** switch that starts and stops Kindle's narration
+directly (it briefly brings Kindle to the front to do so) — no need to open Kindle's
+**Aa** menu first. It mirrors Read Aloud's current state so it stays in sync with what
+you do inside Kindle, whichever side toggles it.
 
 ### Tuning Kindle playback
 
@@ -100,6 +102,10 @@ don't need to touch it.
   the voice.
 - **First launch is slow** — that's the one-time model download (~430 MB).
   Subsequent launches are fast and offline.
+- **Narration lags behind pages / synthesis feels slow** — synthesis runs on your
+  GPU; on a laptop with no discrete GPU (integrated graphics only) it can run
+  slower than realtime. There's no CPU fallback, so this is expected on that
+  hardware, not a bug.
 
 ## How it works
 

@@ -2,8 +2,9 @@
 // correctness-critical chunking. Pure (no external deps).
 
 /// Split an utterance into sentence chunks for streaming. We ramp up: the FIRST
-/// chunk is a single sentence (so audio starts quickly), then chunks coalesce
-/// `sentences_per_chunk` sentences each (fewer round-trips / inter-chunk seams).
+/// chunk is a single sentence (so audio starts quickly), then each chunk's target
+/// sentence count doubles (1, 2, 4, ...) up to `sentences_per_chunk` (fewer
+/// round-trips / inter-chunk seams once the pipeline has a playback buffer built up).
 /// Boundaries are `. ! ?` (followed by whitespace / a closing quote / end) and
 /// newlines; decimals ("3.14") and ellipses are not boundaries. A single sentence
 /// that runs past `SOFT_CAP` is split at its last clause boundary (`, ; :`) so a

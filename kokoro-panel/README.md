@@ -20,10 +20,10 @@ cargo run   # or launch it from the host's tray → Settings
 | File | What |
 |---|---|
 | `ui/panel.slint` | The Fluent UI (sliders, narrator dropdown, Preview + transport buttons, "Narrate Kindle with Kokoro" checkbox, Read Aloud switch). |
-| `src/main.rs` | Wires the Slint UI to the modules below; background work runs on threads and pushes results back via `upgrade_in_event_loop`. The Kindle checkbox just persists `kindle_kokoro`. |
+| `src/main.rs` | Wires the Slint UI to the modules below; background work runs on threads and pushes results back via `upgrade_in_event_loop`. The Kindle-narration checkbox raises a Yes/No confirm dialog; Yes persists `kindle_kokoro` and closes Kindle (the flag only lands on Kindle's next launch), No reverts the checkbox. |
 | `src/download.rs` | Model download/verify (framework-agnostic). |
 | `src/preview.rs` | Synth via the host pipe + rodio playback. |
-| `src/kindle_reader.rs` | Toggles Kindle's "Assistive reader" (Read Aloud) via UI Automation. Rescoped: acts only while Kindle's Aa menu is open (that flyout can't be opened programmatically on 18632). |
+| `src/kindle_reader.rs` | Drives Kindle's "Assistive reader" (Read Aloud) hands-free — foregrounds Kindle and sends its Ctrl+A shortcut via raw `SendInput` (works whether or not the Aa menu is open); UI Automation is used only for best-effort state readback and to dismiss an open Aa/ToC flyout first. Also `close()`s Kindle (found by process name via Toolhelp32, `WM_CLOSE`'d — not relaunched) for the narration-voice confirm dialog. |
 
 ## Contract (do not rediscover)
 
@@ -36,6 +36,10 @@ cargo run   # or launch it from the host's tray → Settings
   `id[0]` a/b, gender from `id[1]` f/m).
 - Slint `step` on a `Slider` only affects keyboard/scroll, not mouse drag — the dragged
   value is snapped manually (see `SliderRow` in `panel.slint`).
+- `kindle_reader::close()` only closes Kindle — it never relaunches it. MSIX/Desktop-
+  Bridge packaged apps (Kindle) aren't reliably relaunched via a raw `CreateProcess` on
+  their exe path, so the user reopens Kindle by hand; the confirm dialog's body text
+  says so.
 
 See the repo-root [`ARCHITECTURE.md`](../ARCHITECTURE.md) for how the panel fits the
 overall topology.

@@ -136,8 +136,17 @@ No Rust test suites; "testing" is Preview in the panel and Read Aloud in Kindle 
 - `main.rs` wires the Slint UI to the framework-agnostic `download.rs` (model
   download/verify) and `preview.rs` (synth via the host pipe + rodio playback = WYSIWYG,
   same engine as Kindle). Background work runs on threads and pushes results back via
-  `upgrade_in_event_loop`. The "Narrate Kindle with Kokoro" checkbox just persists
-  `kindle_kokoro` to `controls.json` (no elevation) — the host's Kindle-watcher acts on it.
+  `upgrade_in_event_loop`. The "Narrate Kindle with Kokoro" checkbox raises a Yes/No
+  confirm dialog before it takes effect; on Yes it persists `kindle_kokoro` to
+  `controls.json` (no elevation — the host's Kindle-watcher acts on it) and closes
+  Kindle via `kindle_reader::close()` (`WM_CLOSE` to Kindle's window, found by process
+  name via Toolhelp32) since the flag only lands on Kindle's *next* launch; on No it
+  reverts the checkbox and persists nothing. Relaunching is left to the user.
+  `kindle_reader.rs` also drives Kindle's Read Aloud toggle: it foregrounds Kindle and
+  sends the hands-free Ctrl+A shortcut via raw `SendInput` (works regardless of menu
+  state), not the UIA ToggleButton — that toggle only exists in the tree while Kindle's
+  Aa menu happens to be open, so UI Automation is used just for best-effort state
+  readback, never for control.
 - The narrator list is derived from the embedded `model-manifest.json` (accent from
   `id[0]` a/b, gender from `id[1]` f/m). Controls persist to `controls.json`.
 

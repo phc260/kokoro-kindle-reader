@@ -71,7 +71,9 @@ fix whichever side is wrong (code is the source of truth; update the comment/doc
   (`native-deps/runtime`, `native-deps/espeak-ng-src/build-x64/...`) ⇆ the entries
   `native-deps/.gitignore` lists. These live directly in `native-deps/` (no `third_party/`
   wrapper), so a rename in one place must update all three or the deps get committed / the
-  build panics.
+  build panics. The `.gitignore` check is one-directional: every provisioned folder must
+  be ignored, but extra entries there (`onnxruntime/`, `build/`) are deliberate defensive
+  slack for older/other tooling — leave them alone.
 - **Icons in LFS** — `icons/*` are tracked via Git LFS (`.gitattributes`); CI checks out
   with `lfs: true` so `icon.ico` bundles.
 
