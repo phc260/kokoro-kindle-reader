@@ -172,6 +172,11 @@ export component AppWindow inherits Window {
     in property <float> verify-frac;
     in property <bool> previewing;
     in property <string> status;
+    // Confirmation for the Kindle-narration toggle: the flag only lands on Kindle's
+    // next launch, so confirming also closes Kindle. `confirm-target` is the desired
+    // new value, held (unpersisted) while the dialog is up.
+    in-out property <bool> confirm-visible;
+    in property <bool> confirm-target;
 
     // Lower controls (narrator + sliders + transport) are live only when the engine
     // card reads "Voice Engine Ready" (model present, not mid download/verify) AND
@@ -192,6 +197,7 @@ export component AppWindow inherits Window {
     callback stop-clicked();
     callback read-aloud-clicked(bool); // desired state (the switch's new value)
     callback pause-toggled(bool);      // desired paused state
+    callback confirm-kindle(bool);     // dialog verdict: true = apply + close Kindle
 
     VerticalLayout {
         padding: 20px;
@@ -396,6 +402,66 @@ min-width: 100px;
             font-size: 13px;
             color: #a0a0a0;
             wrap: word-wrap;
+        }
+    }
+
+    // Modal Yes/No for the Kindle-narration toggle (declared after the main layout so
+    // it draws on top). Yes applies the flag and closes Kindle; No reverts the checkbox.
+    if root.confirm-visible: Rectangle {
+        width: 100%;
+        height: 100%;
+        background: #00000099; // heavy scrim so the card clearly floats above the panel
+        TouchArea { } // modal: swallow clicks on everything beneath
+        // Nested centering layouts (not hand-computed x/y/height): the card takes the
+        // height its content negotiates, so the wrapped text can never push the
+        // buttons past the card's edge.
+        VerticalLayout {
+            alignment: center;
+            HorizontalLayout {
+                alignment: center;
+                Rectangle {
+                    width: Math.min(root.width - 48px, 340px);
+                    // Raised surface: a foreground tint over the window background reads
+                    // as elevation in both themes (same trick as the model status card).
+                    background: Palette.background.mix(Palette.foreground, 0.92);
+                    border-radius: 8px;
+                    border-width: 1px;
+                    border-color: Palette.border;
+                    drop-shadow-blur: 32px;
+                    drop-shadow-offset-y: 8px;
+                    drop-shadow-color: #00000080;
+                    VerticalLayout {
+                        padding: 20px;
+                        spacing: 14px;
+                        Text {
+                            text: root.confirm-target
+                                ? "Narrate Kindle with Kokoro?"
+                                : "Switch Kindle back to its own voice?";
+                            font-size: 15px;
+                            font-weight: 600;
+                            wrap: word-wrap;
+                        }
+                        Text {
+                            text: "Kindle will be closed so the change takes effect. Reopen it to continue reading.";
+                            font-size: 14px;
+                            wrap: word-wrap;
+                        }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            alignment: end;
+                            Button {
+                                text: "Yes";
+                                primary: true;
+                                clicked => { root.confirm-kindle(true); }
+                            }
+                            Button {
+                                text: "No";
+                                clicked => { root.confirm-kindle(false); }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
