@@ -144,7 +144,9 @@ gain, and per-chunk sentence count are user-facing.
 
 Prerequisites: Rust (x64 + the `i686-pc-windows-msvc` target for the SAPI DLL), Visual
 Studio with the MSVC toolchain + CMake, Python (for the onnxruntime-webgpu wheel), and
-[NSIS](https://nsis.sourceforge.io/) (for the installer).
+[NSIS](https://nsis.sourceforge.io/) (for the installer). Get the source by **cloning
+with Git LFS** — not from a release's auto-generated "Source code" archive, which
+doesn't resolve LFS (see [DEVELOPMENT.md](DEVELOPMENT.md)).
 
 ```powershell
 # 1. One-time: provision the synth runtime deps
