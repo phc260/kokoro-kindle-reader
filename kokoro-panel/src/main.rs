@@ -633,7 +633,7 @@ fn main() -> Result<(), slint::PlatformError> {
                 // Kindle updates the toggle's UIA state asynchronously; hold the
                 // poll off a moment longer so it doesn't read the pre-flip value
                 // and bounce the switch back.
-                std::thread::sleep(Duration::from_millis(1500));
+                std::thread::sleep(Duration::from_millis(100));
                 reader_busy.store(false, Ordering::SeqCst);
             });
         });
@@ -669,7 +669,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let weak = ui.as_weak();
         let poll_busy = Arc::new(AtomicBool::new(false));
         let reader_busy = reader_busy.clone();
-        poll_timer.start(slint::TimerMode::Repeated, Duration::from_millis(1000), move || {
+        poll_timer.start(slint::TimerMode::Repeated, Duration::from_millis(100), move || {
             if reader_busy.load(Ordering::SeqCst) {
                 return;
             }
