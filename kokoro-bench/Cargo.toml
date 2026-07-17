@@ -1,0 +1,23 @@
+[package]
+name = "kokoro-bench"
+version = "0.3.2"
+edition = "2021"
+description = "Standalone GPU-vs-CPU synth timing tool (not part of the shipping app)"
+
+# Separate crate (own target dir) so this diagnostic tool doesn't compile as part of a
+# normal `cargo build`/`check` on kokoro-host. It reuses kokoro-host's text.rs/espeak.rs
+# via #[path] includes (see src/main.rs) rather than a shared lib target, since
+# kokoro-host is bin-only.
+
+[[bin]]
+name = "bench_synth"
+path = "src/main.rs"
+
+[build-dependencies]
+# none — build.rs only links the espeak-ng import lib and stages runtime DLLs.
+
+[dependencies]
+# tokenizer.json parsing (mirrors native_synth.rs's read_vocab).
+serde_json = "1"
+# Kokoro ONNX inference — same pin/features as kokoro-host's native_synth.rs.
+ort = { version = "=2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "load-dynamic", "api-24"] }
