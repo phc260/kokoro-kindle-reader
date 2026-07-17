@@ -1,13 +1,17 @@
 // Standalone benchmark: times one fixed paragraph through three engine configs —
-// WebGPU EP + fp32 model.onnx (today's shipping path), CPU EP + fp32 model.onnx, and
-// CPU EP + int8 model_quantized.onnx (already downloaded by every install but unused).
-// Exploratory tool for deciding whether a CPU/quantized fallback is worth building for
+// WebGPU EP + fp32 model.onnx (today's shipping path), CPU EP at ORT's default
+// intra-op thread count (physical cores — what the host ships), and CPU EP with
+// intra-op threads raised to every logical core ("multi-CPU") — then a concurrent
+// GPU+CPU run (two sessions, two threads) that gates the hybrid dispatcher idea: on
+// a machine where neither engine alone clears realtime, do the two together?
+// (An int8 model_quantized.onnx config used to be here; dropped as a settled dead
+// end — consistently slower than fp32 on every machine tested. See the README.) Exploratory tool for deciding what fallback is worth building for
 // GPU-less or integrated-GPU-only laptops — not part of the shipping product, so it
 // duplicates a little of native_synth.rs's model-run plumbing rather than exposing it.
 // A standalone crate (not a kokoro-host bin) so it never compiles as part of a normal
 // `cargo build`/`check` on the shipping tray daemon.
 //
-// Usage: cargo run --release [-- --model-dir <dir>] [--voice <id>]
+// Usage: cargo run --release [-- --model-dir <dir>] [--voice <id>] [--hybrid-secs <n>]
 // Defaults to the model dir the panel actually downloads into
 // (%APPDATA%\com.phc260.kokoro-kindle-reader\onnx-community\Kokoro-82M-v1.0-ONNX) and
 // voice af_heart, so a normal install needs no flags. Needs the runtime DLLs +
@@ -21,7 +25,7 @@ mod espeak;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use ort::ep::webgpu::WebGPU;
 use ort::ep::CPU;
@@ -42,15 +46,23 @@ const BENCH_TEXT: &str = "The old lighthouse stood at the edge of the cliff, its
     sure the lamp was burning bright enough to guide the fishing boats home.";
 
 const TIMED_RUNS: u32 = 3;
+// Concurrent GPU+CPU window (seconds). Long by design: the two engines share one
+// package power budget, and a short burst measures boost clocks, not the thermal
+// steady state a real reading session settles into. Override with --hybrid-secs.
+const HYBRID_SECS_DEFAULT: f64 = 60.0;
 
 fn main() {
     let mut model_dir: Option<PathBuf> = None;
     let mut voice = "af_heart".to_string();
+    let mut hybrid_secs = HYBRID_SECS_DEFAULT;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
             "--model-dir" => model_dir = args.next().map(PathBuf::from),
             "--voice" => voice = args.next().unwrap_or(voice),
+            "--hybrid-secs" => {
+                hybrid_secs = args.next().and_then(|s| s.parse().ok()).unwrap_or(hybrid_secs)
+            }
             other => {
                 eprintln!("unknown arg: {other}");
                 std::process::exit(2);
@@ -101,24 +113,31 @@ fn main() {
     println!("bench text  : {} chars, {} tokens\n", BENCH_TEXT.len(), content.len());
 
     struct Config {
-        label: &'static str,
-        model_file: &'static str,
+        label: String,
         ep: fn() -> ort::ep::ExecutionProviderDispatch,
+        // None = ORT's default intra-op pool (physical cores — what the host ships);
+        // Some(n) = explicit thread count, for the every-logical-core comparison row.
+        intra_threads: Option<usize>,
     }
+    let logical = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
     let configs = [
-        Config { label: "WebGPU  fp32 (shipping)", model_file: "model.onnx", ep: || WebGPU::default().build() },
-        Config { label: "CPU     fp32", model_file: "model.onnx", ep: || CPU::default().build() },
-        Config { label: "CPU     int8 (quantized)", model_file: "model_quantized.onnx", ep: || CPU::default().build() },
+        Config { label: "WebGPU  fp32 (shipping)".into(), ep: || WebGPU::default().build(), intra_threads: None },
+        Config { label: "CPU     fp32".into(), ep: || CPU::default().build(), intra_threads: None },
+        Config {
+            label: format!("CPU     fp32 ({logical} threads)"),
+            ep: || CPU::default().build(),
+            intra_threads: Some(logical),
+        },
     ];
 
     println!("{:<28} {:>12} {:>14} {:>16}", "config", "cold (ms)", "warm avg (ms)", "realtime factor");
+    let model_path = base.join("onnx").join("model.onnx");
+    if !model_path.exists() {
+        println!("model file not found: {}", model_path.display());
+        std::process::exit(1);
+    }
     for cfg in &configs {
-        let model_path = base.join("onnx").join(cfg.model_file);
-        if !model_path.exists() {
-            println!("{:<28} -- model file not found: {}", cfg.label, model_path.display());
-            continue;
-        }
-        let mut session = match build_session(&model_path, (cfg.ep)()) {
+        let mut session = match build_session(&model_path, (cfg.ep)(), cfg.intra_threads) {
             Ok(s) => s,
             Err(e) => {
                 println!("{:<28} -- session build failed: {e}", cfg.label);
@@ -155,6 +174,100 @@ fn main() {
             cfg.label, cold_ms, warm_avg_ms, realtime_factor
         );
     }
+
+    println!();
+    hybrid_bench(&base, content, &voice_data, hybrid_secs);
+}
+
+/// The gate for the hybrid GPU+CPU dispatcher idea: run the fp32 model on a WebGPU
+/// session and a CPU session *concurrently* and see whether the summed throughput
+/// clears realtime with margin. The sequential rows above overstate the sum — an iGPU
+/// and the CPU cores share one package power budget, so run together each throttles
+/// the other; this measures the real combined rate. Each thread loops full model runs
+/// until the shared deadline (in-flight runs complete past it), and its rate is audio
+/// produced over its own span — so the "combined" sum is slightly optimistic where the
+/// two tails don't overlap, fine for a go/no-go gate.
+fn hybrid_bench(base: &Path, content: &[i64], voice_data: &[f32], window_secs: f64) {
+    let model_path = base.join("onnx").join("model.onnx");
+    if !model_path.exists() {
+        println!("hybrid: model file not found: {}", model_path.display());
+        return;
+    }
+    let mut gpu = match build_session(&model_path, WebGPU::default().build(), None) {
+        Ok(s) => s,
+        Err(e) => {
+            println!("hybrid: GPU session build failed: {e}");
+            return;
+        }
+    };
+    let mut cpu = match build_session(&model_path, CPU::default().build(), None) {
+        Ok(s) => s,
+        Err(e) => {
+            println!("hybrid: CPU session build failed: {e}");
+            return;
+        }
+    };
+
+    let style = style_row(voice_data, content.len());
+    let wids = wrap(content);
+
+    // Warm both sessions (shader compile / kernel selection) outside the timed window,
+    // and take the per-run audio length from the first result (same tokens every run).
+    let audio_secs = match run_model(&mut gpu, &wids, style, 1.0) {
+        Ok(pcm) => pcm.len() as f64 / 24_000.0,
+        Err(e) => {
+            println!("hybrid: GPU warmup run failed: {e}");
+            return;
+        }
+    };
+    if let Err(e) = run_model(&mut cpu, &wids, style, 1.0) {
+        println!("hybrid: CPU warmup run failed: {e}");
+        return;
+    }
+
+    println!("hybrid  fp32 GPU+CPU concurrent ({window_secs:.0}s window):");
+    let deadline = Instant::now() + Duration::from_secs_f64(window_secs);
+    let (g, c) = std::thread::scope(|s| {
+        let gh = s.spawn(|| timed_runs(&mut gpu, &wids, style, deadline));
+        let ch = s.spawn(|| timed_runs(&mut cpu, &wids, style, deadline));
+        (gh.join().unwrap(), ch.join().unwrap())
+    });
+
+    println!("{:<28} {:>12} {:>14} {:>16}", "config", "runs", "audio (s)", "realtime factor");
+    let mut combined = 0.0;
+    for (label, (runs, span, err)) in [("  WebGPU share", &g), ("  CPU share", &c)] {
+        let audio = *runs as f64 * audio_secs;
+        let rate = if *span > 0.0 { audio / span } else { 0.0 };
+        combined += rate;
+        println!("{:<28} {:>12} {:>14.1} {:>15.2}x", label, runs, audio, rate);
+        if let Some(e) = err {
+            println!("    (stopped early: {e})");
+        }
+    }
+    println!(
+        "{:<28} {:>12} {:>14.1} {:>15.2}x",
+        "  combined",
+        g.0 + c.0,
+        (g.0 + c.0) as f64 * audio_secs,
+        combined
+    );
+}
+
+/// Loop full model runs on one session until `deadline` passes (checked between runs,
+/// so at least one run happens and the last may overshoot). Returns (completed runs,
+/// span covering exactly those runs in seconds, error that stopped the loop if any).
+fn timed_runs(session: &mut Session, ids: &[i64], style: &[f32], deadline: Instant) -> (u32, f64, Option<String>) {
+    let t0 = Instant::now();
+    let mut runs = 0u32;
+    let mut err = None;
+    while Instant::now() < deadline {
+        if let Err(e) = run_model(session, ids, style, 1.0) {
+            err = Some(e);
+            break;
+        }
+        runs += 1;
+    }
+    (runs, t0.elapsed().as_secs_f64(), err)
 }
 
 fn default_model_dir() -> PathBuf {
@@ -241,12 +354,19 @@ fn style_row(voice_data: &[f32], n_content_tokens: usize) -> &[f32] {
     &voice_data[row * STYLE_DIM..(row + 1) * STYLE_DIM]
 }
 
-fn build_session(model: &Path, ep: ort::ep::ExecutionProviderDispatch) -> Result<Session, String> {
-    Session::builder()
+fn build_session(
+    model: &Path,
+    ep: ort::ep::ExecutionProviderDispatch,
+    intra_threads: Option<usize>,
+) -> Result<Session, String> {
+    let mut b = Session::builder()
         .map_err(|e| e.to_string())?
         .with_execution_providers([ep])
-        .map_err(|e| e.to_string())?
-        .with_optimization_level(GraphOptimizationLevel::Level3)
+        .map_err(|e| e.to_string())?;
+    if let Some(n) = intra_threads {
+        b = b.with_intra_threads(n).map_err(|e| e.to_string())?;
+    }
+    b.with_optimization_level(GraphOptimizationLevel::Level3)
         .map_err(|e| e.to_string())?
         .with_memory_pattern(false)
         .map_err(|e| e.to_string())?
