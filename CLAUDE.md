@@ -89,8 +89,14 @@ No Rust test suites; "testing" is Preview in the panel and Read Aloud in Kindle 
 - `kokoro-host/src/native_synth.rs` — the whole synth core. Per chunk: `text.rs`
   normalize/segment → `espeak.rs` phonemize each segment → tokenize (tokenizer.json
   vocab) → the Kokoro ONNX model on the ORT **Dawn WebGPU** EP via the **`ort` crate**
-  (`load-dynamic` against the staged `onnxruntime.dll`; `WebGPU::default()` EP) → f32
-  PCM. espeak keeps global state and isn't thread-safe (and the `ort` session lives
+  (`load-dynamic` against the staged `onnxruntime.dll`; `WebGPU::default()` EP by
+  default) → f32 PCM. Setting `controls.json`'s `gpu_synth` flag to `false` (the
+  panel's "Synthesize on GPU" checkbox, default `true`) switches the EP to plain
+  **CPU** (`ort::ep::CPU`) instead — a manual fallback, no auto-detection yet; see
+  `Engine` and the standalone `kokoro-bench` crate (the benchmark that motivated it:
+  an Intel UHD 620 ran WebGPU at 0.50x realtime vs. CPU fp32 at 1.07x). Switching engines rebuilds the
+  session (the EP is fixed at session-build time), so it's a one-time hitch, not a
+  per-chunk cost. espeak keeps global state and isn't thread-safe (and the `ort` session lives
   here), so **all synthesis is serialized onto one dedicated worker thread** that owns
   the session for the process lifetime; requests arrive over an mpsc channel and replies
   come back on tokio oneshots so the async pipe tasks never block. It also owns the
@@ -152,9 +158,11 @@ No Rust test suites; "testing" is Preview in the panel and Read Aloud in Kindle 
 
 ### Settings — `controls.json` (single source of truth)
 - Lives at `%APPDATA%\com.phc260.kokoro-kindle-reader\controls.json`. Fields: **`voice`,
-  `speed`, `gain`, `chunk`, `kindle_kokoro`, `paused`**. The panel writes it; the host reads it
-  **live** — `voice`/`speed`/`gain`/`chunk` per utterance/sub-frame (so a change lands on
-  Kindle's **next page**, no IPC/restart), `kindle_kokoro` per watcher tick in
+  `speed`, `gain`, `chunk`, `kindle_kokoro`, `paused`, `gpu_synth`**. The panel writes it;
+  the host reads it **live** — `voice`/`speed`/`gain`/`chunk`/`gpu_synth` per
+  utterance/sub-frame (so a change lands on Kindle's **next page**, no IPC/restart, though
+  `gpu_synth` also costs a session rebuild the first time it lands — see below),
+  `kindle_kokoro` per watcher tick in
   `kindle_watch.rs` (gates auto-injection; default `true`), and `paused` per sub-frame in
   `pipe.rs` — a live pause command (not a persisted setting): while set, the stream stalls
   with the pipe held open and Kindle keeps the page. (The pacing lead/sub-frame are
@@ -234,11 +242,12 @@ unwind into Kindle.
   in-process by registry path. It **cannot** be merged into the x64 host; it's a separate
   file, bundled + registered by the installer.
 - **`controls.json` is the single source of truth, read live.** The panel writes
-  `voice`/`speed`/`gain`/`chunk`/`kindle_kokoro`/`paused`; the host re-reads `voice`/`speed`/`chunk`
-  per utterance and `gain`/`paused` per sub-frame (via `native_synth::read_controls`), so a slider
-  move lands on the next chunk/page — not frozen into prefetched samples (and `paused` stalls the
-  stream live). `kindle_kokoro` is read separately, per watcher tick, by `kindle_watch::enabled`
-  (default `true`).
+  `voice`/`speed`/`gain`/`chunk`/`kindle_kokoro`/`paused`/`gpu_synth`; the host re-reads
+  `voice`/`speed`/`chunk`/`gpu_synth` per utterance and `gain`/`paused` per sub-frame (via
+  `native_synth::read_controls`), so a slider move lands on the next chunk/page — not
+  frozen into prefetched samples (and `paused` stalls the stream live; `gpu_synth`
+  triggers a session rebuild on the next chunk that needs one). `kindle_kokoro` is read
+  separately, per watcher tick, by `kindle_watch::enabled` (default `true`).
   **Invariant: every key the panel writes must be read by whichever host reader consumes it —
   `read_controls` for the synth fields (`paused` among them, consumed in `pipe.rs`), `kindle_watch`
   for `kindle_kokoro` — keep them in sync.** The pacing lead / sub-frame size are **not**

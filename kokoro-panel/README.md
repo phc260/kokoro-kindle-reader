@@ -19,7 +19,7 @@ cargo run   # or launch it from the host's tray → Settings
 
 | File | What |
 |---|---|
-| `ui/panel.slint` | The Fluent UI (sliders, narrator dropdown, Preview + transport buttons, "Narrate Kindle with Kokoro" checkbox, Read Aloud switch). |
+| `ui/panel.slint` | The Fluent UI (sliders, narrator dropdown, Preview + transport buttons, "Narrate Kindle with Kokoro" checkbox, Read Aloud switch, "Synthesize on GPU" checkbox). |
 | `src/main.rs` | Wires the Slint UI to the modules below; background work runs on threads and pushes results back via `upgrade_in_event_loop`. The Kindle-narration checkbox raises a Yes/No confirm dialog; Yes persists `kindle_kokoro` and closes Kindle (the flag only lands on Kindle's next launch), No reverts the checkbox. |
 | `src/download.rs` | Model download/verify (framework-agnostic). |
 | `src/preview.rs` | Synth via the host pipe + rodio playback. |
@@ -28,8 +28,10 @@ cargo run   # or launch it from the host's tray → Settings
 ## Contract (do not rediscover)
 
 - The panel **writes `controls.json`**; the host reads it live. The synth keys (`voice`,
-  `speed`, `gain`, `chunk`) must match what `kokoro-host/src/native_synth.rs::read_controls`
-  reads — a slider move lands on Kindle's next page with no IPC or restart. `kindle_kokoro`
+  `speed`, `gain`, `chunk`, `gpu_synth`) must match what
+  `kokoro-host/src/native_synth.rs::read_controls` reads — a slider move lands on
+  Kindle's next page with no IPC or restart (`gpu_synth` additionally costs a session
+  rebuild, since the execution provider is fixed at session-build time). `kindle_kokoro`
   is read by `kokoro-host/src/kindle_watch.rs` (gates Kindle auto-injection); `paused` is read
   by `read_controls` and consumed in `pipe.rs` (a live pause command that stalls the stream).
 - The narrator list is derived from the embedded `model-manifest.json` (accent from

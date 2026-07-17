@@ -161,6 +161,7 @@ export component AppWindow inherits Window {
     in-out property <float> gain;
     in-out property <float> chunk;
     in-out property <bool> kindle-kokoro;
+    in-out property <bool> gpu-synth; // GPU (default) vs CPU engine; no auto-detect yet
     in-out property <bool> reading;   // Kindle's Assistive reader is on (best-effort)
     in property <bool> speaking;      // host is streaming audio right now (CMD_STATUS)
     in-out property <bool> paused;    // playback stalled mid-page (controls.json `paused`)
@@ -183,6 +184,9 @@ export component AppWindow inherits Window {
     // Kindle narration is enabled. Mirrors the "Voice Engine Ready" card's condition
     // so the controls light up exactly when it does.
     property <bool> controls-active: root.model-ready && !root.downloading && !root.verifying && root.kindle-kokoro;
+    // The CPU-synth toggle doesn't need Kindle narration ticked (Preview benefits too) —
+    // just the engine itself being ready.
+    property <bool> engine-ready: root.model-ready && !root.downloading && !root.verifying;
 
     // --- events (handled in Rust) ---
     callback accent-changed(int);
@@ -191,6 +195,7 @@ export component AppWindow inherits Window {
     callback speed-changed(float);
     callback gain-changed(float);
     callback chunk-changed(float);
+    callback gpu-synth-changed(bool);
     callback download-clicked();
     callback kindle-toggled(bool);
     callback preview-clicked();
@@ -386,6 +391,29 @@ min-width: 100px;
             enabled: root.controls-active;
             value <=> root.chunk;
             changed(v) => { root.chunk-changed(v); }
+        }
+
+        // GPU (default, ticked) vs CPU engine: an integrated GPU can lose badly to
+        // plain CPU (no auto-detection yet — see native_synth.rs's Engine).
+        // Independent of the Kindle-narration checkbox since Preview benefits too.
+        VerticalLayout {
+            spacing: 2px;
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: start;
+                CheckBox {
+                    text: "Synthesize on GPU";
+                    checked <=> root.gpu-synth;
+                    enabled: root.engine-ready;
+                    toggled => { root.gpu-synth-changed(self.checked); }
+                }
+            }
+            Text {
+                text: "Untick to synthesize on the CPU instead — often faster on laptops with no discrete GPU.";
+                font-size: 12px;
+                color: #a0a0a0;
+                wrap: word-wrap;
+            }
         }
 
         Rectangle { vertical-stretch: 1; }

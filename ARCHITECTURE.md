@@ -101,11 +101,17 @@ on each Kindle launch. `kokoro-hook`'s `selftest` bin guards the slot-18 ABI.
 
 **Native synthesis.** `native_synth.rs` is the pure-Rust synth core: `text.rs`
 normalize/segment → `espeak.rs` phonemize (espeak-ng FFI) → tokenize → the Kokoro ONNX
-model on the ORT **Dawn WebGPU** EP via the `ort` crate (load-dynamic against the staged
-`onnxruntime.dll`) → f32 PCM. espeak keeps global state and isn't thread-safe (and the
-`ort` session lives here), so all synthesis is **serialized onto one dedicated worker
-thread** that owns the session for the process lifetime; requests arrive over an mpsc
-channel and replies come back on tokio oneshots so the async pipe tasks never block.
+model on the ORT `ort` crate (load-dynamic against the staged `onnxruntime.dll`), on
+either the **Dawn WebGPU** EP (the default) or the plain **CPU** EP — a manual
+`gpu_synth` flag in `controls.json` (the panel's "Synthesize on GPU" checkbox, on by
+default), since an integrated GPU can badly lose to CPU (the standalone
+`kokoro-bench` tool found 0.50x realtime on WebGPU vs. 1.07x on CPU fp32 on an Intel
+UHD 620; no auto-detection between the two yet). espeak keeps global
+state and isn't thread-safe (and
+the `ort` session lives here), so all synthesis is **serialized onto one dedicated
+worker thread** that owns the session for the process lifetime; requests arrive over an
+mpsc channel and replies come back on tokio oneshots so the async pipe tasks never
+block.
 
 **Streaming.** `pipe.rs` synthesizes **sentence by sentence** — a small first chunk
 (fast first sound) then N-sentence chunks (user-tunable via the `chunk` setting) —
@@ -121,15 +127,16 @@ a slider move by a whole buffered chunk. `pipe.rs` counters this by **pacing** i
 sends to ~real time (keeping at most a fixed lead of audio queued ahead) and
 **sub-framing** each chunk, re-reading the current gain from `controls.json` per
 sub-frame. The lead (500 ms) and sub-frame (250 ms) are fixed built-in defaults
-(`DEFAULT_LEAD_MS` / `DEFAULT_SUBFRAME_MS` in `pipe.rs`); only the narrator, speed,
-gain, and per-chunk sentence count are user-facing.
+(`DEFAULT_LEAD_MS` / `DEFAULT_SUBFRAME_MS` in `pipe.rs`); the narrator, speed, gain,
+per-chunk sentence count, and GPU/CPU engine choice are the user-facing knobs.
 
 ## Layout
 
 | Path | What |
 |---|---|
-| `kokoro-host/` | The windowless tray host (x64): `main.rs` (tao event loop + tray + `auto-launch` + Kindle-watcher tick), `pipe.rs` (named-pipe server; owns chunking + prefetch + pacing), `native_synth.rs` (serialized Rust WebGPU synth + `controls.json` reader) + `text.rs`/`espeak.rs` (kokoro-js text normalizer + espeak-ng FFI), `split_text.rs` (the sentence-chunk splitter), `kindle_watch.rs` (polls for Kindle, spawns the injector). `build.rs` links the espeak-ng import lib and stages the runtime DLLs + `espeak-ng-data`. |
+| `kokoro-host/` | The windowless tray host (x64): `main.rs` (tao event loop + tray + `auto-launch` + Kindle-watcher tick), `pipe.rs` (named-pipe server; owns chunking + prefetch + pacing), `native_synth.rs` (serialized Rust synth, GPU or CPU EP + `controls.json` reader) + `text.rs`/`espeak.rs` (kokoro-js text normalizer + espeak-ng FFI), `split_text.rs` (the sentence-chunk splitter), `kindle_watch.rs` (polls for Kindle, spawns the injector). `build.rs` links the espeak-ng import lib and stages the runtime DLLs + `espeak-ng-data`. |
 | `kokoro-panel/` | The native settings panel (Slint/Fluent): `ui/panel.slint` + `src/main.rs`, the framework-agnostic `download.rs` / `preview.rs`, and `kindle_reader.rs` (hands-free Ctrl+A toggle of Kindle's Read Aloud + closing Kindle after the narration-voice checkbox, both via raw Win32/Toolhelp32 — UI Automation is only for best-effort state readback). Writes `controls.json`. |
+| `kokoro-bench/` | Standalone GPU-vs-CPU synth timing tool, not part of the shipping app: reuses `kokoro-host/src/{text,espeak}.rs` via `#[path]` includes (`kokoro-host` is bin-only, no lib target). |
 | `kokoro-hook/` | x86 `cdylib` injected into Kindle 18632+: `DllMain` patches the shared `ISpVoice::SetVoice` vtable slot (index 18) → Kokoro token. `selftest` bin proves it Kindle-free. |
 | `kokoro-inject/` | x86 exe the host spawns: `LoadLibrary`-injects `kokoro_hook.dll` into `Kindle.exe`. |
 | `native-deps/` | Synth **dependency provisioning** only (no source): `fetch-deps.ps1` populates the gitignored dep folders alongside itself (`native-deps/runtime/` + `espeak-ng-src/`) — the Dawn/WebGPU runtime DLLs (from the `onnxruntime-webgpu` wheel) + espeak-ng (x64 build + import lib + `espeak-ng-data`). |
