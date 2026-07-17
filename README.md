@@ -43,7 +43,8 @@ runs entirely on your machine. kokoro-kindle-reader is two things in one app:
 The app synthesizes on your GPU via WebGPU, so a **discrete GPU** (e.g. NVIDIA/AMD)
 gives smooth, faster-than-realtime narration — tested smooth on an NVIDIA GTX 1060.
 Laptops with only an **integrated GPU and no dedicated one** can fall well behind
-realtime — narration will work, but may lag noticeably behind Kindle's pages.
+realtime — narration will work, but may lag noticeably behind Kindle's pages. If so,
+try unticking **Synthesize on GPU** in Settings (see Troubleshooting).
 
 ## Using the app
 
@@ -115,10 +116,12 @@ don't need to touch it.
   a corrupt file it asks you to click Download to repair it.
 - **First run needs a download** — the voice model (~430 MB) fetches once, via the
   Download button in Settings. Everything is offline after that.
-- **Narration lags behind pages / synthesis feels slow** — synthesis runs on your
-  GPU; on a laptop with no discrete GPU (integrated graphics only) it can run
-  slower than realtime. There's no CPU fallback, so this is expected on that
-  hardware, not a bug.
+- **Narration lags behind pages / synthesis feels slow** — synthesis defaults to
+  your GPU, and an integrated GPU (no discrete card) can run slower than realtime.
+  Try unticking **Synthesize on GPU** in Settings to synthesize on the CPU instead:
+  on one integrated-GPU laptop we tested, plain CPU synthesis was over 2x faster
+  than its GPU path. There's no automatic switching yet, so this is a manual
+  fallback, not a default.
 
 ## How it works
 

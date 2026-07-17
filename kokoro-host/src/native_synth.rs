@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 
 use ort::ep::webgpu::WebGPU;
+use ort::ep::CPU;
 use ort::session::{builder::GraphOptimizationLevel, Session, SessionInputValue};
 use ort::value::TensorRef;
 use tokio::sync::oneshot;
@@ -25,6 +26,19 @@ const VOICE_ROWS: usize = 510;
 /// Max content tokens (excluding BOS/EOS) per model run. Kokoro's ONNX graph fails the
 /// BERT `Expand` node past ~510 tokens, so longer chunks are sub-split to this window.
 const MAX_CONTENT_TOKENS: usize = 500;
+
+/// Which execution provider synthesizes: GPU (Dawn WebGPU, the default) or the plain
+/// ORT CPU EP. Benchmarked (the standalone `kokoro-bench` crate) on an Intel UHD 620
+/// laptop: WebGPU there ran at 0.50x realtime (behind), CPU fp32 at 1.07x (ahead) —
+/// an integrated GPU
+/// can lose to plain CPU badly enough to matter. No auto-detection yet; `gpu_synth` in
+/// controls.json (default `true`) is a manual escape hatch while real-world results
+/// come in — unticking the panel's "Synthesize on GPU" switches to CPU.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Engine {
+    Gpu,
+    Cpu,
+}
 
 /// The per-utterance settings the pipe host reads from controls.json (replacing the
 /// webview's localStorage). `speed`/`gain` default to 1, `chunk` to 4 sentences.
@@ -36,11 +50,12 @@ pub struct Controls {
     pub gain: f32,
     pub chunk: u32,
     pub paused: bool,
+    pub engine: Engine,
 }
 
 impl Default for Controls {
     fn default() -> Self {
-        Controls { speed: 1.0, gain: 1.0, chunk: 4, paused: false }
+        Controls { speed: 1.0, gain: 1.0, chunk: 4, paused: false, engine: Engine::Gpu }
     }
 }
 
@@ -67,6 +82,9 @@ pub fn read_controls(app_data: &Path) -> (String, Controls) {
             if let Some(x) = v.get("paused").and_then(|x| x.as_bool()) {
                 c.paused = x;
             }
+            if let Some(x) = v.get("gpu_synth").and_then(|x| x.as_bool()) {
+                c.engine = if x { Engine::Gpu } else { Engine::Cpu };
+            }
         }
     }
     (voice, c)
@@ -76,6 +94,7 @@ struct Req {
     text: String,
     speed: f32,
     voice: String,
+    engine: Engine,
     reply: oneshot::Sender<Option<Vec<u8>>>,
 }
 
@@ -103,9 +122,9 @@ impl NativeSynth {
     /// Synthesize one already-cut chunk. Returns raw little-endian f32 PCM bytes
     /// (24 kHz mono) — same shape the webview `synth_result` used, so pipe_server's
     /// framing is unchanged. None on init/synth failure (pipe host emits SYNTH_ERROR).
-    pub async fn synth(&self, text: String, speed: f32, voice: String) -> Option<Vec<u8>> {
+    pub async fn synth(&self, text: String, speed: f32, voice: String, engine: Engine) -> Option<Vec<u8>> {
         let (reply, rx) = oneshot::channel();
-        if self.tx.send(Req { text, speed, voice, reply }).is_err() {
+        if self.tx.send(Req { text, speed, voice, engine, reply }).is_err() {
             return None; // worker thread gone
         }
         rx.await.ok().flatten()
@@ -208,8 +227,14 @@ fn run_model(session: &mut Session, ids: &[i64], style: &[f32], speed: f32) -> R
     Ok(data.to_vec())
 }
 
-fn build_session(model: &Path) -> Result<Session, String> {
+fn build_session(model: &Path, engine: Engine) -> Result<Session, String> {
+    let ep = match engine {
+        Engine::Gpu => WebGPU::default().build(),
+        Engine::Cpu => CPU::default().build(),
+    };
     Session::builder()
+        .map_err(|e| e.to_string())?
+        .with_execution_providers([ep])
         .map_err(|e| e.to_string())?
         .with_optimization_level(GraphOptimizationLevel::Level3)
         .map_err(|e| e.to_string())?
@@ -234,9 +259,11 @@ fn worker_loop(rx: mpsc::Receiver<Req>, base: PathBuf, espeak_data: PathBuf) {
         eprintln!("[native-synth] espeak init failed: {e}");
         broken = true;
     }
+    // No default execution provider registered globally — each session picks its own
+    // (GPU or CPU) per the `engine` control, since a running host can switch live.
     match ort::init_from(exe_dir.join("onnxruntime.dll")) {
         Ok(b) => {
-            b.with_execution_providers([WebGPU::default().build()]).commit();
+            b.commit();
         }
         Err(e) => {
             eprintln!("[native-synth] ort init_from failed: {e}");
@@ -249,6 +276,7 @@ fn worker_loop(rx: mpsc::Receiver<Req>, base: PathBuf, espeak_data: PathBuf) {
     let mut vocab: Option<HashMap<Vec<u8>, i64>> = None;
     let mut voice_data: Vec<f32> = Vec::new();
     let mut cur_voice = String::new();
+    let mut cur_engine = Engine::Gpu;
 
     while let Ok(req) = rx.recv() {
         if broken {
@@ -259,8 +287,11 @@ fn worker_loop(rx: mpsc::Receiver<Req>, base: PathBuf, espeak_data: PathBuf) {
         // Lazy init on the first request (using its narrator), then narrator switches
         // just reload the voice matrix (keeps the session).
         if session.is_none() {
-            match build_session(&model) {
-                Ok(s) => session = Some(s),
+            match build_session(&model, req.engine) {
+                Ok(s) => {
+                    session = Some(s);
+                    cur_engine = req.engine;
+                }
                 Err(e) => {
                     eprintln!("[native-synth] session build failed: {e}");
                     let _ = req.reply.send(None);
@@ -289,17 +320,36 @@ fn worker_loop(rx: mpsc::Receiver<Req>, base: PathBuf, espeak_data: PathBuf) {
                     continue;
                 }
             }
-            eprintln!("[native-synth] Kokoro synth ready (ONNX + WebGPU), voice={cur_voice}");
-        } else if req.voice != cur_voice {
-            match load_voice(&voice_path(&base, &req.voice)) {
-                Some(v) => {
-                    voice_data = v;
-                    cur_voice = req.voice.clone();
+            eprintln!(
+                "[native-synth] Kokoro synth ready (ONNX + {cur_engine:?}), voice={cur_voice}"
+            );
+        } else {
+            if req.voice != cur_voice {
+                match load_voice(&voice_path(&base, &req.voice)) {
+                    Some(v) => {
+                        voice_data = v;
+                        cur_voice = req.voice.clone();
+                    }
+                    None => eprintln!(
+                        "[native-synth] set_voice({}) failed (keeping {cur_voice})",
+                        req.voice
+                    ),
                 }
-                None => eprintln!(
-                    "[native-synth] set_voice({}) failed (keeping {cur_voice})",
-                    req.voice
-                ),
+            }
+            // Engine switches need a fresh session (the EP is fixed at session-build
+            // time); rare (a manual controls.json flip), so the rebuild cost is fine.
+            if req.engine != cur_engine {
+                match build_session(&model, req.engine) {
+                    Ok(s) => {
+                        *session.as_mut().unwrap() = s;
+                        cur_engine = req.engine;
+                        eprintln!("[native-synth] switched engine to {cur_engine:?}");
+                    }
+                    Err(e) => eprintln!(
+                        "[native-synth] engine switch to {:?} failed (keeping {cur_engine:?}): {e}",
+                        req.engine
+                    ),
+                }
             }
         }
 
@@ -348,7 +398,7 @@ fn worker_loop(rx: mpsc::Receiver<Req>, base: PathBuf, espeak_data: PathBuf) {
                             wids.len()
                         );
                         if attempt == 1 {
-                            match build_session(&model) {
+                            match build_session(&model, cur_engine) {
                                 Ok(s) => *session.as_mut().unwrap() = s,
                                 Err(be) => eprintln!("[native-synth] session rebuild failed: {be}"),
                             }

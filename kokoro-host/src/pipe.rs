@@ -98,9 +98,10 @@ struct Prefetch {
 fn spawn_synth(ctx: &Ctx, text: String, rate: f32) -> Prefetch {
     let (voice, controls) = native_synth::read_controls(&ctx.app_data);
     let speed = rate * controls.speed;
+    let engine = controls.engine;
     let native = ctx.native.clone();
     let voice2 = voice.clone();
-    let handle = tokio::spawn(async move { native.synth(text, speed, voice2).await });
+    let handle = tokio::spawn(async move { native.synth(text, speed, voice2, engine).await });
     Prefetch { voice, speed, handle }
 }
 

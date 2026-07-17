@@ -218,6 +218,11 @@ struct Controls {
     // audio stream mid-page. Kept in the struct (and save()) so an unrelated save
     // (e.g. a volume change) doesn't drop the key and silently un-pause the host.
     paused: bool,
+    // Manual GPU/CPU escape hatch: an integrated GPU can badly lose to plain CPU
+    // (benchmarked 0.50x vs 1.07x realtime on an Intel UHD 620) with no auto-detection
+    // yet, so unticking "Synthesize on GPU" is a user-flipped fallback to CPU while
+    // real-world results come in. Default true = GPU, today's shipping behavior.
+    gpu_synth: bool,
 }
 
 impl Default for Controls {
@@ -229,6 +234,7 @@ impl Default for Controls {
             chunk: 2,
             kindle_kokoro: true,
             paused: false,
+            gpu_synth: true,
         }
     }
 }
@@ -256,6 +262,9 @@ impl Controls {
                 if let Some(x) = v.get("paused").and_then(|x| x.as_bool()) {
                     c.paused = x;
                 }
+                if let Some(x) = v.get("gpu_synth").and_then(|x| x.as_bool()) {
+                    c.gpu_synth = x;
+                }
             }
         }
         c
@@ -271,6 +280,7 @@ impl Controls {
             "chunk": self.chunk,
             "kindle_kokoro": self.kindle_kokoro,
             "paused": self.paused,
+            "gpu_synth": self.gpu_synth,
         });
         let txt = serde_json::to_string_pretty(&json).unwrap_or_default();
         let _ = std::fs::write(dir.join("controls.json"), txt);
@@ -300,6 +310,7 @@ fn main() -> Result<(), slint::PlatformError> {
         ui.set_chunk(c.chunk as f32);
         ui.set_kindle_kokoro(c.kindle_kokoro);
         ui.set_paused(c.paused);
+        ui.set_gpu_synth(c.gpu_synth);
     }
     ui.set_model_ready(download::model_complete(&app_data));
 
@@ -389,6 +400,14 @@ fn main() -> Result<(), slint::PlatformError> {
         ui.on_chunk_changed(move |v| {
             let mut c = controls.lock().unwrap();
             c.chunk = v.round().max(1.0) as u32;
+            c.save();
+        });
+    }
+    {
+        let controls = controls.clone();
+        ui.on_gpu_synth_changed(move |v| {
+            let mut c = controls.lock().unwrap();
+            c.gpu_synth = v;
             c.save();
         });
     }

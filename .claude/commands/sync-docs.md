@@ -25,8 +25,8 @@ this" material) — don't pad.
   `installer.yml` (v* tag → draft release; publishing stays manual), and the
   clone-don't-use-release-archives guidance (Git LFS) stays true.
 - **Per-crate READMEs** — `kokoro-host/`, `kokoro-panel/`, `kokoro-protocol/`,
-  `kokoro-sapi/`, `kokoro-sapi-smoke/`, `kokoro-hook/`, `kokoro-inject/`, `native-deps/`.
-  These are deliberately *thin
+  `kokoro-sapi/`, `kokoro-sapi-smoke/`, `kokoro-hook/`, `kokoro-inject/`, `kokoro-bench/`,
+  `native-deps/`. These are deliberately *thin
   pointers* (orient + the load-bearing gotcha + a link to `CLAUDE.md`/`ARCHITECTURE.md`),
   so keep them thin: check their Layout tables list the files that actually exist, their
   build/run snippets still run, and any invariant they restate agrees with `CLAUDE.md`.
@@ -40,10 +40,14 @@ Drift-prone claim types to check explicitly:
   (`STREAM_END`/`SYNTH_ERROR` = `0xFFFF_FFFE`/`0xFFFF_FFFF`, the `'S'` request
   `[rate][textBytes][text]`, the `[nSamples][gain][f32…]` frame format).
 - **`controls.json` keys** — the keys the docs list are the ones actually written/read
-  (`voice`, `speed`, `gain`, `chunk`, `kindle_kokoro`, `paused`). `paused` is a live pause
-  command (not a persisted setting): the panel writes it and `pipe.rs` consumes it per
-  sub-frame to stall the stream. Note the pacing lead / sub-frame are *not* in the file —
-  they're fixed constants in `pipe.rs`, so docs must not describe them as user-tunable.
+  (`voice`, `speed`, `gain`, `chunk`, `kindle_kokoro`, `paused`, `gpu_synth`). `paused` is
+  a live pause command (not a persisted setting): the panel writes it and `pipe.rs`
+  consumes it per sub-frame to stall the stream. `gpu_synth` (GPU vs. CPU execution
+  provider, default `true` = GPU, no auto-detection) triggers a session rebuild in
+  `native_synth.rs` rather than landing free like the other synth fields — docs should
+  say so, not imply it's as cheap as a speed/gain change. Note the pacing lead /
+  sub-frame are *not* in the file — they're fixed constants in `pipe.rs`, so docs must
+  not describe them as user-tunable.
 - **Dependency pins / versions** — the ORT / `onnxruntime-webgpu` pin in
   `native-deps/fetch-deps.ps1` matches what the docs claim; the product version
   agrees across `packaging/installer.nsi` (`VERSION`) and the `FileVersion` in
