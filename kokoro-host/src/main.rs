@@ -176,9 +176,10 @@ fn main() {
     let mut panel_child: Option<std::process::Child> = None;
 
     // Kindle-watcher state: the event loop wakes on a timer and injects the hook once per
-    // Kindle instance (edge-triggered by PID). See kindle_watch.rs.
+    // Kindle instance (edge-triggered by PID), retrying while the injector reports failure.
+    // See kindle_watch.rs.
     let app_data = app_data_dir();
-    let mut last_injected_pid: Option<u32> = None;
+    let mut kindle = kindle_watch::Watch::default();
     const KINDLE_POLL: Duration = Duration::from_secs(4);
 
     // Build the tray after the event loop exists (its message-only window needs the
@@ -199,7 +200,7 @@ fn main() {
         match event {
             // Timer wake (or first run): poll for Kindle and inject the hook if needed.
             Event::NewEvents(StartCause::ResumeTimeReached { .. } | StartCause::Init) => {
-                kindle_watch::tick(&app_data, &mut last_injected_pid);
+                kindle_watch::tick(&app_data, &mut kindle);
             }
             Event::UserEvent(menu_event) => {
                 if menu_event.id == settings_id {

@@ -41,7 +41,7 @@ Load the detail on demand:
 | Need | Read |
 |---|---|
 | The engine chain end to end, streaming/pacing model, repo layout table, build-from-source | [`ARCHITECTURE.md`](ARCHITECTURE.md) |
-| Contributor workflow, CI table, release/tagging steps | [`DEVELOPMENT.md`](DEVELOPMENT.md) |
+| Contributor workflow, the two-model review split + `Reviewed-by:` convention, CI table, release/tagging steps | [`DEVELOPMENT.md`](DEVELOPMENT.md) |
 | Installer internals: NSIS build, elevation flow, ACL staging, uninstall | [`packaging/README.md`](packaging/README.md) |
 | Tray host + synth core internals (per-file layout) | [`kokoro-host/README.md`](kokoro-host/README.md) |
 | Settings panel internals | [`kokoro-panel/README.md`](kokoro-panel/README.md) |
@@ -152,6 +152,8 @@ the panel and Read Aloud in Kindle (or `test-speak.ps1`).
   `voice-setup.ps1 -Action register` stages both into an `icacls`-locked
   `%ProgramData%\Kokoro Kindle Reader\` and registers *those* copies, never the
   user-writable `%LOCALAPPDATA%` ones, and **fails closed** if the lock can't be set.
+  `-Action unregister` executes only those locked copies too — with the keys deleted
+  directly when they're absent, never a fallback to `resources\`.
   **Never point the installer's registration back at a user-writable path.** Full rationale
   and the residual (unsigned-installer) gap: [`packaging/README.md`](packaging/README.md).
 - **Kindle (MSIX) shadows HKCU.** Its SAPI default voice (`DefaultTokenId`) comes from the
@@ -170,7 +172,8 @@ the panel and Read Aloud in Kindle (or `test-speak.ps1`).
 - Invariants: the hook + `kokoro-inject.exe` **must stay x86** (Kindle is 32-bit; the
   injector reuses its own `LoadLibraryW` address in the target); the host (x64) **spawns**
   the injector, never injects itself; injection needs host and Kindle at the **same
-  integrity** (both normal user — the watcher logs and skips if `OpenProcess` fails); the
+  integrity** (both normal user — the watcher retries the injector a few times per Kindle
+  PID, then logs and gives up when `OpenProcess` keeps failing); the
   patch is **in-memory** (gone when Kindle exits — no persistence/unhook, so disabling
   applies on Kindle's next launch). `kokoro-hook`'s `selftest` guards the slot-18 ABI.
 

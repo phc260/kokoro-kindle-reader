@@ -31,6 +31,11 @@ commit subject/scope, not a literal message.
    - A body explaining the **why** when the change isn't self-evident, wrapped ~72 cols.
    - End with the trailer exactly:
      `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`
+   - **If Codex reviewed this change** (`/codex-review` ran and its findings shaped what
+     landed), add a `Reviewed-by: OpenAI Codex (<model>)` line *above* the
+     `Co-Authored-By:` trailer, naming the model actually used — check `model` in
+     `~/.codex/config.toml`, or whatever `-m` was passed. Do not add it for changes Codex
+     never saw, and do not guess the model. See "Code review" in `DEVELOPMENT.md`.
    - Incorporate `$ARGUMENTS` as a hint if provided.
 
 5. **Commit.** Never use `--no-verify` and never bypass signing. If a pre-commit hook
