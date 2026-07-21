@@ -111,15 +111,30 @@ state and isn't thread-safe (and
 the `ort` session lives here), so all synthesis is **serialized onto one dedicated
 worker thread** that owns the session for the process lifetime; requests arrive over an
 mpsc channel and replies come back on tokio oneshots so the async pipe tasks never
-block.
+block. One model limit shapes the code: **the Kokoro ONNX graph fails its BERT `Expand`
+node past ~510 tokens**, so each chunk's tokens are sub-split into `MAX_CONTENT_TOKENS`
+(500) windows, each wrapped in its own BOS/EOS, and the resulting PCM concatenated. A run
+also retries a couple of times — rebuilding the session on the last try — to ride out a
+transient Dawn device error.
 
-**Streaming.** `pipe.rs` synthesizes **sentence by sentence** — a small first chunk
-(fast first sound) then N-sentence chunks (user-tunable via the `chunk` setting) —
-with a **depth-1 prefetch pipeline**: chunk N+1 synthesizes while chunk N streams back,
-bounded by pipe backpressure. The engine writes each frame to the host in ~250 ms
-blocks, so there's no gap at chunk boundaries and `SPVES_ABORT` stops playback promptly
-(it closes the pipe, which cancels the rest of the stream). (Gaps *between Kindle
-pages* are Kindle's own page-turn time — each page is a fresh `Speak`.)
+**Streaming.** `pipe.rs` synthesizes **sentence by sentence**, with chunk sizes that
+**ramp 1, 2, 4, … up to the `chunk` setting**: a tiny first chunk gets audio started fast,
+then doubling builds a play buffer so the synth pipeline never starves. A **depth-1
+prefetch pipeline** renders chunk N+1 while chunk N streams back, bounded by pipe
+backpressure. The engine writes each frame to the host in ~250 ms blocks, so there's no
+gap at chunk boundaries and `SPVES_ABORT` stops playback promptly (it closes the pipe,
+which cancels the rest of the stream). (Gaps *between Kindle pages* are Kindle's own
+page-turn time — each page is a fresh `Speak`.)
+
+**SAPI events.** Each chunk is prefixed on the wire with a `CHUNK_INFO` frame
+(`0xFFFF_FFFD` + the chunk's UTF-16 span + its sample count), which lets the engine map a
+character position linearly onto that chunk's audio and so report `SPEI_WORD_BOUNDARY` /
+`SPEI_SENTENCE_BOUNDARY` / `SPEI_TTS_BOOKMARK` at their **true audio-stream offsets**.
+This is not cosmetic: **Kindle 18632's narrator is event-driven**
+(`WordBoundaryListHandler` + bookmark matching in `xrm120.dll`), and without these events
+it speaks the first sentence of a page and never advances. Relatedly, if the host reports
+a mid-stream `SYNTH_ERROR` *after* audio was already delivered, `Speak` ends with `S_OK`
+so Kindle finishes the delivered audio and turns the page rather than halting.
 
 **Volume responsiveness (Kindle path).** Gain/volume is baked into the int16 samples
 that sit in Kindle's audio buffer ahead of the speaker, so a naïve implementation lags
@@ -145,7 +160,7 @@ per-chunk sentence count, and GPU/CPU engine choice are the user-facing knobs.
 | `kokoro-protocol/` | The named-pipe wire constants (pipe name, `'S'`/`'I'`, `STREAM_END`/`SYNTH_ERROR`, sample rate) as a small crate shared by **both** `kokoro-host` and `kokoro-sapi` — the single source of truth for the format. |
 | `model-manifest.json` | Files the model downloads from HF (paths + sizes + SHA-256); embedded in `kokoro-panel` (the narrator list is derived from it). |
 | `icons/` | Shared app icons (LFS); embedded in the exes' version resource and the installer. |
-| `packaging/` | `installer.nsi` + `build-installer.ps1` (standalone NSIS build). |
+| `packaging/` | `installer.nsi` + `build-installer.ps1` (standalone NSIS build) — per-user install with self-elevating voice registration. See [`packaging/README.md`](packaging/README.md). |
 
 ## Building from source
 

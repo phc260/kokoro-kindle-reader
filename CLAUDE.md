@@ -5,31 +5,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Local, offline Kokoro-82M text-to-speech synthesized **natively on the Dawn WebGPU**
 execution provider of ONNX Runtime (the same Dawn as Chrome/WebView2) — **no WebView2,
 no browser, no C++**. The synth core is pure Rust: the `ort` crate drives the model on
-the WebGPU EP, and espeak-ng is reached over a thin FFI. The app is two cooperating
-binaries plus small x86 in-process pieces Kindle needs:
+the WebGPU EP, and espeak-ng is reached over a thin FFI. Two x64 exes, plus three x86
+artifacts Kindle loads in-process:
 
-1. **`kokoro-host.exe`** — a **windowless system-tray daemon** (x64). It owns the named
-   pipe, synthesizes natively, reads its settings live from `controls.json`, and runs the
-   **Kindle-watcher** (`kindle_watch.rs`) that injects the hook below. It is the only
-   thing that produces audio. Auto-starts hidden at login.
-2. **`kokoro-panel.exe`** — a **native settings panel** (Slint/Fluent), **spawned on
-   demand** from the tray "Settings" item. Pick a narrator, tune speed/volume, audition
-   with a **Preview** button (synthesizes a fixed per-voice intro line; there is **no**
-   free-text reading box), download/verify the model, and toggle whether Kindle narrates
-   with Kokoro. Zero resident UI at idle.
-3. **`KokoroSapi.dll`** — a thin **x86** COM shim (Rust, `kokoro-sapi`) that Kindle
-   loads in-process. It's **connect-only**: it forwards each `Speak` over a named pipe
-   to the running host, which synthesizes and returns PCM.
-4. **`kokoro_hook.dll` + `kokoro-inject.exe`** — x86 pieces that make **Kindle for PC
-   1.0.18632.0+** narrate with Kokoro. That build's narrator forces the WinRT/OneCore
-   default voice via `ISpVoice::SetVoice`, ignoring the classic SAPI5 `DefaultTokenId`, so
-   the host's watcher spawns `kokoro-inject.exe`, which LoadLibrary-injects `kokoro_hook.dll`
-   into Kindle; the hook patches the shared `SetVoice` vtable slot so the Kokoro token wins.
-   Only then does Kindle load `KokoroSapi.dll` (#3). See `kokoro-hook` / `kokoro-inject`.
-
-All audio is produced by the native synth in `kokoro-host`; the SAPI engine itself does
-no synthesis. **Consequence: `kokoro-host` must be running for Kindle to speak** — and it
-is also what injects the hook, so one running host both hooks Kindle and serves its audio.
+1. **`kokoro-host.exe`** (x64) — windowless system-tray daemon. Owns the named pipe,
+   synthesizes, reads `controls.json` live, runs the Kindle-watcher. The only thing that
+   produces audio. Auto-starts hidden at login.
+2. **`kokoro-panel.exe`** — native Slint settings panel, spawned on demand from the tray.
+   Narrator/speed/volume, Preview, model download/verify, Kindle-narration toggle.
+3. **`KokoroSapi.dll`** (x86) — thin connect-only COM shim Kindle loads in-process; forwards
+   each `Speak` over the pipe to the host.
+4. **`kokoro_hook.dll` + `kokoro-inject.exe`** (x86) — make Kindle for PC 1.0.18632.0+ narrate
+   with Kokoro by patching the `ISpVoice::SetVoice` vtable slot.
 
 ```
 Kindle.exe (x86) ──in-proc COM (LoadLibrary + vtable)──▶ KokoroSapi.dll (x86 shim)
@@ -41,6 +28,30 @@ Kindle.exe (x86) ──in-proc COM (LoadLibrary + vtable)──▶ KokoroSapi.dl
                           ▲                     │
       kokoro-panel.exe (Slint) writes ─────────┘
 ```
+
+All audio comes from the native synth in `kokoro-host`; the SAPI engine synthesizes
+nothing. **Consequence: `kokoro-host` must be running for Kindle to speak** — and it also
+injects the hook, so one running host both hooks Kindle and serves its audio.
+
+## Where the details live
+
+This file carries only the **invariants** — the things that are expensive to rediscover.
+Load the detail on demand:
+
+| Need | Read |
+|---|---|
+| The engine chain end to end, streaming/pacing model, repo layout table, build-from-source | [`ARCHITECTURE.md`](ARCHITECTURE.md) |
+| Contributor workflow, CI table, release/tagging steps | [`DEVELOPMENT.md`](DEVELOPMENT.md) |
+| Installer internals: NSIS build, elevation flow, ACL staging, uninstall | [`packaging/README.md`](packaging/README.md) |
+| Tray host + synth core internals (per-file layout) | [`kokoro-host/README.md`](kokoro-host/README.md) |
+| Settings panel internals | [`kokoro-panel/README.md`](kokoro-panel/README.md) |
+| SAPI engine: COM exports, interfaces, dev registration, smoke tests | [`kokoro-sapi/README.md`](kokoro-sapi/README.md) · [`kokoro-sapi-smoke/README.md`](kokoro-sapi-smoke/README.md) |
+| Pipe wire format (the single source of truth) | [`kokoro-protocol/README.md`](kokoro-protocol/README.md) + the crate itself |
+| Kindle 18632 hook + injector | [`kokoro-hook/README.md`](kokoro-hook/README.md) · [`kokoro-inject/README.md`](kokoro-inject/README.md) |
+| Dep provisioning (ORT/Dawn DLLs, espeak-ng) | [`native-deps/README.md`](native-deps/README.md) |
+| GPU-vs-CPU synth timings + settled perf dead ends | [`kokoro-bench/README.md`](kokoro-bench/README.md) |
+| User-facing install/usage | [`README.md`](README.md) |
+| Codex's copy of these instructions (reviewer role + constraints) | [`AGENTS.md`](AGENTS.md) — keep its invariant list in sync with this file |
 
 ## Commands
 
@@ -66,8 +77,8 @@ cargo run --release --target i686-pc-windows-msvc --manifest-path kokoro-hook\Ca
 # registration survives rebuilds. The packaged installer does this automatically.
 C:\Windows\SysWOW64\regsvr32.exe "kokoro-sapi\target\i686-pc-windows-msvc\release\KokoroSapi.dll"
 
-# Packaged installer — builds the x86 DLL + release-builds both crates, stages everything
-# (both exes + native runtime + the x86 DLL + guard scripts), then runs makensis. NSIS.
+# Packaged installer — builds the x86 DLL + release-builds both crates, stages everything,
+# then runs makensis. NSIS. See packaging/README.md.
 packaging\build-installer.ps1
 # CI does this on a v* tag (.github/workflows/installer.yml); sapi.yml
 # builds the x86 DLL + runs the COM smoke test on kokoro-sapi/** changes; hook.yml
@@ -80,157 +91,12 @@ cargo run --release --target i686-pc-windows-msvc --manifest-path kokoro-sapi-sm
 C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe -File kokoro-sapi\test-speak.ps1
 ```
 
-No Rust test suites; "testing" is Preview in the panel and Read Aloud in Kindle (or
-`test-speak.ps1`).
-
-## Architecture
-
-### Native synthesis (the one engine) — pure Rust
-- `kokoro-host/src/native_synth.rs` — the whole synth core. Per chunk: `text.rs`
-  normalize/segment → `espeak.rs` phonemize each segment → tokenize (tokenizer.json
-  vocab) → the Kokoro ONNX model on the ORT **Dawn WebGPU** EP via the **`ort` crate**
-  (`load-dynamic` against the staged `onnxruntime.dll`; `WebGPU::default()` EP by
-  default) → f32 PCM. Setting `controls.json`'s `gpu_synth` flag to `false` (the
-  panel's "Synthesize on GPU" checkbox, default `true`) switches the EP to plain
-  **CPU** (`ort::ep::CPU`) instead — a manual fallback, no auto-detection yet; see
-  `Engine` and the standalone `kokoro-bench` crate (the benchmark that motivated it:
-  an Intel UHD 620 ran WebGPU at 0.50x realtime vs. CPU fp32 at 1.07x). Switching engines rebuilds the
-  session (the EP is fixed at session-build time), so it's a one-time hitch, not a
-  per-chunk cost. espeak keeps global state and isn't thread-safe (and the `ort` session lives
-  here), so **all synthesis is serialized onto one dedicated worker thread** that owns
-  the session for the process lifetime; requests arrive over an mpsc channel and replies
-  come back on tokio oneshots so the async pipe tasks never block. It also owns the
-  `controls.json` reader (`read_controls`). **The model fails the BERT `Expand` node past
-  ~510 tokens**, so a chunk's tokens are sub-split into `MAX_CONTENT_TOKENS`(=500) windows
-  (each wrapped in its own BOS/EOS) and the PCM concatenated; a run also retries a couple
-  times (rebuilding the session on the last try) to ride out a transient Dawn device error.
-- `kokoro-host/src/text.rs` — Kokoro-js text normalization (11 passes) + punctuation
-  segmentation + phoneme post-processing, on UTF-8 bytes; verified token-parity vs
-  kokoro-js. `kokoro-host/src/espeak.rs` — the espeak-ng FFI + one-segment phoneme
-  trace (temp-file trace via CRT `fopen`/`fclose`).
-- `native-deps/` is now just **dep provisioning**: `fetch-deps.ps1` populates the
-  gitignored dep folders **alongside itself** (`native-deps/runtime/` + `espeak-ng-src/`;
-  the `onnxruntime-webgpu` pip wheel → Dawn `onnxruntime.dll` +
-  `dxcompiler.dll` + `dxil.dll` + `onnxruntime_providers_shared.dll`; `build-espeak.ps1`
-  → `espeak-ng.dll` + import lib + `espeak-ng-data`). No C++ source remains.
-
-### The host (`kokoro-host/src/`) — windowless tray daemon
-- `main.rs` — a `tao` event loop with a `tray-icon` menu (Settings / Quit) and
-  `auto-launch` (release-only) that registers `kokoro-host.exe --hidden` at login.
-  "Settings" spawns `kokoro-panel.exe` (tracked via `Child`/`try_wait` to avoid dup
-  windows). `#![windows_subsystem = "windows"]` in release so there's no console.
-- `pipe.rs` — the **SAPI bridge** and the **owner of all chunking**. A tokio named-pipe
-  server at `\\.\pipe\KokoroSapiSynth` speaking the wire format from the `kokoro-protocol`
-  crate (pipe name, `'S'`/`'I'` commands, `STREAM_END`/`SYNTH_ERROR` markers). Each
-  `'S'` request carries the **whole utterance**; `split_text` cuts it into sentence
-  chunks whose size **ramps 1, 2, 4, … up to `chunk`** (a tiny first chunk starts audio
-  fast, then doubling builds a play buffer so the synth pipeline never starves), a
-  **depth-1 prefetch pipeline** renders each chunk via `native_synth`, and the PCM is
-  streamed back: each chunk is prefixed with a `CHUNK_INFO` marker + `[u32 utf16Len][u32
-  nSamples]` (so the engine can place word/bookmark events at true audio offsets), then
-  the chunk's audio sub-frames **frame by frame** (`[nSamples][gain][f32…]`), then a
-  `STREAM_END` / `SYNTH_ERROR` marker (the u32 sentinels `0xFFFF_FFFE` / `0xFFFF_FFFF`;
-  `CHUNK_INFO` = `0xFFFF_FFFD`). Gain is read from `controls.json` **per sub-frame**; the
-  pacing lead (500 ms) and sub-frame size (250 ms) are **fixed built-in defaults**
-  (`DEFAULT_LEAD_MS` / `DEFAULT_SUBFRAME_MS`).
-- `native_synth.rs` + `text.rs` + `espeak.rs` + `split_text.rs` — live in
-  `kokoro-host/src/` (plain modules). `build.rs` links the prebuilt espeak-ng import lib
-  (for the `espeak.rs` FFI) and stages the 5 runtime DLLs + `espeak-ng-data` next to the
-  host exe; `onnxruntime.dll` is loaded at runtime by `ort` (load-dynamic), not linked.
-
-### The panel (`kokoro-panel/src/` + `ui/panel.slint`) — Slint, on demand
-- `main.rs` wires the Slint UI to the framework-agnostic `download.rs` (model
-  download/verify) and `preview.rs` (synth via the host pipe + rodio playback = WYSIWYG,
-  same engine as Kindle). Background work runs on threads and pushes results back via
-  `upgrade_in_event_loop`. The "Narrate Kindle with Kokoro" checkbox raises a Yes/No
-  confirm dialog before it takes effect; on Yes it persists `kindle_kokoro` to
-  `controls.json` (no elevation — the host's Kindle-watcher acts on it) and closes
-  Kindle via `kindle_reader::close()` (`WM_CLOSE` to Kindle's window, found by process
-  name via Toolhelp32) since the flag only lands on Kindle's *next* launch; on No it
-  reverts the checkbox and persists nothing. Relaunching is left to the user.
-  `kindle_reader.rs` also drives Kindle's Read Aloud toggle: it foregrounds Kindle and
-  sends the hands-free Ctrl+A shortcut via raw `SendInput` (works regardless of menu
-  state), not the UIA ToggleButton — that toggle only exists in the tree while Kindle's
-  Aa menu happens to be open, so UI Automation is used just for best-effort state
-  readback, never for control.
-- The narrator list is derived from the embedded `model-manifest.json` (accent from
-  `id[0]` a/b, gender from `id[1]` f/m). Controls persist to `controls.json`.
-
-### Settings — `controls.json` (single source of truth)
-- Lives at `%APPDATA%\com.phc260.kokoro-kindle-reader\controls.json`. Fields: **`voice`,
-  `speed`, `gain`, `chunk`, `kindle_kokoro`, `paused`, `gpu_synth`**. The panel writes it;
-  the host reads it **live** — `voice`/`speed`/`gain`/`chunk`/`gpu_synth` per
-  utterance/sub-frame (so a change lands on Kindle's **next page**, no IPC/restart, though
-  `gpu_synth` also costs a session rebuild the first time it lands — see below),
-  `kindle_kokoro` per watcher tick in
-  `kindle_watch.rs` (gates auto-injection; default `true`), and `paused` per sub-frame in
-  `pipe.rs` — a live pause command (not a persisted setting): while set, the stream stalls
-  with the pipe held open and Kindle keeps the page. (The pacing lead/sub-frame are
-  *not* in the file; they're fixed constants in `pipe.rs`.)
-
-### Kindle 18632 hook (`kokoro-host/src/kindle_watch.rs` + `kokoro-hook/` + `kokoro-inject/`)
-Kindle for PC 1.0.18632.0 (2026-07-07) added a new native narrator (`SpVoiceEngine` in
-`xrm120.dll`) that resolves its voice from the **WinRT `SpeechSynthesizer` default** and
-applies it via `ISpVoice::SetVoice`, ignoring the classic SAPI5 `DefaultTokenId` — so
-Kokoro is never selected even though it's registered. The engine is still classic
-`ISpVoice`, so the fix is to change *which token reaches `SetVoice`*:
-- `kokoro-host/src/kindle_watch.rs` — the host's watcher. On a 4 s `tao` timer it polls for
-  `Kindle.exe`; when a new PID appears and `kindle_kokoro` is on, it spawns `kokoro-inject.exe`
-  (edge-triggered per PID). The host (x64) does **not** inject itself.
-- `kokoro-inject` — x86 exe that `LoadLibrary`-injects the hook (`OpenProcess` +
-  `VirtualAllocEx` + `WriteProcessMemory` + `CreateRemoteThread(LoadLibraryW)`). x86 so its
-  own `kernel32!LoadLibraryW` address is valid in x86 Kindle.
-- `kokoro-hook` — x86 cdylib. Its `DllMain` patches the process-shared `ISpVoice` vtable slot
-  for `SetVoice` (**index 18**) to force the Kokoro token. `selftest` bin proves the override
-  Kindle-free (guards the slot-18 ABI). The patch is in-memory only; it dies with Kindle.
-
-### SAPI engine (`kokoro-sapi/`) — Rust x86 cdylib, connect-only, no deps
-A `crate-type = ["cdylib"]` built for `i686-pc-windows-msvc` (Kindle is 32-bit). It
-uses `windows-rs` for the COM plumbing; the three `sapiddk.h` interfaces (`ISpTTSEngine`,
-`ISpTTSEngineSite`, `ISpObjectWithToken`) are **hand-declared** via `#[interface]` since
-windows-rs ships only the SAPI *SDK* surface. `panic = "abort"` — a Rust panic must never
-unwind into Kindle.
-- `lib.rs` — the four exported COM entry points (`DllGetClassObject` / `DllCanUnloadNow` /
-  `DllRegisterServer` / `DllUnregisterServer`), `DllMain`, the class factory, and
-  registration (writes the CLSID `InprocServer32` + the `KokoroTTS` voice token).
-  `#[no_mangle] extern "system"` exports them undecorated, so **no `.def` file is needed**.
-- `engine.rs` — `KokoroEngine` (`ISpTTSEngine` + `ISpObjectWithToken`): `Speak` forwards
-  the whole utterance over the pipe and **streams** the response sub-frames straight to the
-  SAPI site in ~250 ms blocks (gain baked per sub-frame, host volume per block, `SPVES_ABORT`
-  checks) — no buffering, so audio starts fast and never gaps (Kindle sends the whole page
-  in one `Speak` and drops the stream if it goes quiet). As it writes each block it **reports
-  SAPI events** (`SPEI_WORD_BOUNDARY` per word, `SPEI_SENTENCE_BOUNDARY` per fragment,
-  `SPEI_TTS_BOOKMARK` for each `<bookmark>` SAPI parsed) at their true audio-stream offsets:
-  each `CHUNK_INFO` frame carries the chunk's UTF-16 span + sample count, so an event's char
-  position maps linearly onto that chunk's audio. **Kindle 18632's narrator is event-driven**
-  (`WordBoundaryListHandler` + bookmark matching in `xrm120.dll`) — without these events it
-  speaks the first sentence of a page and never advances. If the host reports a mid-stream
-  `SYNTH_ERROR` *after* audio was delivered, `Speak` ends with `S_OK` (Kindle finishes the
-  delivered audio and turns the page) rather than halting.
-- `worker.rs` — the pipe **client** (connect-only, no spawn); `sapi.rs` — the interface
-  declarations; the wire format is the shared **`kokoro-protocol`** crate (used by both
-  the DLL and `pipe.rs` — one source of truth).
-- The `voice-setup.ps1` / `kindle-voice-guard.ps1` / `test-speak.ps1` scripts live here.
-  Verified by `kokoro-sapi-smoke` (no-Kindle COM + Speak smoke test).
-
-### Packaging / installer
-- **Standalone NSIS** via `makensis` (`packaging/installer.nsi` + `build-installer.ps1`)
-  — **not** a Tauri bundler. `build-installer.ps1` release-builds both crates, builds the
-  three x86 artifacts (`KokoroSapi.dll` + `kokoro_hook.dll` + `kokoro-inject.exe`), stages
-  the two exes + the 5 runtime DLLs + `espeak-ng-data` + `icons/icon.ico` + those x86
-  artifacts + guard scripts (the x86 files + scripts go under `resources\`), then runs `makensis`.
-- **Per-user (`currentUser`, unelevated)**, installs to `$LOCALAPPDATA\kokoro-kindle-reader`
-  (the same path the original app used). Registration self-elevates: the install/uninstall
-  sections call **`voice-setup.ps1`**, which relaunches itself through UAC
-  (`Start-Process -Verb RunAs`) to `regsvr32` the DLL (HKLM/WOW6432Node) and run
-  `kindle-voice-guard.ps1` (`reg load` the Kindle hive). One UAC prompt per install.
-- Sets the HKCU Run value to `kokoro-host.exe --hidden` (login autostart). The uninstaller
-  reverts Kindle to Microsoft David **before** unregistering, drops the Run value, and
-  **offers** (default: keep, `/SD IDNO`) to delete the downloaded model — so a silent
-  upgrade run doesn't force a multi-hundred-MB re-download.
+No Rust test suites except `text.rs`'s golden normalization tests; "testing" is Preview in
+the panel and Read Aloud in Kindle (or `test-speak.ps1`).
 
 ## Gotchas / invariants (do not rediscover these)
 
+### Runtime / synth
 - **`kokoro-host` must be running** or Kindle gets no audio (the engine's `Speak` returns
   `E_FAIL` when the pipe is absent — no fallback). It's a windowless tray daemon that
   **auto-starts hidden at login** (`auto-launch`, `--hidden`); Quit is only via the tray
@@ -238,86 +104,88 @@ unwind into Kindle.
   **fast-scrolling** when the host is gone mid-Read-Aloud: a mid-session pipe disconnect
   makes each per-page `Speak` fail instantly, which Kindle reads as "page done" and races
   through the book — so keep the host alive.
-- **The engine must stay x86** — Kindle is a 32-bit process and loads the COM DLL
-  in-process by registry path. It **cannot** be merged into the x64 host; it's a separate
-  file, bundled + registered by the installer.
-- **`controls.json` is the single source of truth, read live.** The panel writes
-  `voice`/`speed`/`gain`/`chunk`/`kindle_kokoro`/`paused`/`gpu_synth`; the host re-reads
-  `voice`/`speed`/`chunk`/`gpu_synth` per utterance and `gain`/`paused` per sub-frame (via
-  `native_synth::read_controls`), so a slider move lands on the next chunk/page — not
-  frozen into prefetched samples (and `paused` stalls the stream live; `gpu_synth`
-  triggers a session rebuild on the next chunk that needs one). `kindle_kokoro` is read
-  separately, per watcher tick, by `kindle_watch::enabled` (default `true`).
-  **Invariant: every key the panel writes must be read by whichever host reader consumes it —
-  `read_controls` for the synth fields (`paused` among them, consumed in `pipe.rs`), `kindle_watch`
-  for `kindle_kokoro` — keep them in sync.** The pacing lead / sub-frame size are **not**
-  user-tunable; fixed constants in `pipe.rs`.
 - **Native synth is serialized.** espeak has global state + isn't thread-safe (and the
   `ort` session is owned by the worker), so ONE dedicated thread owns the synth; never
   call espeak / run the session from multiple threads.
-- **`fetch-deps.ps1` must run before building `kokoro-host`.** `build.rs` panics if
-  the provisioned dep folders under `native-deps/` (ORT + Dawn DLLs + espeak) are missing;
-  that's what `fetch-deps.ps1` provisions. It also stages the 5 runtime DLLs next to the exe.
+- **The model fails the BERT `Expand` node past ~510 tokens.** A chunk's tokens are
+  sub-split into `MAX_CONTENT_TOKENS`(=500) windows, each wrapped in its own BOS/EOS, and
+  the PCM concatenated (`native_synth.rs`). A run also retries a couple of times —
+  rebuilding the session on the last try — to ride out a transient Dawn device error.
+- **Kindle 18632's narrator is event-driven.** `engine.rs` must report
+  `SPEI_WORD_BOUNDARY` / `SPEI_SENTENCE_BOUNDARY` / `SPEI_TTS_BOOKMARK` at true
+  audio-stream offsets, which is what the `CHUNK_INFO` frame (`0xFFFF_FFFD` + the chunk's
+  UTF-16 span + sample count) exists to make possible. Without those events Kindle speaks
+  the first sentence of a page and never advances.
+- **`fetch-deps.ps1` must run before building `kokoro-host`.** `build.rs` panics if the
+  provisioned dep folders under `native-deps/` (ORT + Dawn DLLs + espeak) are missing.
+  It also stages the 5 runtime DLLs next to the exe.
+
+### `controls.json` — single source of truth, read live
+- Lives at `%APPDATA%\com.phc260.kokoro-kindle-reader\controls.json`. The panel writes
+  `voice`/`speed`/`gain`/`chunk`/`kindle_kokoro`/`paused`/`gpu_synth`; the host re-reads
+  `voice`/`speed`/`chunk`/`gpu_synth` per utterance and `gain`/`paused` per sub-frame (via
+  `native_synth::read_controls`), so a slider move lands on the next chunk/page — not
+  frozen into prefetched samples (`paused` stalls the stream live with the pipe held open;
+  `gpu_synth` triggers a session rebuild on the next chunk, since the EP is fixed at
+  session-build time). `kindle_kokoro` is read separately, per watcher tick, by
+  `kindle_watch::enabled` (default `true`).
+- **Invariant: every key the panel writes must be read by whichever host reader consumes it**
+  — `read_controls` for the synth fields (`paused` among them, consumed in `pipe.rs`),
+  `kindle_watch` for `kindle_kokoro`. Keep them in sync.
+- The pacing lead (500 ms) / sub-frame size (250 ms) are **not** user-tunable; fixed
+  constants in `pipe.rs` (`DEFAULT_LEAD_MS` / `DEFAULT_SUBFRAME_MS`).
+
+### Bitness, registration, file placement
+- **The engine must stay x86** — Kindle is a 32-bit process and loads the COM DLL
+  in-process by registry path. It **cannot** be merged into the x64 host.
 - **Registration → `WOW6432Node`.** The 32-bit `regsvr32` writes `HKLM\SOFTWARE\Classes\…`
   into the WOW64 view — exactly what 32-bit Kindle reads.
 - **Register from a stable path, never a git worktree.** The token's `InprocServer32`
   stores the absolute DLL path it was registered from; if that path goes away (e.g. an
   auto-cleaned worktree), Kindle's `LoadLibrary` fails silently and Read Aloud plays
   **nothing**. For a **dev** build, register the main checkout's
-  `kokoro-sapi\target\i686-pc-windows-msvc\release\KokoroSapi.dll`. The **installer** does
-  *not* register the bundled `resources\KokoroSapi.dll`: `voice-setup.ps1` first copies it
-  (and `kindle-voice-guard.ps1`) into an admin-owned, ACL-locked
-  `%ProgramData%\Kokoro Kindle Reader\engine\` and registers *that* — so the DLL that runs
-  elevated (regsvr32 → `DllRegisterServer`) and the one Kindle loads is never the
-  user-writable `%LOCALAPPDATA%` copy. **Never point the installer's registration back at a
-  user-writable path** — that reopens the local-EoP window below.
-- **Installer is `currentUser`, registration self-elevates.** `installMode: currentUser`
-  keeps the app out of `C:\Program Files` and runs the installer unelevated, but
-  `DllRegisterServer` writes HKLM and the Kindle guard does `reg load`, both needing admin
-  — so the hooks call `voice-setup.ps1`, which relaunches through UAC. Caveat: if UAC is
-  satisfied with a **different** admin account, the guard's `$env:LOCALAPPDATA` points at
-  that admin's profile and it won't find the installing user's Kindle hive (logs "hive not
-  found", skips).
-- **Never run an elevated artifact from a user-writable path (local EoP).** `regsvr32`
-  runs a DLL's `DllRegisterServer` and the guard runs a `.ps1` — both **as admin**. If those
-  files sat in `%LOCALAPPDATA%` (writable by the possibly-lower-integrity user), a same-user
-  process could swap them and get code run as admin on the next install/uninstall. So
-  `voice-setup.ps1 -Action register` stages both into `%ProgramData%\Kokoro Kindle Reader\`
-  with an `icacls`-locked ACL (SYSTEM + Administrators Full, Users read/execute, owner =
-  Administrators **group** so an admin user's medium-integrity process can't reopen the ACL
-  via owner-`WRITE_DAC`), registers/runs the locked copies, and **fails closed** if the lock
-  can't be set. Unregister reverts the voice, unregisters, then removes that dir. Do the
-  privileged file placement from the **elevated** context, not from NSIS (which runs
-  unelevated). Residual, only closable by signing the installer: the resources\ *source* and
-  the entry-point `.ps1` are still user-writable, so first-install/entry-point tampering
-  needs a signed installer to fully close.
+  `kokoro-sapi\target\i686-pc-windows-msvc\release\KokoroSapi.dll`.
+- **Don't move `kokoro-sapi/`** — the registered token points at the DLL by path;
+  relocating means re-`regsvr32`.
+- **Never run an elevated artifact from a user-writable path (local EoP).** `regsvr32` runs
+  a DLL's `DllRegisterServer` and the guard runs a `.ps1` — both **as admin**. So
+  `voice-setup.ps1 -Action register` stages both into an `icacls`-locked
+  `%ProgramData%\Kokoro Kindle Reader\` and registers *those* copies, never the
+  user-writable `%LOCALAPPDATA%` ones, and **fails closed** if the lock can't be set.
+  **Never point the installer's registration back at a user-writable path.** Full rationale
+  and the residual (unsigned-installer) gap: [`packaging/README.md`](packaging/README.md).
 - **Kindle (MSIX) shadows HKCU.** Its SAPI default voice (`DefaultTokenId`) comes from the
   package hive (`…\Packages\AMZNKindle…\SystemAppData\Helium\User.dat`), not real HKCU.
   Patch it via `reg load`/`unload` with Kindle stopped — `kindle-voice-guard.ps1 -Set
-  kokoro|david`. It runs in two places: the installer (`-Set kokoro` after the token
-  registers) and the uninstaller (`-Set david` before the token is deleted); both self-skip
-  if the hive is absent. **On Kindle 1.0.18632.0+ this `DefaultTokenId` is ignored by the
-  narrator** (it uses the WinRT default — see the Kindle-18632 hook), so the guard is a
-  harmless no-op there, kept only for older builds. The panel's checkbox no longer runs the
-  guard; it just persists `kindle_kokoro`, which the host's watcher acts on (no UAC).
-- **The Kindle-18632 hook is selection-only, in-memory, x86, and slot-18.** Kindle 18632's
-  narrator `SetVoice`s the WinRT default; the fix injects `kokoro_hook.dll` to patch the
-  shared `ISpVoice` vtable **slot 18** (`SetVoice`) → Kokoro token. Invariants: the hook +
-  `kokoro-inject.exe` **must stay x86** (Kindle is 32-bit; the injector reuses its own
-  `LoadLibraryW` address in the target); the host (x64) **spawns** the injector, never injects
-  itself; injection needs host and Kindle at the **same integrity** (both normal user — the
-  watcher logs and skips if `OpenProcess` fails); the patch is **in-memory** (gone when Kindle
-  exits — no persistence/unhook, so disabling applies on Kindle's next launch). `kokoro-hook`'s
-  `selftest` guards the slot-18 ABI.
-- **Don't move `kokoro-sapi/`** — the registered token points at the DLL by path;
-  relocating means re-`regsvr32`.
-- **Shared files live outside the engine crate.** the synth core (`native_synth.rs` +
-  `text.rs` + `espeak.rs` + `split_text.rs`) is in
-  `kokoro-host/src/`; `model-manifest.json` + `icons/` are at the repo root (the panel
-  embeds the manifest; the exes + installer use the icons). `icons/*` are in Git LFS. The
-  pipe wire constants are in the `kokoro-protocol` crate (a `path` dep of `kokoro-host`).
-  The Kindle-18632 hook + injector are standalone root crates (`kokoro-hook/`,
+  kokoro|david`. **On Kindle 1.0.18632.0+ this `DefaultTokenId` is ignored by the narrator**
+  (it uses the WinRT default — see the hook), so the guard is a harmless no-op there, kept
+  only for older builds. The panel's checkbox no longer runs it; it just persists
+  `kindle_kokoro`, which the host's watcher acts on (no UAC).
+
+### The Kindle-18632 hook
+- **Selection-only, in-memory, x86, slot-18.** Kindle 18632's narrator (`SpVoiceEngine` in
+  `xrm120.dll`) resolves its voice from the WinRT `SpeechSynthesizer` default and applies it
+  via `ISpVoice::SetVoice`, ignoring `DefaultTokenId`. The fix injects `kokoro_hook.dll` to
+  patch the shared `ISpVoice` vtable **slot 18** (`SetVoice`) → Kokoro token.
+- Invariants: the hook + `kokoro-inject.exe` **must stay x86** (Kindle is 32-bit; the
+  injector reuses its own `LoadLibraryW` address in the target); the host (x64) **spawns**
+  the injector, never injects itself; injection needs host and Kindle at the **same
+  integrity** (both normal user — the watcher logs and skips if `OpenProcess` fails); the
+  patch is **in-memory** (gone when Kindle exits — no persistence/unhook, so disabling
+  applies on Kindle's next launch). `kokoro-hook`'s `selftest` guards the slot-18 ABI.
+
+### Where shared files live
+- The synth core (`native_synth.rs` + `text.rs` + `espeak.rs` + `split_text.rs`) is in
+  `kokoro-host/src/` — **not** in the engine crate. `text.rs`/`espeak.rs` must stay
+  pure/self-contained (no `kokoro-host`-specific state) because `kokoro-bench` reuses them
+  via `#[path]` includes (`kokoro-host` is bin-only, no lib target).
+- `model-manifest.json` + `icons/` are at the repo root (the panel embeds the manifest; the
+  exes + installer use the icons). `icons/*` are in Git LFS.
+- The pipe wire constants live in the `kokoro-protocol` crate — a `path` dep of **both**
+  `kokoro-host` and `kokoro-sapi`, so the two ends can't drift. Neither may hardcode them.
+- The Kindle-18632 hook + injector are standalone root crates (`kokoro-hook/`,
   `kokoro-inject/`), built x86 and staged into the installer's `resources\`.
+- There is **no root workspace**; each crate builds standalone with its own target dir.
 
 ## Environment quirks
 
