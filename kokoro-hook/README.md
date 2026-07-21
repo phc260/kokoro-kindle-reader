@@ -34,6 +34,11 @@ cargo build --release --target i686-pc-windows-msvc
 | `src/lib.rs` | `install()` (the vtable patch, idempotent), `verify()` (in-process self-check + an optional real `Speak` gated by a `%TEMP%\kokoro-hook-speak` flag file), and `DllMain`, which spawns `install()` on a thread off the loader lock (COM must not run inside `DllMain`). Logs to `%TEMP%\kokoro-hook.log`. |
 | `src/bin/selftest.rs` | Kindle-free proof the override works: `SetVoice(other)` before the hook (honoured, not Kokoro), install the hook, `SetVoice(other)` again (now yields Kokoro). No injection, no audio. |
 
+`src/bin/` is **source**, not build output — it's Cargo's standard location for a crate's
+extra binary targets (unlike `bin/` in .NET/Java). Compiled artifacts go to `target/`.
+Cargo auto-discovers `src/bin/*.rs`, so the `[[bin]]` stanza in `Cargo.toml` only names the
+target; it needs no `path`.
+
 ## Testing
 
 ```powershell
