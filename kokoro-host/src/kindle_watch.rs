@@ -14,7 +14,7 @@
 
 use std::mem::size_of;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command};
 
 use windows::Win32::Foundation::CloseHandle;
 use windows::Win32::System::Diagnostics::ToolHelp::{
@@ -104,24 +104,84 @@ fn enabled(app_data: &Path) -> bool {
     }
 }
 
-/// One watcher tick. Inject into a newly-seen Kindle when enabled; edge-triggered by PID so a
-/// still-running Kindle isn't re-injected, but a restart (new PID) is. Never panics.
-pub fn tick(app_data: &Path, last_injected_pid: &mut Option<u32>) {
-    let Some(pid) = find_pid(TARGET) else {
-        *last_injected_pid = None; // Kindle gone -> a new instance should re-inject
+/// Injector runs allowed per Kindle instance. A failure is usually permanent for that
+/// instance (Kindle elevated -> `OpenProcess` denied, or the hook DLL is missing), so retry a
+/// couple of times to ride out a race against Kindle's startup, then stop until it restarts.
+const MAX_ATTEMPTS: u32 = 3;
+
+/// Watcher state for the current Kindle instance. Reset wholesale when the PID changes.
+#[derive(Default)]
+pub struct Watch {
+    /// The Kindle instance the rest of these fields describe; `None` when Kindle isn't running.
+    pid: Option<u32>,
+    /// Injector runs already spent on `pid`.
+    attempts: u32,
+    /// An injector exited 0 for `pid` -- the hook is in.
+    hooked: bool,
+    /// In-flight injector, reaped on a later tick. Never waited on inline: this runs on the
+    /// tray's event-loop thread, and the injector blocks on Kindle's remote `LoadLibraryW`.
+    child: Option<Child>,
+}
+
+/// One watcher tick. Injects into a newly-seen Kindle when enabled, and confirms the injector
+/// actually succeeded before considering the instance handled. Never panics.
+pub fn tick(app_data: &Path, w: &mut Watch) {
+    let pid = find_pid(TARGET);
+    if pid != w.pid {
+        // New Kindle instance (or Kindle gone): drop the old attempt/hook state so a restart
+        // re-injects. An orphaned in-flight child exits on its own once its target is gone.
+        *w = Watch {
+            pid,
+            ..Default::default()
+        };
+    }
+    let Some(pid) = pid else { return };
+
+    // Reap an in-flight injector before deciding anything -- a spawn that merely *started* is
+    // not an injection, so `hooked` is set only on a zero exit and a failure is retried.
+    if let Some(child) = w.child.as_mut() {
+        match child.try_wait() {
+            Ok(None) => return, // still injecting; check again next tick
+            Ok(Some(status)) => {
+                w.child = None;
+                if status.success() {
+                    w.hooked = true;
+                    eprintln!("[host] kindle-watch: hook injected into Kindle pid {pid}");
+                } else {
+                    // kokoro-inject exits 1 = Kindle gone, 2 = hook DLL missing, 3 = injection
+                    // failed (commonly OpenProcess denied -- Kindle at a higher integrity).
+                    // Details land in %TEMP%\kokoro-inject.log.
+                    let give_up = if w.attempts >= MAX_ATTEMPTS {
+                        " -- giving up until Kindle restarts"
+                    } else {
+                        ""
+                    };
+                    eprintln!(
+                        "[host] kindle-watch: injector failed for pid {pid} ({status}), \
+                         attempt {}/{MAX_ATTEMPTS}{give_up}",
+                        w.attempts
+                    );
+                }
+            }
+            Err(e) => {
+                w.child = None;
+                eprintln!("[host] kindle-watch: waiting on injector failed: {e}");
+            }
+        }
+    }
+
+    if w.hooked || w.attempts >= MAX_ATTEMPTS {
         return;
-    };
-    if *last_injected_pid == Some(pid) {
-        return; // already handled this Kindle instance
     }
     if !enabled(app_data) {
         return; // disabled -> leave Kindle alone (re-checked each tick)
     }
     let injector = injector_exe_path();
     let hook = hook_dll_path();
+    w.attempts += 1;
     match Command::new(&injector).arg(&hook).spawn() {
-        Ok(_) => {
-            *last_injected_pid = Some(pid);
+        Ok(child) => {
+            w.child = Some(child);
             eprintln!("[host] kindle-watch: spawned injector for Kindle pid {pid}");
         }
         Err(e) => eprintln!(

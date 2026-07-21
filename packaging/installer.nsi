@@ -50,9 +50,13 @@ VIAddVersionKey "FileDescription" "${APPNAME} installer"
 
 Section "Install"
   ; Upgrade-safe: stop a running instance so its exes/DLLs unlock before we
-  ; overwrite them (a fresh install just no-ops these).
+  ; overwrite them (a fresh install just no-ops these). Pop and discard: nsExec always
+  ; pushes a status, and taskkill returns 128 when the process wasn't running - expected,
+  ; not an error. Leaving them unpopped just grows the NSIS stack.
   nsExec::ExecToLog 'taskkill /IM kokoro-panel.exe /F'
+  Pop $0
   nsExec::ExecToLog 'taskkill /IM kokoro-host.exe /F'
+  Pop $0
 
   ; Migrate away from the previous parallel location this edition used
   ; ($LOCALAPPDATA\Programs\${APPNAME}); everything now lives in $INSTDIR.
@@ -109,19 +113,39 @@ Section "Install"
   ; artifacts (KokoroSapi.dll + the guard) into an admin-owned, ACL-locked dir under
   ; %ProgramData% and registers THOSE, so nothing runs elevated from user-writable
   ; %LOCALAPPDATA% (local-EoP hardening); see voice-setup.ps1.
+  ; Pop the status: voice-setup.ps1 propagates its elevated half's exit code, so a
+  ; declined UAC or a failed regsvr32 lands here. Non-fatal on purpose - the app still
+  ; installs and the panel still works; only Kindle narration needs the registration -
+  ; but say so instead of finishing with a green bar over a broken voice.
   DetailPrint "Registering the Kokoro SAPI voice (may prompt for administrator)..."
   nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\resources\voice-setup.ps1" -Action register -ResourcesDir "$INSTDIR\resources"'
+  Pop $0
+  StrCmp $0 "0" kkr_reg_ok 0
+    DetailPrint "Voice registration FAILED ($0). See %TEMP%\kokoro-voice-setup.log."
+    MessageBox MB_OK|MB_ICONEXCLAMATION "The Kokoro SAPI voice could not be registered (error $0).$\n$\nThe app is installed, but Kindle will not narrate with Kokoro until it is. Re-run this installer and approve the administrator prompt.$\n$\nDetails: %TEMP%\kokoro-voice-setup.log" /SD IDOK
+  kkr_reg_ok:
 SectionEnd
 
 Section "Uninstall"
-  ; Stop running instances so files unlock and the pipe frees.
+  ; Stop running instances so files unlock and the pipe frees. Pop and discard - see
+  ; the install section.
   nsExec::ExecToLog 'taskkill /IM kokoro-panel.exe /F'
+  Pop $0
   nsExec::ExecToLog 'taskkill /IM kokoro-host.exe /F'
+  Pop $0
 
   ; Revert Kindle to Microsoft David, then unregister the COM server + token - in
   ; that order, while the DLL + guard still exist. Self-elevates (UAC); also removes
   ; the admin-owned %ProgramData% copy voice-setup.ps1 created on register.
   nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\resources\voice-setup.ps1" -Action unregister -ResourcesDir "$INSTDIR\resources"'
+  ; Worth surfacing here even though we carry on: the file deletions below remove
+  ; resources\ and the ProgramData copy, so after this point there is nothing left to
+  ; retry the unregistration WITH - a silent failure would strand the SAPI token for good.
+  Pop $0
+  StrCmp $0 "0" kkr_unreg_ok 0
+    DetailPrint "Voice unregistration FAILED ($0). See %TEMP%\kokoro-voice-setup.log."
+    MessageBox MB_OK|MB_ICONEXCLAMATION "The Kokoro SAPI voice could not be unregistered (error $0).$\n$\nUninstall will continue, but a stale 'Kokoro (SAPI5)' entry may remain in the Windows voice list.$\n$\nDetails: %TEMP%\kokoro-voice-setup.log" /SD IDOK
+  kkr_unreg_ok:
 
   DeleteRegValue HKCU "${RUNKEY}" "${RUNVALUE}"
   DeleteRegKey HKCU "${UNINSTKEY}"

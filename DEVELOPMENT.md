@@ -29,6 +29,48 @@ Follow "Building from source" in [ARCHITECTURE.md](ARCHITECTURE.md#building-from
 The one ordering rule: `native-deps\fetch-deps.ps1` must run before building
 `kokoro-host` (its `build.rs` panics without the provisioned deps).
 
+## Code review
+
+Two models work this repo in different roles, and the split is deliberate: the model that
+wrote a change is the worst judge of whether it's correct.
+
+- **Claude Code writes.** Its instructions are [`CLAUDE.md`](CLAUDE.md) — the invariants
+  that are expensive to rediscover.
+- **OpenAI Codex reviews.** Its copy of the same context is [`AGENTS.md`](AGENTS.md),
+  which carries the reviewer role, the machine constraints, and the invariants worth
+  checking. Both `codex exec` and Codex Desktop pick it up automatically. **Keep its
+  invariant list in sync with `CLAUDE.md`.**
+
+Codex runs **read-only** (`codex exec -s read-only`): full repo read access, can run `git`,
+cannot write. It reviews; it never edits. The reviewer never gets write access — a model
+that can both flag and "fix" its own findings is back to marking its own homework.
+
+Findings are **triaged, not applied**. They mix real bugs with true-but-irrelevant
+observations and confident errors, and tone doesn't separate them — every finding gets
+verified against the source before anything changes. Rejections get recorded with a reason,
+which is how the running track record in `.claude/commands/codex-review.md` stays useful.
+
+The `/codex-review` command drives the whole loop. A worked example of what it's good for:
+in the 0.3.2 security pass it caught that `installer.nsi` never `Pop`s `nsExec`'s status —
+so exit-code propagation added to `voice-setup.ps1` had no consumer, a gap neither the
+change nor its author would have surfaced alone.
+
+### Crediting the review
+
+When Codex's findings shaped what landed, the commit carries a `Reviewed-by:` trailer
+naming the model actually used, above the co-author trailer:
+
+```
+Reviewed-by: OpenAI Codex (gpt-5.6-terra)
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+```
+
+`Reviewed-by:` is the standard git trailer for this and keeps the history honest about who
+did what. Note that **GitHub does not read it** — its Contributors panel counts commit
+authors and `Co-authored-by:` trailers only, so a reviewer never appears there. That's the
+intended tradeoff: accurate history over an attribution badge. Don't promote the reviewer
+to co-author to work around it.
+
 ## CI
 
 | Workflow | Trigger | What it does |

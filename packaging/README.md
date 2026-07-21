@@ -45,6 +45,12 @@ value, removes the ACL-locked ProgramData dir, and **offers** (default: keep, `/
 to delete the downloaded model — so a silent upgrade run doesn't force a multi-hundred-MB
 re-download.
 
+`voice-setup.ps1` propagates its elevated half's exit code, and **both** NSIS sections `Pop`
+it and warn on failure (`/SD IDOK`, non-fatal — the app is still usable, only Kindle
+narration isn't). That matters most on uninstall: the file deletions that follow remove
+`resources\` and the ProgramData copy, so a silently-failed unregistration would strand the
+SAPI token with nothing left to retry it with.
+
 > **Caveat:** if UAC is satisfied with a *different* admin account, the guard's
 > `$env:LOCALAPPDATA` points at that admin's profile and it won't find the installing
 > user's Kindle hive (logs "hive not found", skips).
@@ -66,11 +72,23 @@ So `voice-setup.ps1 -Action register` first copies `KokoroSapi.dll` and
   reopen the ACL via owner-`WRITE_DAC`
 
 It **fails closed** if the lock can't be set. Unregister reverts the voice, unregisters,
-then removes that directory.
+then removes that directory — using **only** those locked copies. If they're missing (an
+install that predates them), it deletes the CLSID + token keys directly rather than falling
+back to `regsvr32 /u` on the `resources\` DLL: uninstall-time fallback to a user-writable
+artifact reopens the very same EoP, and by then `resources\` has been writable for the whole
+life of the install. The Kindle-hive half of that path is inlined for the same reason
+(`Clear-KindleDefaultToken`) — it *deletes* `DefaultTokenId` instead of setting David, since
+with Kokoro gone Kindle's own default is the right end state, and it only touches the value
+when it still points at `KokoroTTS`.
+
+A failed register rolls back (drops any keys `DllRegisterServer` half-wrote, removes the
+locked dir) before it throws, so a declined UAC or a broken DLL can't leave a CLSID pointing
+at a file the installer is about to delete.
 
 Two rules follow, and they are load-bearing:
 
-1. **Never point the installer's registration back at a user-writable path.**
+1. **Never point the installer's registration back at a user-writable path** — on
+   *either* action. Unregister is elevated too.
 2. Do the privileged file placement from the **elevated** context (inside
    `voice-setup.ps1`), not from NSIS — NSIS runs unelevated here.
 

@@ -77,6 +77,21 @@ Report to the user:
 
 Then stop and let the user decide what to fix, unless they've already said to fix it.
 
+## 4. Credit the review at commit time
+
+When Codex's findings shaped what landed, the commit gets a `Reviewed-by:` trailer above the
+`Co-Authored-By:` one, naming the model **actually used** — read `model` from
+`~/.codex/config.toml`, or use whatever `-m` you passed. Never guess it:
+
+```
+Reviewed-by: OpenAI Codex (gpt-5.6-terra)
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+```
+
+Not for changes Codex never saw. GitHub ignores this trailer (its Contributors panel reads
+authors and `Co-authored-by:` only) — that's accepted, not a problem to route around by
+promoting the reviewer to co-author. Rationale in `DEVELOPMENT.md` under "Code review".
+
 ## Track record
 
 Worth keeping honest, since it tells you how much verification each round needs.
@@ -88,6 +103,16 @@ Worth keeping honest, since it tells you how much verification each round needs.
   execution from the user-writable fallback in `voice-setup.ps1`'s uninstall branch,
   injection failures recorded as success in `kindle_watch.rs`, and unchecked native exit
   codes / unconditional `exit 0` after the UAC relaunch.
+- **2026-07-21, review of the fixes for the above** (`high`): 6 findings, 4 real. Best catch
+  was structural — `installer.nsi` never `Pop`s `nsExec`'s status, so the exit-code
+  propagation just added to `voice-setup.ps1` had no consumer. Also correctly caught a doc
+  claim I'd written more absolutely than the code supported. Two rejects, both from grading
+  the code against a spec rather than the machine: it read the `try_wait() == Ok(None)` early
+  return as a lost retry (spawning a second injector while a remote `LoadLibraryW` is in
+  flight is worse than waiting), and flagged PID-reuse behavior that the pre-change code had
+  identically. **Pattern: excellent on "this path has no consumer / no rollback", weaker on
+  whether a behavior is deliberate — and it does not distinguish regressions from
+  pre-existing conditions. Tell it which is which in the prompt.**
 
 ## Notes
 
