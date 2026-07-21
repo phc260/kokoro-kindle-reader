@@ -26,7 +26,7 @@ Release with the setup.exe attached — see [`../DEVELOPMENT.md`](../DEVELOPMENT
 - Under `resources\`: the three x86 artifacts — `KokoroSapi.dll`, `kokoro_hook.dll`,
   `kokoro-inject.exe` — plus `voice-setup.ps1` and `kindle-voice-guard.ps1`
 
-The TTS model is **not** bundled; the panel downloads it on first run (~430 MB).
+The TTS model is **not** bundled; the panel downloads it on first run (~340 MB).
 
 ## Install mode and elevation
 

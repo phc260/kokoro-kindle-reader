@@ -37,7 +37,7 @@ runs entirely on your machine. kokoro-kindle-reader is two things in one app:
    on by default — the app enables it automatically the next time Kindle runs.
 3. Let the installer start the app (or launch **kokoro-kindle-reader** yourself) — it
    runs quietly in the **system tray**, no window. Right-click the tray icon, choose
-   **Settings**, and click **Download** to fetch the voice model (~430 MB, one time).
+   **Settings**, and click **Download** to fetch the voice model (~340 MB, one time).
    After that it works fully offline.
 
 The app synthesizes on your GPU via WebGPU, so a **discrete GPU** (e.g. NVIDIA/AMD)
@@ -114,7 +114,7 @@ don't need to touch it.
 - **Settings shows "Checking model files" for a while after opening** — that's a
   quick integrity check of the downloaded model, normal on every launch. If it finds
   a corrupt file it asks you to click Download to repair it.
-- **First run needs a download** — the voice model (~430 MB) fetches once, via the
+- **First run needs a download** — the voice model (~340 MB) fetches once, via the
   Download button in Settings. Everything is offline after that.
 - **Narration lags behind pages / synthesis feels slow** — synthesis defaults to
   your GPU, and an integrated GPU (no discrete card) can run slower than realtime.
