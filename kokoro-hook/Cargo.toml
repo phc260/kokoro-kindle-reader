@@ -12,9 +12,10 @@ crate-type = ["cdylib", "lib"]
 
 # Kindle-free proof the vtable override works (no injection, no audio needed):
 #   cargo run --release --target i686-pc-windows-msvc --bin selftest
+# Cargo auto-discovers src/bin/*.rs as binary targets, so no `path` is needed here;
+# this stanza exists only to pin the target name and hang the comment above on.
 [[bin]]
 name = "selftest"
-path = "src/bin/selftest.rs"
 
 [dependencies]
 windows-core = "0.62"
