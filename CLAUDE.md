@@ -81,8 +81,10 @@ C:\Windows\SysWOW64\regsvr32.exe "kokoro-sapi\target\i686-pc-windows-msvc\releas
 # then runs makensis. NSIS. See packaging/README.md.
 packaging\build-installer.ps1
 # CI does this on a v* tag (.github/workflows/installer.yml); sapi.yml
-# builds the x86 DLL + runs the COM smoke test on kokoro-sapi/** changes; hook.yml
-# compile-checks the x86 hook + injector on kokoro-hook/** / kokoro-inject/** changes.
+# builds the x86 DLL + runs the COM smoke test on kokoro-sapi/** / kokoro-sapi-smoke/**
+# / kokoro-protocol/** changes; hook.yml compile-checks the x86 hook + injector on
+# kokoro-hook/** / kokoro-inject/** changes. (Both also re-run on edits to their own
+# workflow file.)
 
 # SAPI smoke test — no Kindle, no elevation: LoadLibrary the DLL + drive the COM object
 # model + Speak path (needs the host running for audio). See kokoro-sapi-smoke/.
@@ -150,7 +152,7 @@ the panel and Read Aloud in Kindle (or `test-speak.ps1`).
 - **Never run an elevated artifact from a user-writable path (local EoP).** `regsvr32` runs
   a DLL's `DllRegisterServer` and the guard runs a `.ps1` — both **as admin**. So
   `voice-setup.ps1 -Action register` stages both into an `icacls`-locked
-  `%ProgramData%\Kokoro Kindle Reader\` and registers *those* copies, never the
+  `%ProgramData%\Kokoro Kindle Reader\engine\` and registers *those* copies, never the
   user-writable `%LOCALAPPDATA%` ones, and **fails closed** if the lock can't be set.
   `-Action unregister` executes only those locked copies too — with the keys deleted
   directly when they're absent, never a fallback to `resources\`.

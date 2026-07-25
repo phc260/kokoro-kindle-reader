@@ -17,7 +17,7 @@ commit, tag, or push (those are deliberate, separate steps).
 2. **Read the current version** from `packaging/installer.nsi` (the `!define VERSION`
    line) so you can report the old → new transition and match the exact old strings.
 
-3. **Edit these 9 locations** (the version was previously confirmed to live in exactly
+3. **Edit these 10 locations** (the version was previously confirmed to live in exactly
    these spots):
 
    Three-part `version = "X.Y.Z"` — the `[package]` `version` (line ~3) of every Rust
@@ -48,6 +48,6 @@ commit, tag, or push (those are deliberate, separate steps).
 
 5. **Verify.** Grep the repo for both the old and new version and confirm: no stale
    occurrences of the old version remain outside `Cargo.lock` and `native-deps/` dep
-   folders; and all 9 edited locations now show the new version. Report a short table of
+   folders; and all 10 edited locations now show the new version. Report a short table of
    the files changed (old → new) and remind me that building the installer, committing,
    and tagging are separate steps I run when ready.

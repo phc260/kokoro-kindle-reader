@@ -76,12 +76,15 @@ to co-author to work around it.
 | Workflow | Trigger | What it does |
 |---|---|---|
 | `installer.yml` | `v*` tag push, or manual dispatch | Full installer build (both exes + the 3 x86 artifacts + NSIS). On a tag it also **drafts** a GitHub Release with the setup.exe attached. |
-| `sapi.yml` | `kokoro-sapi/**` changes | Builds the x86 SAPI DLL + runs the no-Kindle COM smoke test (`kokoro-sapi-smoke`). |
+| `sapi.yml` | `kokoro-sapi/**`, `kokoro-sapi-smoke/**`, or `kokoro-protocol/**` changes | Builds the x86 SAPI DLL + runs the no-Kindle COM smoke test (`kokoro-sapi-smoke`). |
 | `hook.yml` | `kokoro-hook/**` / `kokoro-inject/**` changes | Compile-checks the x86 hook + injector. |
+
+`sapi.yml` and `hook.yml` also re-run when their own workflow file changes (the standard
+self-trigger); the trigger columns list only the source paths that matter day to day.
 
 ## Releasing
 
-1. Bump the product version in lockstep (7 `Cargo.toml`s + the two version lines in
+1. Bump the product version in lockstep (8 `Cargo.toml`s + the two version lines in
    `packaging/installer.nsi`) — the `/bump-version` command does exactly this.
 2. Commit on `main`, push.
 3. Tag and push the tag: `git tag vX.Y.Z && git push origin vX.Y.Z`. This triggers

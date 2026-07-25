@@ -5,7 +5,7 @@
 ; the registration raises one UAC prompt.
 ;
 ; Build via packaging/build-installer.ps1 (stages files into packaging/staging then
-; runs makensis). See CLAUDE.md "Packaging / installer".
+; runs makensis). See packaging/README.md.
 
 Unicode true
 !include "MUI2.nsh"

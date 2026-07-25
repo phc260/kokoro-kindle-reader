@@ -63,7 +63,7 @@ user), a same-user process could swap them and get code run as admin on the next
 install/uninstall.
 
 So `voice-setup.ps1 -Action register` first copies `KokoroSapi.dll` and
-`kindle-voice-guard.ps1` into `%ProgramData%\Kokoro Kindle Reader\` with an
+`kindle-voice-guard.ps1` into `%ProgramData%\Kokoro Kindle Reader\engine\` with an
 `icacls`-locked ACL, and registers/runs **those** copies:
 
 - SYSTEM + Administrators: Full
@@ -104,7 +104,7 @@ A UTF-8 `…` or `—` in a user-visible `DetailPrint`/`MessageBox` renders as m
 (`â€¦`) in the install UI. Use `...` and `-`.
 
 The product `VERSION` here must stay in lockstep with the `FileVersion`/`ProductVersion` in
-`kokoro-host/build.rs` + `kokoro-panel/build.rs` and the 7 `Cargo.toml`s — the
+`kokoro-host/build.rs` + `kokoro-panel/build.rs` and the 8 `Cargo.toml`s — the
 `/bump-version` command does all of them.
 
 See the repo-root [`CLAUDE.md`](../CLAUDE.md) for the cross-cutting invariants and

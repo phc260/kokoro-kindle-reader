@@ -49,7 +49,7 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
 
 - **Never execute an elevated artifact from a user-writable path.** `regsvr32` runs a DLL's
   `DllRegisterServer` and the guard runs a `.ps1`, both as admin. They must come from the
-  ACL-locked `%ProgramData%\Kokoro Kindle Reader\`, never `%LOCALAPPDATA%`. This is a
+  ACL-locked `%ProgramData%\Kokoro Kindle Reader\engine\`, never `%LOCALAPPDATA%`. This is a
   standing local-EoP concern; flag any path that reintroduces it.
 - **Bitness is fixed.** `kokoro-sapi`, `kokoro-hook`, `kokoro-inject` must stay x86 (Kindle
   is 32-bit); the host is x64 and spawns the injector rather than injecting itself.
