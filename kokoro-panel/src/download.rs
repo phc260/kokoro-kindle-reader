@@ -101,6 +101,13 @@ fn valid_with_progress(
     hex(hasher.finalize()) == sha256
 }
 
+/// Total download size across every manifest file, in bytes. Sole source for the
+/// "~N MB" figure the panel shows before download, so that figure can never drift
+/// from the manifest.
+pub fn total_bytes() -> u64 {
+    load_manifest().files.iter().map(|f| f.size).sum()
+}
+
 /// Whether every manifest file is present with the expected size (the model is
 /// usable). Cheap — metadata only.
 pub fn model_complete(app_data: &Path) -> bool {

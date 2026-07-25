@@ -166,6 +166,7 @@ export component AppWindow inherits Window {
     in property <bool> speaking;      // host is streaming audio right now (CMD_STATUS)
     in-out property <bool> paused;    // playback stalled mid-page (controls.json `paused`)
     in property <bool> model-ready;
+    in property <string> model-size-label; // "~340 MB", computed from the manifest sum
     in property <bool> downloading;
     in property <float> download-frac;
     in property <string> download-label;
@@ -237,7 +238,7 @@ export component AppWindow inherits Window {
                 if !root.downloading && !root.verifying && !root.model-ready: HorizontalLayout {
                     spacing: 10px;
                     Text {
-                        text: "Model not downloaded (~420 MB).";
+                        text: "Model not downloaded (\{root.model-size-label}).";
                         color: #b0701a;
                         vertical-alignment: center;
                         horizontal-stretch: 1;

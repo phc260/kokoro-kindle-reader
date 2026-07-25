@@ -313,6 +313,9 @@ fn main() -> Result<(), slint::PlatformError> {
         ui.set_gpu_synth(c.gpu_synth);
     }
     ui.set_model_ready(download::model_complete(&app_data));
+    // "~N MB" from the manifest sum, same decimal-MB (/1e6) convention as the live
+    // download counter below — never hardcode the size, so it tracks the manifest.
+    ui.set_model_size_label(format!("~{:.0} MB", download::total_bytes() as f32 / 1e6).into());
 
     // Shared background-task guards.
     let dl_running = Arc::new(AtomicBool::new(false));
