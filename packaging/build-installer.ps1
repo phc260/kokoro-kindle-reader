@@ -59,6 +59,15 @@ foreach ($d in 'onnxruntime.dll', 'onnxruntime_providers_shared.dll', 'dxcompile
 Copy-Item -Recurse (Join-Path $hostRel 'espeak-ng-data') $stage
 Copy-Item (Join-Path $root 'icons\icon.ico') (Join-Path $stage 'icon.ico')
 
+# 3b. License texts. The bundle links espeak-ng (GPL-3.0-or-later, and MODIFIED -- see
+#     native-deps\build-espeak.ps1) and Slint under its GPL-3.0-only option, so the
+#     installed app as a whole is conveyed under GPLv3: the notices + the GPL text must
+#     ship WITH the binaries, not just live in the repo. THIRD_PARTY_NOTICES.md links
+#     LICENSE and licenses\*, so keep all three together and keep the layout.
+Copy-Item (Join-Path $root 'LICENSE') $stage
+Copy-Item (Join-Path $root 'THIRD_PARTY_NOTICES.md') $stage
+Copy-Item -Recurse (Join-Path $root 'licenses') $stage
+
 $res = Join-Path $stage 'resources'
 Copy-Item $sapiDll $res
 Copy-Item $hookDll $res

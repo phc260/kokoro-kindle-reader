@@ -32,7 +32,10 @@ VIProductVersion "0.3.2.0"
 VIAddVersionKey "ProductName" "${APPNAME}"
 VIAddVersionKey "FileVersion" "${VERSION}"
 VIAddVersionKey "CompanyName" "${COMPANY}"
-VIAddVersionKey "LegalCopyright" "MIT License"
+; The app's own code is MIT, but it links espeak-ng (GPL-3.0-or-later) and Slint under
+; its GPL-3.0-only option, so this BUNDLE is conveyed under GPLv3. Don't shorten this
+; back to "MIT License" - it would misstate the license of what we actually ship.
+VIAddVersionKey "LegalCopyright" "MIT (app code); bundle conveyed under GPLv3 - see THIRD_PARTY_NOTICES.md"
 VIAddVersionKey "FileDescription" "${APPNAME} installer"
 
 !define MUI_ICON "${STAGING}\icon.ico"
@@ -71,6 +74,15 @@ Section "Install"
   File "${STAGING}\dxil.dll"
   File "${STAGING}\espeak-ng.dll"
   File "${STAGING}\icon.ico"
+
+  ; GPLv3 obligation, not a nicety: espeak-ng (GPL-3.0-or-later, and MODIFIED by
+  ; native-deps\build-espeak.ps1) and Slint-under-GPL are linked into what we install,
+  ; so the license text + notices must accompany the binaries.
+  File "${STAGING}\LICENSE"
+  File "${STAGING}\THIRD_PARTY_NOTICES.md"
+
+  SetOutPath "$INSTDIR\licenses"
+  File /r "${STAGING}\licenses\*.*"
 
   SetOutPath "$INSTDIR\espeak-ng-data"
   File /r "${STAGING}\espeak-ng-data\*.*"
@@ -156,9 +168,12 @@ Section "Uninstall"
 
   RMDir /r "$INSTDIR\espeak-ng-data"
   RMDir /r "$INSTDIR\resources"
+  RMDir /r "$INSTDIR\licenses"
   Delete "$INSTDIR\kokoro-host.exe"
   Delete "$INSTDIR\kokoro-panel.exe"
   Delete "$INSTDIR\*.dll"
+  Delete "$INSTDIR\LICENSE"
+  Delete "$INSTDIR\THIRD_PARTY_NOTICES.md"
   Delete "$INSTDIR\icon.ico"
   Delete "$INSTDIR\uninstall.exe"
   RMDir "$INSTDIR"

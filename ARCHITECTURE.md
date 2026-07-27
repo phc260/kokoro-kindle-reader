@@ -161,6 +161,7 @@ per-chunk sentence count, and GPU/CPU engine choice are the user-facing knobs.
 | `model-manifest.json` | Files the model downloads from HF (paths + sizes + SHA-256); embedded in `kokoro-panel` (the narrator list is derived from it). |
 | `icons/` | Shared app icons (LFS); embedded in the exes' version resource and the installer. |
 | `packaging/` | `installer.nsi` + `build-installer.ps1` (standalone NSIS build) — per-user install with self-elevating voice registration. See [`packaging/README.md`](packaging/README.md). |
+| `THIRD_PARTY_NOTICES.md` + `licenses/` | Bundle licensing: the app's own code is MIT, but the shipped binaries link espeak-ng (GPL-3.0-or-later, **modified** by `build-espeak.ps1`) and Slint-under-GPL, so a release is conveyed under GPLv3. `build-installer.ps1` stages both into the installer — they must ship *with* the binaries, not just live here. |
 
 ## Building from source
 

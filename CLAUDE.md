@@ -192,6 +192,19 @@ the panel and Read Aloud in Kindle (or `test-speak.ps1`).
   `kokoro-inject/`), built x86 and staged into the installer's `resources\`.
 - There is **no root workspace**; each crate builds standalone with its own target dir.
 
+### Licensing of the bundle (MIT source, GPLv3 binaries)
+- The project's own code is **MIT**, but the shipped app links **espeak-ng**
+  (GPL-3.0-or-later) and **Slint** under its GPL-3.0-only option, so **every binary
+  release is conveyed under GPLv3**. That's fine and doesn't restrict the repo — MIT is
+  GPL-compatible — but it comes with obligations that live in code, not just docs.
+- **`build-espeak.ps1` *modifies* espeak-ng** (the horse-hoarse `o@` revert), so GPLv3
+  §5(a) requires a stated notice of modification + date. It's in
+  `THIRD_PARTY_NOTICES.md`; if the patch changes, update that notice.
+- **Invariant: `LICENSE` + `THIRD_PARTY_NOTICES.md` + `licenses/` must ship inside the
+  installer** (staged by `build-installer.ps1`, installed by `installer.nsi`) — GPLv3
+  requires the text to accompany the binaries. Never restate the bundle as plain "MIT"
+  in installer metadata.
+
 ## Environment quirks
 
 - **PowerShell 5.1:** don't redirect native stderr (`2>&1` + `$ErrorActionPreference=Stop`

@@ -63,6 +63,12 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
   `kokoro-host` nor `kokoro-sapi` may hardcode the constants inline.
 - **Kindle 18632's narrator is event-driven.** The SAPI engine must emit word/sentence/
   bookmark events at true audio offsets, or Kindle speaks one sentence per page and stops.
+- **The bundle is GPLv3 even though the source is MIT.** The app links espeak-ng
+  (GPL-3.0-or-later, and *modified* by `native-deps/build-espeak.ps1`) and Slint under its
+  GPL-3.0 option. So `LICENSE` + `THIRD_PARTY_NOTICES.md` + `licenses/` must stay staged
+  by `build-installer.ps1` and installed by `installer.nsi`, and installer metadata must
+  not describe the bundle as plain "MIT". If the espeak patch changes, the notice of
+  modification in `THIRD_PARTY_NOTICES.md` must change with it.
 
 ## Encoding rules (real bugs, not style)
 

@@ -9,7 +9,8 @@
 [![Platform: Windows](https://img.shields.io/badge/platform-Windows-0078D6?logo=windows&logoColor=white)](#install)
 [![TTS: Kokoro-82M](https://img.shields.io/badge/TTS-Kokoro--82M-ff69b4)](https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX)
 [![100% Offline](https://img.shields.io/badge/100%25-offline-2ea44f)](#)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Source: MIT](https://img.shields.io/badge/source-MIT-blue.svg)](LICENSE)
+[![Binaries: GPLv3](https://img.shields.io/badge/binaries-GPLv3-blue.svg)](THIRD_PARTY_NOTICES.md)
 [![Latest release](https://img.shields.io/github/v/release/phc260/kokoro-kindle-reader?include_prereleases&label=release)](https://github.com/phc260/kokoro-kindle-reader/releases)
 
 </div>
@@ -138,3 +139,22 @@ If you're curious about the engine chain, the wire protocol, the Kindle voice
 registry/hive details, or want to **build from source**, see
 [**ARCHITECTURE.md**](ARCHITECTURE.md). Contributor workflow (getting the source,
 CI, releasing) is in [**DEVELOPMENT.md**](DEVELOPMENT.md).
+
+## Licensing
+
+This project's own source code is **MIT** — see [LICENSE](LICENSE). Reuse any of it on
+MIT terms.
+
+The **installed app** is a different question, because it bundles third-party pieces:
+it links [espeak-ng](https://github.com/espeak-ng/espeak-ng) (GPL-3.0-or-later, and
+patched here for phoneme parity with the model) and [Slint](https://slint.dev) under its
+GPL-3.0 option. **The binaries in a release are therefore conveyed under the GNU GPL
+version 3.** That's the normal outcome of MIT code linking a GPL library — it doesn't
+restrict the source in this repository, only the combined binary.
+
+Full component list, the required notice of modification to espeak-ng, and where to get
+corresponding source: [**THIRD_PARTY_NOTICES.md**](THIRD_PARTY_NOTICES.md). The GPLv3
+text is in [licenses/](licenses/), and the installer places both next to the app.
+
+The **Kokoro-82M voice model** is Apache-2.0 and is *not* bundled — the app downloads it
+from Hugging Face on first run.
