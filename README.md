@@ -156,5 +156,5 @@ Full component list, the required notice of modification to espeak-ng, and where
 corresponding source: [**THIRD_PARTY_NOTICES.md**](THIRD_PARTY_NOTICES.md). The GPLv3
 text is in [licenses/](licenses/), and the installer places both next to the app.
 
-The **Kokoro-82M voice model** is Apache-2.0 and is *not* bundled — the app downloads it
-from Hugging Face on first run.
+The **Kokoro-82M voice model** is Apache-2.0 and is *not* bundled — the app fetches it
+from Hugging Face when you click **Download** in Settings.

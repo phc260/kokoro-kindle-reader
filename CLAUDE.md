@@ -202,8 +202,12 @@ the panel and Read Aloud in Kindle (or `test-speak.ps1`).
   `THIRD_PARTY_NOTICES.md`; if the patch changes, update that notice.
 - **Invariant: `LICENSE` + `THIRD_PARTY_NOTICES.md` + `licenses/` must ship inside the
   installer** (staged by `build-installer.ps1`, installed by `installer.nsi`) — GPLv3
-  requires the text to accompany the binaries. Never restate the bundle as plain "MIT"
-  in installer metadata.
+  requires the text to accompany the binaries.
+- **No shipped artifact may claim plain "MIT" in its version resource.** Three places set
+  it and all three must stay accurate: `installer.nsi`'s `VIAddVersionKey`, and the
+  `LegalCopyright` in `kokoro-host/build.rs` + `kokoro-panel/build.rs` (Windows shows that
+  string in the exe's Properties). The x86 artifacts set no copyright field and are
+  genuinely MIT-only — the SAPI shim is connect-only with no GPL deps.
 
 ## Environment quirks
 

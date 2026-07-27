@@ -66,9 +66,10 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
 - **The bundle is GPLv3 even though the source is MIT.** The app links espeak-ng
   (GPL-3.0-or-later, and *modified* by `native-deps/build-espeak.ps1`) and Slint under its
   GPL-3.0 option. So `LICENSE` + `THIRD_PARTY_NOTICES.md` + `licenses/` must stay staged
-  by `build-installer.ps1` and installed by `installer.nsi`, and installer metadata must
-  not describe the bundle as plain "MIT". If the espeak patch changes, the notice of
-  modification in `THIRD_PARTY_NOTICES.md` must change with it.
+  by `build-installer.ps1` and installed by `installer.nsi`. No shipped artifact may claim
+  plain "MIT" in its version resource — that's `installer.nsi`'s `VIAddVersionKey` plus
+  `LegalCopyright` in `kokoro-host/build.rs` and `kokoro-panel/build.rs`. If the espeak
+  patch changes, the notice of modification in `THIRD_PARTY_NOTICES.md` must change with it.
 
 ## Encoding rules (real bugs, not style)
 

@@ -35,8 +35,12 @@ The bundle links **espeak-ng** (GPL-3.0-or-later — and *modified* by
 `native-deps/build-espeak.ps1`, which reverts the horse-hoarse merger) and **Slint** under
 its GPL-3.0-only option. The app's own code stays MIT, but **the installed combination is
 conveyed under GPLv3**, so the license text and notices have to ship *with* the binaries.
-Don't drop them from the staging list or the `File` directives, and don't restate the
-bundle as plain "MIT" in `VIAddVersionKey` — see [`../THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md).
+Don't drop them from the staging list or the `File` directives.
+
+Nor may any shipped artifact claim plain "MIT" in its version resource — that's
+`VIAddVersionKey` here, **and** the `LegalCopyright` set in `kokoro-host/build.rs` and
+`kokoro-panel/build.rs`, which is what Windows shows in each exe's Properties dialog. See
+[`../THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md).
 
 ## Install mode and elevation
 

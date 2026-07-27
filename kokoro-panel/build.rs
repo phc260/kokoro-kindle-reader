@@ -36,7 +36,10 @@ fn embed_version_info() {
     res.set("ProductName", "Kokoro Kindle Reader");
     res.set("FileVersion", &version);
     res.set("ProductVersion", &version);
-    res.set("LegalCopyright", "MIT licensed");
+    // This exe statically links Slint under its GPL-3.0-only option, so the binary is
+    // conveyed under GPLv3 even though the source is MIT. Don't shorten this back to
+    // "MIT licensed" - it's the string Windows shows in the file's Properties.
+    res.set("LegalCopyright", "MIT (app code); binary conveyed under GPLv3 - see THIRD_PARTY_NOTICES.md");
     if let Err(e) = res.compile() {
         println!("cargo:warning=winresource (panel): {e}");
     }

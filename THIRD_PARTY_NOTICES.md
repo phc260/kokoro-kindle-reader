@@ -43,12 +43,16 @@ commit `5b01dd86`). The Kokoro-82M model was trained on the output of a pre-merg
 espeak-ng, so the revert is required for correct pronunciation of "four", "hoarse",
 "shore", and similar words. No other source file is altered.
 
-The modification is applied by [`native-deps/build-espeak.ps1`](native-deps/build-espeak.ps1)
-in this repository, which is both the patch and the complete build recipe: it checks out
-tag `1.52.0`, applies the change above, and builds with
+The modification is applied by
+[`native-deps/build-espeak.ps1`](https://github.com/phc260/kokoro-kindle-reader/blob/main/native-deps/build-espeak.ps1)
+in this repository, which is both the patch and the build recipe: it checks out tag
+`1.52.0`, applies the change above, and builds with
 `-DBUILD_SHARED_LIBS=ON -DUSE_ASYNC=OFF -DUSE_MBROLA=OFF -DUSE_LIBSONIC=OFF -DUSE_LIBPCAUDIO=OFF -DESPEAK_BUILD_DOC=OFF`.
-Running it against a fresh upstream clone reproduces the exact `espeak-ng.dll` and
-`espeak-ng-data/` that ship in the installer. See "Obtaining corresponding source" below.
+Running it against a fresh upstream clone reproduces the modified source and the build
+configuration used for the shipped `espeak-ng.dll` and `espeak-ng-data/`. (It does not
+promise a byte-identical DLL: the script builds with whatever MSVC toolchain
+`vswhere -latest` finds, and the build is not otherwise pinned or hash-verified.)
+See "Obtaining corresponding source" below.
 
 Parts of the espeak-ng tree carry additional licenses: the `getopt.c` Windows
 compatibility shim is 2-clause BSD
@@ -107,18 +111,26 @@ redistributed under the terms accompanying its official binary release.
 
 The two executables and the three x86 libraries statically link a number of crates from
 crates.io — including `ort`, `windows`/`windows-sys`, `serde`, `tray-icon`, `cpal`, and
-their transitive dependencies. These are dual-licensed `MIT OR Apache-2.0` (or a
-compatible permissive license) and are used unmodified. The authoritative per-crate list
-is each crate's `Cargo.lock`; run `cargo tree` in any crate directory to enumerate it.
+their transitive dependencies. All are used unmodified, and those checked individually
+are permissively licensed (typically `MIT OR Apache-2.0`); the tree as a whole has not
+been audited crate by crate, and this notice does not assert a license for every
+transitive dependency. Each crate's `Cargo.lock` records the authoritative *list* of
+crates and versions — it does not record their licenses. To enumerate the licenses
+themselves, read the crates' own manifests, or run `cargo license` / `cargo about` in a
+crate directory.
+
+Slint, listed separately above, is the one dependency in this set that is **not**
+permissively licensed.
 
 ### Kokoro-82M — Apache-2.0 — *not shipped*
 
 Model: <https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX> (an ONNX conversion
 of <https://huggingface.co/hexgrad/Kokoro-82M>). The weights and voice embeddings are
 **not** included in the installer — the settings panel downloads them from Hugging Face
-on first run, into your own user profile, per the checksums in
-[`model-manifest.json`](model-manifest.json). They are licensed Apache-2.0 by their
-authors, and your use of them is governed by that license and by Hugging Face's terms.
+when you click **Download**, into your own user profile, per the checksums in
+[`model-manifest.json`](https://github.com/phc260/kokoro-kindle-reader/blob/main/model-manifest.json).
+They are licensed Apache-2.0 by their authors, and your use of them is governed by that
+license and by Hugging Face's terms.
 
 ---
 
