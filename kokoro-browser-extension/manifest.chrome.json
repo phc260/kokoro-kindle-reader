@@ -1,0 +1,64 @@
+{
+  "manifest_version": 3,
+  "name": "Kokoro Kindle Reader",
+  "version": "0.3.2",
+  "description": "Reads Kindle Cloud Reader aloud: captures the rendered page, OCRs it locally, and narrates it. No text leaves your machine.",
+  "icons": {
+    "32": "icons/32x32.png",
+    "128": "icons/128x128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://read.amazon.com/*"
+      ],
+      "js": [
+        "net-probe.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": false
+    },
+    {
+      "matches": [
+        "https://read.amazon.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "main-world.js",
+        "vendor/*"
+      ],
+      "matches": [
+        "https://read.amazon.com/*"
+      ]
+    }
+  ],
+  "host_permissions": [
+    "https://read.amazon.com/*",
+    "http://127.0.0.1/*"
+  ],
+  "permissions": [
+    "tts",
+    "offscreen",
+    "storage"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  },
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA2xaOkfwI6ujl5UhYzE6KLemDUuyOM3pmn1HTqtaV+GvTpv+3fpUoedvwhJUn8tCsVMRJPu7VXOSsyNuCr2upK9ZUjlkNSNi8vsLs5eQgcrCtj/XuUL1lElPslBWvi8BmdGbEQPwqzqc767KhAOfTz7SEkWeCEFCNEcjDJHsn+To1uufKpAe5qdqzgeFITRhOYZ52sG+D4LJP/5wf+zpLKrtvlwrRwIDlXm/9yEsTZDsmcbBWKI8OPEymFLGsLQ5VCt2+F8SxQ97AFYwIgSJyBDOk/MX2IjPlMCqxL+MHsHasKz/0oOwtKZ7tuSgy5ab4DupJi8En/tQQPDNq/jdLWwIDAQAB",
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  }
+}

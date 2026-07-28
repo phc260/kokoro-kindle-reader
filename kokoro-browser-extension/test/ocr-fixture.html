@@ -1,0 +1,76 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>OCR bench fixture</title>
+<body style="margin:0;background:#222;color:#ddd;font:14px system-ui">
+<div id="log" style="padding:8px"></div>
+
+<script>
+  // Renders book-shaped pages to canvas at the resolution the reader actually produces
+  // (2388x1681 natural, as measured), across the display settings that change OCR input:
+  // single vs two column, light vs dark, default vs non-default font.
+  //
+  // Public-domain text (Melville, Moby-Dick, 1851) so ground truth can be committed.
+
+  window.GROUND_TRUTH = `Call me Ishmael. Some years ago never mind how long precisely having little or no money in my purse, and nothing particular to interest me on shore, I thought I would sail about a little and see the watery part of the world. It is a way I have of driving off the spleen and regulating the circulation. Whenever I find myself growing grim about the mouth; whenever it is a damp, drizzly November in my soul; whenever I find myself involuntarily pausing before coffin warehouses, and bringing up the rear of every funeral I meet; and especially whenever my hypos get such an upper hand of me, that it requires a strong moral principle to prevent me from deliberately stepping into the street, and methodically knocking people's hats off then, I account it high time to get to sea as soon as I can.`;
+
+  const W = 2388, H = 1681;
+
+  function layout(ctx, text, x, y, maxW, lineH) {
+    const words = text.split(/\s+/);
+    let line = '', cy = y;
+    for (const w of words) {
+      const test = line ? line + ' ' + w : w;
+      if (ctx.measureText(test).width > maxW && line) {
+        ctx.fillText(line, x, cy);
+        cy += lineH;
+        line = w;
+      } else line = test;
+    }
+    if (line) ctx.fillText(line, x, cy);
+    return cy;
+  }
+
+  window.renderPage = function ({ columns = 1, dark = false, font = 'Georgia, serif', size = 42, footer = false } = {}) {
+    const c = document.createElement('canvas');
+    c.width = W; c.height = H;
+    const ctx = c.getContext('2d');
+
+    ctx.fillStyle = dark ? '#0b0b0b' : '#fdfdfa';
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = dark ? '#e8e8e8' : '#111';
+    ctx.font = `${size}px ${font}`;
+    ctx.textBaseline = 'top';
+
+    const margin = 150;
+    const lineH = size * 1.6;
+
+    if (columns === 1) {
+      layout(ctx, GROUND_TRUTH, margin, margin, W - margin * 2, lineH);
+    } else {
+      // Split at a word boundary near the middle, so each column holds contiguous prose -
+      // exactly the case that scrambles if the gutter is not detected.
+      const words = GROUND_TRUTH.split(/\s+/);
+      const half = Math.ceil(words.length / 2);
+      const colW = (W - margin * 2 - 120) / 2;
+      layout(ctx, words.slice(0, half).join(' '), margin, margin, colW, lineH);
+      layout(ctx, words.slice(half).join(' '), margin + colW + 120, margin, colW, lineH);
+    }
+
+    // Running header, folio, and a copyright footer - the reading-order traps. The copyright
+    // line is the nasty one: it ends in a full stop, so any "ends mid-sentence" rule keeps it,
+    // and it then gets narrated on every single page. Taken from a real capture.
+    ctx.font = `${Math.round(size * 0.5)}px ${font}`;
+    ctx.fillText('MOBY-DICK', margin, margin - 70);
+    ctx.fillText('17', W - margin - 40, H - margin - 60);
+    if (footer) {
+      ctx.font = `${Math.round(size * 0.42)}px ${font}`;
+      ctx.fillText('2026 Harbour Press Limited', margin, H - margin + 10);
+      ctx.fillText('All rights reserved.', margin, H - margin + 50);
+    }
+
+    return new Promise((res) => c.toBlob(res, 'image/png'));
+  };
+
+  window.benchReady = true;
+</script>
+<script src="./content.js"></script>

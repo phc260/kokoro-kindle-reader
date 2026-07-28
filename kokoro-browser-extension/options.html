@@ -1,0 +1,47 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Kokoro Kindle Reader</title>
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; max-width: 640px; margin: 32px auto; padding: 0 16px;
+         color: #e8e8ea; background: #17171b; }
+  @media (prefers-color-scheme: light) { body { color: #1c1c20; background: #fff; } }
+  h1 { font-size: 18px; }
+  code, input { font-family: ui-monospace, Consolas, monospace; }
+  input { width: 100%; padding: 8px; border-radius: 6px; border: 1px solid #555;
+          background: transparent; color: inherit; }
+  button { font: inherit; padding: 8px 14px; border-radius: 6px; border: 1px solid #3a8a62;
+           background: #2f6f4f; color: #fff; cursor: pointer; }
+  .muted { opacity: .7; }
+  .ok { color: #5c9; } .bad { color: #f77; }
+  pre { background: #0002; padding: 10px; border-radius: 6px; overflow-x: auto; }
+</style>
+
+<h1>Kokoro backend</h1>
+
+<p class="muted">
+  Narration uses the local Kokoro tray app, and falls back to the platform voice otherwise.
+  Nothing is sent off this machine either way.
+</p>
+
+<p class="muted">
+  Pairing is required once, on every browser. The tray app answers on <code>127.0.0.1</code> and
+  only to browsers holding its code, so this page is how you hand it over.
+</p>
+
+<p>
+  With Kokoro Kindle Reader running, right-click its tray icon &rarr; <em>Web pairing code</em>
+  and paste the <code>pairing</code> value from the file it opens:
+</p>
+
+<p>
+  <input id="pairing" placeholder="kwr_8787_..." spellcheck="false" autocomplete="off">
+</p>
+<p>
+  <button id="save">Pair</button>
+  <button id="clear" style="background:#444;border-color:#555">Unpair</button>
+  <span id="msg" class="muted"></span>
+</p>
+
+<p class="muted" id="current"></p>
+
+<script src="options.js"></script>

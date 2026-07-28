@@ -1,0 +1,96 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>reader fixture</title>
+<style>
+  body { margin: 0; font: 14px system-ui; }
+  #offscreen { position: absolute; left: -5000px; top: 0; }
+</style>
+
+<!-- Mimics the measured structure of read.amazon.com: no iframes, deeply nested shadow
+     hosts, the page as a single blob: <img>, decoys around it, and progress text as real
+     DOM text inside a shadow root. -->
+<div id="app"></div>
+<div id="offscreen"></div>
+
+<script>
+  // ---- helpers ------------------------------------------------------------
+  function pngBlob(w, h, label) {
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const g = c.getContext('2d');
+    g.fillStyle = '#fff'; g.fillRect(0, 0, w, h);
+    g.fillStyle = '#000'; g.font = '28px serif';
+    g.fillText(label, 20, 60);
+    return new Promise(res => c.toBlob(res, 'image/png'));
+  }
+
+  // Build a chain of nested shadow hosts, return the innermost root.
+  function nest(parent, depth) {
+    let root = parent;
+    for (let i = 0; i < depth; i++) {
+      const host = document.createElement('div');
+      root.appendChild(host);
+      root = host.attachShadow({ mode: 'open' });
+    }
+    return root;
+  }
+
+  (async () => {
+    const app = document.getElementById('app');
+
+    // 6 levels of shadow before the page image - a plain querySelectorAll finds nothing.
+    const deep = nest(app, 6);
+    const pageImg = document.createElement('img');
+    pageImg.src = URL.createObjectURL(await pngBlob(2388, 1681, 'THE PAGE'));
+    pageImg.style.cssText = 'width:796px;height:560px;display:block';
+    deep.appendChild(pageImg);
+
+    // Decoy 1: a large blob image rendered off-screen (the pre-rendered next page).
+    const pre = nest(document.getElementById('offscreen'), 3);
+    const preImg = document.createElement('img');
+    preImg.src = URL.createObjectURL(await pngBlob(2388, 1681, 'NEXT PAGE'));
+    preImg.style.cssText = 'width:796px;height:560px;display:block';
+    pre.appendChild(preImg);
+
+    // Decoy 2: a small blob image (UI chrome / cover thumb) - under MIN_PAGE_EDGE.
+    const chrome1 = nest(app, 2);
+    const icon = document.createElement('img');
+    icon.src = URL.createObjectURL(await pngBlob(80, 80, 'i'));
+    icon.style.cssText = 'width:80px;height:80px';
+    chrome1.appendChild(icon);
+
+    // Decoy 3: a large NON-blob image. Must never be chosen.
+    const big = document.createElement('img');
+    big.src = 'data:image/svg+xml;base64,' + btoa(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="900"></svg>');
+    big.style.cssText = 'width:900px;height:700px;position:absolute;top:0;left:0;opacity:.01';
+    nest(app, 1).appendChild(big);
+
+    // Progress text, as a leaf inside yet another shadow root, user-disableable in the
+    // real reader. Uses the exact shape measured: "Page 364 of 943 * 36%".
+    const prog = nest(app, 4);
+    const span = document.createElement('span');
+    span.textContent = 'Page 364 of 943 • 36%';
+    prog.appendChild(span);
+
+    // Page-turn simulator: swap the blob for a fresh one, as a real render would.
+    window.turnPage = async () => {
+      const old = pageImg.src;
+      pageImg.src = URL.createObjectURL(await pngBlob(2388, 1681, 'PAGE ' + Date.now()));
+      URL.revokeObjectURL(old);
+      const n = Number(span.textContent.match(/Page (\d+)/)[1]) + 1;
+      span.textContent = `Page ${n} of 943 • 36%`;
+      return pageImg.src;
+    };
+
+    // The real reader revokes each blob URL right after the <img> loads it, leaving the
+    // element displayable but the URL dead. Capture must survive that.
+    window.revokePageBlob = () => { URL.revokeObjectURL(pageImg.currentSrc || pageImg.src); };
+
+    window.__pageImg = pageImg;
+    window.__preImg = preImg;
+    await pageImg.decode();
+    window.fixtureReady = true;
+  })();
+</script>
+<script src="./content.js"></script>
