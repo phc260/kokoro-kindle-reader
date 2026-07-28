@@ -45,7 +45,8 @@ The app synthesizes on your GPU via WebGPU, so a **discrete GPU** (e.g. NVIDIA/A
 gives smooth, faster-than-realtime narration — tested smooth on an NVIDIA GTX 1060.
 Laptops with only an **integrated GPU and no dedicated one** can fall well behind
 realtime — narration will work, but may lag noticeably behind Kindle's pages. If so,
-try unticking **Synthesize on GPU** in Settings (see Troubleshooting).
+click the **runner** button beside **Synthesize on GPU** in Settings: it times your GPU
+and your CPU and picks the faster one for you (see [GPU or CPU?](#gpu-or-cpu)).
 
 ## Using the app
 
@@ -65,6 +66,9 @@ out until the engine is ready and **Narrate Kindle with Kokoro** is ticked.
    to hand Kindle back its built-in voice. No admin prompt. A Yes/No prompt confirms
    the change and closes Kindle for you — reopen it afterward to pick up the new voice.
 4. Click **Preview** to hear the selected narrator read a short sample line.
+5. Not sure whether to leave **Synthesize on GPU** ticked? Click the **runner** button
+   next to it — it times both and picks the faster one for your PC. See
+   [GPU or CPU?](#gpu-or-cpu).
 
 Your choices are saved and applied to Kindle's **next page** automatically — no
 restart needed.
@@ -100,6 +104,24 @@ you do inside Kindle, whichever side toggles it.
 takes slightly longer to start each chunk. Sensible defaults are set, so you usually
 don't need to touch it.
 
+### GPU or CPU?
+
+Kokoro can synthesize on your graphics card or on your processor, and **which one is
+faster depends entirely on your PC** — on a laptop with only an integrated GPU, the
+processor can be twice as fast; with a discrete graphics card it's usually the other way
+round. You can't tell from the hardware name, so don't guess: click the **runner** button
+next to **Synthesize on GPU** ("Test which is faster" when you hover it).
+
+The test speaks the same short sentence on each engine, times them, and ticks the faster
+one. Nothing is played aloud. It usually takes under a minute — longer on a slow PC, since
+how long synthesis takes is the thing being measured — and it needs the synthesizer to
+itself, so **stop Read Aloud first**. The results are shown as a *real time* figure: 2.0x
+means Kokoro produces two seconds of speech per second, so it comfortably keeps ahead of
+your reading; below 1.0x it can't keep up and narration will pause to catch up.
+
+You can still tick or untick **Synthesize on GPU** by hand at any time; the test only
+sets it for you.
+
 ## Troubleshooting
 
 - **Kindle is silent / no Read Aloud sound** — the kokoro-kindle-reader app isn't
@@ -119,10 +141,10 @@ don't need to touch it.
   Download button in Settings. Everything is offline after that.
 - **Narration lags behind pages / synthesis feels slow** — synthesis defaults to
   your GPU, and an integrated GPU (no discrete card) can run slower than realtime.
-  Try unticking **Synthesize on GPU** in Settings to synthesize on the CPU instead:
-  on one integrated-GPU laptop we tested, plain CPU synthesis was over 2x faster
-  than its GPU path. There's no automatic switching yet, so this is a manual
-  fallback, not a default.
+  Click the **runner** button beside **Synthesize on GPU** in Settings: it times both
+  engines on your machine and ticks the faster one (on one integrated-GPU laptop we tested, plain CPU synthesis was over
+  2x faster than its GPU path). Stop Read Aloud before running it. See
+  [GPU or CPU?](#gpu-or-cpu).
 
 ## How it works
 

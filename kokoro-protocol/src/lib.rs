@@ -18,6 +18,17 @@
 //!
 //! - [`CMD_INFO`] (`'I'`): `-> [u16 jsonBytes][utf8 json]`.
 //!
+//! - [`CMD_BENCH`] (`'B'`): `[u8 engine] -> [u32 status][f32 audioSecs][f32 elapsedSecs]`.
+//!   Times one execution provider ([`BENCH_ENGINE_CPU`] / [`BENCH_ENGINE_GPU`]) on a fixed
+//!   sample the *host* owns, so the answer can't be skewed by what a client sends and the
+//!   work is bounded. `status` is [`BENCH_OK`] or [`BENCH_FAILED`] (the other two fields
+//!   are then 0). The caller's figure of merit is `audioSecs / elapsedSecs` — how many
+//!   seconds of speech the machine renders per second of wall clock, so `> 1` keeps up
+//!   with reading. This exists *because* [`CMD_SYNTH`] can't answer the question: that
+//!   stream is deliberately paced to ~real time, so timing it measures the pacing, not the
+//!   engine. Runs on the serialized synth worker (queues behind an in-flight utterance)
+//!   and takes tens of seconds; it writes no audio, so it doesn't disturb [`CMD_STATUS`].
+//!
 //! - [`CMD_STATUS`] (`'T'`): `-> [u32 msSinceLastAudio]`. Milliseconds since the host
 //!   last wrote audio to *any* client, or [`u32::MAX`] if it never has. Answered inline
 //!   (not on the serialized synth worker), so it returns immediately even while another
@@ -39,6 +50,24 @@ pub const CMD_INFO: u8 = b'I';
 /// Command byte: report `[u32 msSinceLastAudio]` — how long since the host last wrote
 /// audio to any client (`u32::MAX` if never). See the module docs.
 pub const CMD_STATUS: u8 = b'T';
+/// Command byte: time one execution provider on the host's fixed sample.
+/// `[u8 engine] -> [u32 status][f32 audioSecs][f32 elapsedSecs]`. See the module docs.
+pub const CMD_BENCH: u8 = b'B';
+
+/// [`CMD_BENCH`] engine selector: the plain ORT CPU execution provider.
+pub const BENCH_ENGINE_CPU: u8 = 0;
+/// [`CMD_BENCH`] engine selector: the Dawn WebGPU execution provider.
+pub const BENCH_ENGINE_GPU: u8 = 1;
+/// [`CMD_BENCH`] status: the timings that follow are valid.
+pub const BENCH_OK: u32 = 0;
+/// [`CMD_BENCH`] status: that engine couldn't run here (e.g. no working GPU adapter, or
+/// the model isn't downloaded). The timing fields are 0.
+pub const BENCH_FAILED: u32 = 1;
+/// [`CMD_BENCH`] status: another measurement is already queued or running, and this one
+/// was refused rather than queued behind it (a bench occupies the single synth worker for
+/// tens of seconds). Distinct from [`BENCH_FAILED`] so a caller doesn't report a busy host
+/// as an engine that doesn't work. The timing fields are 0.
+pub const BENCH_BUSY: u32 = 2;
 
 /// Frame-stream marker: the utterance is complete (no gain/samples follow). A leading
 /// u32 >= [`STREAM_END`] is always a control marker, never a real sample count.

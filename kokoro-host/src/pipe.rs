@@ -11,7 +11,7 @@
 // come from controls.json in the app-data dir (no webview round-trips).
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -22,7 +22,8 @@ use crate::native_synth::{self, NativeSynth};
 use crate::split_text::split_text;
 // The named-pipe wire format is shared with the SAPI engine (one source of truth).
 use kokoro_protocol::{
-    CHUNK_INFO, CMD_INFO, CMD_STATUS, CMD_SYNTH, MAX_TEXT_BYTES, PIPE_NAME, STREAM_END,
+    BENCH_BUSY, BENCH_ENGINE_CPU, BENCH_ENGINE_GPU, BENCH_FAILED, BENCH_OK, CHUNK_INFO,
+    CMD_BENCH, CMD_INFO, CMD_STATUS, CMD_SYNTH, MAX_TEXT_BYTES, PIPE_NAME, STREAM_END,
     SYNTH_ERROR,
 };
 
@@ -50,6 +51,22 @@ pub struct Ctx {
     /// panel's connection sees audio streamed on Kindle's connection. Answers "is Kokoro
     /// producing audio right now?" without any handshake on the synth worker.
     pub last_audio_ms: Arc<AtomicU64>,
+    /// Set while a `CMD_BENCH` measurement is queued or running. Anything on the machine
+    /// can open the pipe, and a bench occupies the one synth worker for tens of seconds;
+    /// without this, a client could open connection after connection and queue enough
+    /// measurements to starve Kindle well past the silent gap its narrator tolerates.
+    /// One at a time, and a second request is refused rather than queued.
+    pub bench_busy: Arc<AtomicBool>,
+}
+
+/// Clears [`Ctx::bench_busy`] on the way out, so a client task that errors or is dropped
+/// mid-measurement can't leave the speed test permanently refusing to run.
+struct BenchGuard(Arc<AtomicBool>);
+
+impl Drop for BenchGuard {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
 }
 
 /// Wall-clock milliseconds since the Unix epoch (0 if the clock is before it). Used
@@ -141,6 +158,44 @@ async fn serve_client(mut pipe: NamedPipeServer, ctx: Ctx) -> std::io::Result<()
                 // Runs on this client's task, independent of any in-flight CMD_SYNTH.
                 let last = ctx.last_audio_ms.load(Ordering::Relaxed);
                 let elapsed = now_ms().saturating_sub(last).min(u32::MAX as u64) as u32;
+                pipe.write_all(&elapsed.to_le_bytes()).await?;
+            }
+            CMD_BENCH => {
+                // Time one engine so the panel can tell the user which is faster here.
+                // Deliberately NOT the CMD_SYNTH path: that stream is paced to ~real
+                // time, so timing it would measure the pacing. Runs on the serialized
+                // synth worker — this task just waits, and the pipe server is
+                // multi-instance, so other clients keep being served meanwhile.
+                let mut b1 = [0u8; 1];
+                pipe.read_exact(&mut b1).await?;
+                // Strict: an unrecognized selector is a malformed request, not a hint to
+                // pick an engine. Drop the client, as the unknown-command arm below does
+                // — guessing would hand a future or hostile client an expensive run it
+                // didn't ask for.
+                let engine = match b1[0] {
+                    BENCH_ENGINE_CPU => native_synth::Engine::Cpu,
+                    BENCH_ENGINE_GPU => native_synth::Engine::Gpu,
+                    _ => return Ok(()),
+                };
+                // One measurement at a time across all clients (see `bench_busy`). The
+                // guard releases it however this arm exits, including a `?` on the reply.
+                if ctx.bench_busy.swap(true, Ordering::SeqCst) {
+                    pipe.write_all(&BENCH_BUSY.to_le_bytes()).await?;
+                    pipe.write_all(&0.0f32.to_le_bytes()).await?;
+                    pipe.write_all(&0.0f32.to_le_bytes()).await?;
+                    continue;
+                }
+                let _bench_guard = BenchGuard(ctx.bench_busy.clone());
+                // The narrator comes from controls.json rather than the wire: any voice
+                // times the same (it's one more model input), and taking the user's own
+                // guarantees the .bin is present.
+                let (voice, _c) = native_synth::read_controls(&ctx.app_data);
+                let (status, audio, elapsed) = match ctx.native.bench(voice, engine).await {
+                    Some(b) => (BENCH_OK, b.audio_secs, b.elapsed_secs),
+                    None => (BENCH_FAILED, 0.0, 0.0),
+                };
+                pipe.write_all(&status.to_le_bytes()).await?;
+                pipe.write_all(&audio.to_le_bytes()).await?;
                 pipe.write_all(&elapsed.to_le_bytes()).await?;
             }
             CMD_SYNTH => {

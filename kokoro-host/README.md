@@ -29,8 +29,8 @@ cargo run   # windowless tray daemon; right-click the tray → Settings for the 
 | File | What |
 |---|---|
 | `main.rs` | `tao` event loop + `tray-icon` menu (Settings / Quit) + `auto-launch`. "Settings" spawns `kokoro-panel.exe`; a `WaitUntil` timer ticks `kindle_watch`. `#![windows_subsystem = "windows"]` in release (no console). |
-| `pipe.rs` | The SAPI bridge and **owner of all chunking**: the tokio named-pipe server, `split_text` into sentence chunks, a depth-1 prefetch pipeline, and frame-by-frame streaming with pacing/sub-framing. |
-| `native_synth.rs` | The synth core: normalize → phonemize → tokenize → the Kokoro ONNX model on the Dawn WebGPU or CPU EP (`Engine`, from `controls.json`'s `gpu_synth`) → f32 PCM. Also the `controls.json` reader (`read_controls`). |
+| `pipe.rs` | The SAPI bridge and **owner of all chunking**: the tokio named-pipe server, `split_text` into sentence chunks, a depth-1 prefetch pipeline, and frame-by-frame streaming with pacing/sub-framing. Also answers `CMD_STATUS` and `CMD_BENCH`. |
+| `native_synth.rs` | The synth core: normalize → phonemize → tokenize → the Kokoro ONNX model on the Dawn WebGPU or CPU EP (`Engine`, from `controls.json`'s `gpu_synth`) → f32 PCM. Also the `controls.json` reader (`read_controls`) and `bench()`, which times one EP for the panel's speed test. |
 | `kindle_watch.rs` | Kindle-watcher: polls for `Kindle.exe`, and when `kindle_kokoro` is on, spawns the x86 `kokoro-inject.exe` to inject `kokoro_hook.dll` (restores Kokoro on Kindle 18632+). Edge-triggered per PID; never panics. |
 | `text.rs` | Kokoro-js text normalization (11 passes) + punctuation segmentation; golden tests (`#[cfg(test)] mod tests`) lock token-parity with kokoro-js. |
 | `espeak.rs` | The espeak-ng FFI + one-segment phoneme trace. |
@@ -49,6 +49,16 @@ cargo run   # windowless tray daemon; right-click the tray → Settings for the 
   `kindle_watch::enabled` for `kindle_kokoro` — change them together.
 - The pacing lead (500 ms) and sub-frame (250 ms) are **fixed constants** in `pipe.rs`
   (`DEFAULT_LEAD_MS` / `DEFAULT_SUBFRAME_MS`), not user-tunable.
+- **Never time synthesis through `CMD_SYNTH`** — that stream is paced to ~real time, so
+  any engine faster than realtime measures ~1.0x and GPU and CPU look identical. That's
+  what `CMD_BENCH` → `NativeSynth::bench` is for: same worker, same session builder, no
+  pacing, on a fixed sentence the host owns (so the timing stays comparable and a client
+  can't hand the worker an arbitrarily long text). It queues behind a live utterance
+  rather than running beside it, which is why the panel refuses to start one while Kokoro
+  is speaking — and why the host runs **one measurement at a time** (`Ctx::bench_busy`),
+  answering `BENCH_BUSY` instead of queueing. Anything on the machine can open the pipe,
+  and enough queued measurements would starve Kindle past the silent gap its narrator
+  tolerates.
 
 The pipe wire format is the shared **`kokoro-protocol`** crate. The sibling
 **`../kokoro-bench`** crate reuses `text.rs`/`espeak.rs` (via `#[path]`, since this

@@ -115,6 +115,69 @@ component StopButton inherits IconButton {
     accent: #ff4a3d;
 }
 
+// Run the GPU-vs-CPU speed test. Google Material Symbols sprint (Rounded), theme accent
+// — a runner reads as "which of these is faster" without a word of label.
+component SprintButton inherits IconButton {
+    icon: @image-url("sprint.svg");
+    accent: Palette.accent-background;
+}
+
+// The shared chrome for the panel's modal dialogs: a full-window scrim that swallows
+// clicks on everything beneath, with a raised card centred on top. The card takes the
+// height its content negotiates (nested centering layouts, not hand-computed x/y), so
+// wrapped text can never push the buttons past its edge. @children land in the card's
+// padded column — a dialog supplies only its own content.
+component ModalCard inherits Rectangle {
+    width: 100%;
+    height: 100%;
+    background: #00000099; // heavy scrim so the card clearly floats above the panel
+    TouchArea { } // modal: swallow clicks on everything beneath
+    VerticalLayout {
+        alignment: center;
+        HorizontalLayout {
+            alignment: center;
+            Rectangle {
+                width: Math.min(root.width - 48px, 340px);
+                // Raised surface: a foreground tint over the window background reads
+                // as elevation in both themes (same trick as the model status card).
+                background: Palette.background.mix(Palette.foreground, 0.92);
+                border-radius: 8px;
+                border-width: 1px;
+                border-color: Palette.border;
+                drop-shadow-blur: 32px;
+                drop-shadow-offset-y: 8px;
+                drop-shadow-color: #00000080;
+                VerticalLayout {
+                    padding: 20px;
+                    spacing: 14px;
+                    @children
+                }
+            }
+        }
+    }
+}
+
+// One measured engine in the speed-test results: name on the left, its realtime factor
+// on the right. The winner is bold Lawn Green — the same green as the Waveform and the
+// "Voice Engine Ready" readout, so "good" reads the same everywhere in the panel; the
+// loser (or an engine that couldn't run) stays grey, making the verdict legible at a
+// glance without reading the numbers.
+component BenchRow inherits HorizontalLayout {
+    in property <string> label;
+    in property <string> value;
+    in property <bool> won;
+    spacing: 8px;
+    Text { text: root.label; font-size: 14px; vertical-alignment: center; }
+    Rectangle { horizontal-stretch: 1; }
+    Text {
+        text: root.value;
+        font-size: 14px;
+        font-weight: root.won ? 700 : 400;
+        color: root.won ? #7cfc00 : #7a7a7a; // Lawn Green
+        vertical-alignment: center;
+    }
+}
+
 // A tiny animated voice meter: six rounded bars that ripple up and down like an
 // audio equalizer. Driven by `animation-tick()`, so it animates only while it's on
 // screen (the "ready" state) and costs nothing otherwise. Each bar is phase-offset
@@ -180,6 +243,17 @@ export component AppWindow inherits Window {
     // new value, held (unpersisted) while the dialog is up.
     in-out property <bool> confirm-visible;
     in property <bool> confirm-target;
+    // GPU-vs-CPU speed test. One dialog with three faces — ask, running, results —
+    // selected by these two flags (neither set = the opening "ask" face).
+    in-out property <bool> bench-visible;
+    in property <bool> bench-running;
+    in property <bool> bench-done;
+    in property <string> bench-phase;    // which engine is being timed right now
+    in property <string> bench-gpu-text; // "1.9x real time" / "unavailable"
+    in property <string> bench-cpu-text;
+    in property <bool> bench-gpu-wins;
+    in property <bool> bench-cpu-wins;
+    in property <string> bench-verdict;  // what was measured and what got selected
 
     // Lower controls (narrator + sliders + transport) are live only when the engine
     // card reads "Voice Engine Ready" (model present, not mid download/verify) AND
@@ -189,6 +263,8 @@ export component AppWindow inherits Window {
     // The CPU-synth toggle doesn't need Kindle narration ticked (Preview benefits too) —
     // just the engine itself being ready.
     property <bool> engine-ready: root.model-ready && !root.downloading && !root.verifying;
+    // The speed-test dialog's opening face: nothing has been run yet.
+    property <bool> bench-ask: !root.bench-running && !root.bench-done;
 
     // --- events (handled in Rust) ---
     callback accent-changed(int);
@@ -205,6 +281,10 @@ export component AppWindow inherits Window {
     callback read-aloud-clicked(bool); // desired state (the switch's new value)
     callback pause-toggled(bool);      // desired paused state
     callback confirm-kindle(bool);     // dialog verdict: true = apply + close Kindle
+    callback bench-open();             // show the speed-test dialog (nothing runs yet)
+    callback bench-start();            // run the test
+    callback bench-stop();             // stop after the engine currently being timed
+    callback bench-close();
 
     VerticalLayout {
         padding: 20px;
@@ -398,20 +478,28 @@ min-width: 100px;
         // GPU (default, ticked) vs CPU engine: an integrated GPU can lose badly to
         // plain CPU (no auto-detection yet — see native_synth.rs's Engine).
         // Independent of the Kindle-narration checkbox since Preview benefits too.
+        // Which one wins isn't something a reader can be expected to know, and it can't
+        // be inferred from the hardware name either — hence "Test speed", which measures
+        // both here and ticks the winner.
         VerticalLayout {
             spacing: 2px;
             HorizontalLayout {
                 spacing: 8px;
-                alignment: start;
                 CheckBox {
                     text: "Synthesize on GPU";
                     checked <=> root.gpu-synth;
                     enabled: root.engine-ready;
                     toggled => { root.gpu-synth-changed(self.checked); }
                 }
+                Rectangle { horizontal-stretch: 1; }
+                SprintButton {
+                    enabled: root.engine-ready;
+                    clicked => { root.bench-open(); }
+                    Tooltip { text: @markdown("Test which is faster"); }
+                }
             }
             Text {
-                text: "Untick to synthesize on the CPU instead — often faster on laptops with no discrete GPU.";
+                text: "Untick to synthesize on the CPU instead — often faster on laptops with no discrete GPU. Not sure? The runner times both and picks.";
                 font-size: 12px;
                 color: #a0a0a0;
                 wrap: word-wrap;
@@ -437,61 +525,101 @@ min-width: 100px;
 
     // Modal Yes/No for the Kindle-narration toggle (declared after the main layout so
     // it draws on top). Yes applies the flag and closes Kindle; No reverts the checkbox.
-    if root.confirm-visible: Rectangle {
-        width: 100%;
-        height: 100%;
-        background: #00000099; // heavy scrim so the card clearly floats above the panel
-        TouchArea { } // modal: swallow clicks on everything beneath
-        // Nested centering layouts (not hand-computed x/y/height): the card takes the
-        // height its content negotiates, so the wrapped text can never push the
-        // buttons past the card's edge.
-        VerticalLayout {
-            alignment: center;
-            HorizontalLayout {
-                alignment: center;
-                Rectangle {
-                    width: Math.min(root.width - 48px, 340px);
-                    // Raised surface: a foreground tint over the window background reads
-                    // as elevation in both themes (same trick as the model status card).
-                    background: Palette.background.mix(Palette.foreground, 0.92);
-                    border-radius: 8px;
-                    border-width: 1px;
-                    border-color: Palette.border;
-                    drop-shadow-blur: 32px;
-                    drop-shadow-offset-y: 8px;
-                    drop-shadow-color: #00000080;
-                    VerticalLayout {
-                        padding: 20px;
-                        spacing: 14px;
-                        Text {
-                            text: root.confirm-target
-                                ? "Narrate Kindle with Kokoro?"
-                                : "Switch Kindle back to its own voice?";
-                            font-size: 15px;
-                            font-weight: 600;
-                            wrap: word-wrap;
-                        }
-                        Text {
-                            text: "Kindle will be closed so the change takes effect. Reopen it to continue reading.";
-                            font-size: 14px;
-                            wrap: word-wrap;
-                        }
-                        HorizontalLayout {
-                            spacing: 8px;
-                            alignment: end;
-                            Button {
-                                text: "Yes";
-                                primary: true;
-                                clicked => { root.confirm-kindle(true); }
-                            }
-                            Button {
-                                text: "No";
-                                clicked => { root.confirm-kindle(false); }
-                            }
-                        }
-                    }
-                }
+    if root.confirm-visible: ModalCard {
+        Text {
+            text: root.confirm-target
+                ? "Narrate Kindle with Kokoro?"
+                : "Switch Kindle back to its own voice?";
+            font-size: 15px;
+            font-weight: 600;
+            wrap: word-wrap;
+        }
+        Text {
+            text: "Kindle will be closed so the change takes effect. Reopen it to continue reading.";
+            font-size: 14px;
+            wrap: word-wrap;
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            alignment: end;
+            Button {
+                text: "Yes";
+                primary: true;
+                clicked => { root.confirm-kindle(true); }
             }
+            Button {
+                text: "No";
+                clicked => { root.confirm-kindle(false); }
+            }
+        }
+    }
+
+    // GPU-vs-CPU speed test. Three faces in one card: what the test does, progress while
+    // it runs, then the two measurements with the winner already ticked.
+    //
+    // Every element is a DIRECT child of the card, each with its own `if`, rather than
+    // three tidy per-face VerticalLayouts. Grouping them cost the card its height: the
+    // button row, two layouts deep, didn't reach the card's size calculation and drew
+    // below its bottom edge, over the panel. Keep new rows flat.
+    if root.bench-visible: ModalCard {
+        Text {
+            text: "Which is faster on this PC?";
+            font-size: 15px;
+            font-weight: 600;
+            wrap: word-wrap;
+        }
+
+        // Ask — nothing has run yet.
+        if root.bench-ask: Text {
+            text: "Kokoro will speak the same short sentence twice — once on the graphics card, once on the processor — and time each. Nothing is played aloud, and the faster one is selected for you.";
+            font-size: 14px;
+            wrap: word-wrap;
+        }
+        if root.bench-ask: Text {
+            text: "Usually under a minute, longer on a slow PC. Stop Read Aloud first — the test and Kindle share one synthesizer.";
+            font-size: 13px;
+            color: #a0a0a0;
+            wrap: word-wrap;
+        }
+        if root.bench-ask: HorizontalLayout {
+            spacing: 8px;
+            alignment: end;
+            Button { text: "Run test"; primary: true; clicked => { root.bench-start(); } }
+            Button { text: "Cancel"; clicked => { root.bench-close(); } }
+        }
+
+        // Running. Indeterminate by necessity: how long a machine takes to synthesize
+        // is the very thing being measured, so there's no honest percentage to show.
+        if root.bench-running: Text { text: root.bench-phase; font-size: 14px; wrap: word-wrap; }
+        if root.bench-running: ProgressIndicator { indeterminate: true; height: 6px; }
+        if root.bench-running: HorizontalLayout {
+            alignment: end;
+            // Stop takes effect between engines: the engine being timed has to finish
+            // its run before the synthesizer is free again.
+            Button { text: "Stop"; clicked => { root.bench-stop(); } }
+        }
+
+        // Results.
+        if root.bench-done: BenchRow {
+            label: "Graphics card (GPU)";
+            value: root.bench-gpu-text;
+            won: root.bench-gpu-wins;
+        }
+        if root.bench-done: BenchRow {
+            label: "Processor (CPU)";
+            value: root.bench-cpu-text;
+            won: root.bench-cpu-wins;
+        }
+        if root.bench-done: Text {
+            text: "Higher is better. Below 1x, synthesis is slower than the speech it produces, so reading pauses to catch up.";
+            font-size: 12px;
+            color: #a0a0a0;
+            wrap: word-wrap;
+        }
+        if root.bench-done: Text { text: root.bench-verdict; font-size: 14px; wrap: word-wrap; }
+        if root.bench-done: HorizontalLayout {
+            alignment: end;
+            Button { text: "Close"; primary: true; clicked => { root.bench-close(); } }
         }
     }
 }

@@ -76,6 +76,8 @@ fn start_pipe_server() {
         native,
         // Shared "last audio written" clock the pipe answers CMD_STATUS from.
         last_audio_ms: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        // Shared across every client connection, so CMD_BENCH stays one-at-a-time.
+        bench_busy: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
 
     std::thread::Builder::new()

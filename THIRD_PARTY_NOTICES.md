@@ -107,6 +107,16 @@ shaders. The DirectX Shader Compiler is published under the University of
 Illinois/NCSA Open Source License; `dxil.dll` is a Microsoft-signed validator component
 redistributed under the terms accompanying its official binary release.
 
+### Google Material Symbols — Apache-2.0
+
+Upstream: <https://github.com/google/material-design-icons>. Copyright Google Inc. The
+settings panel's icon buttons use glyphs from the Material Symbols (Rounded) set, checked
+into `kokoro-panel/ui/` as SVG and compiled into `kokoro-panel.exe`: `play-arrow`,
+`pause`, `stop`, `sprint`, and `resume`. Licensed under the Apache License, Version 2.0
+(<https://www.apache.org/licenses/LICENSE-2.0>). `resume` is **modified** — its left bar
+is lengthened past the play triangle; the rest are used unmodified apart from being
+recoloured at runtime.
+
 ### Rust crates — MIT OR Apache-2.0
 
 The two executables and the three x86 libraries statically link a number of crates from

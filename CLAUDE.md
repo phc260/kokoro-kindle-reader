@@ -118,6 +118,13 @@ the panel and Read Aloud in Kindle (or `test-speak.ps1`).
   audio-stream offsets, which is what the `CHUNK_INFO` frame (`0xFFFF_FFFD` + the chunk's
   UTF-16 span + sample count) exists to make possible. Without those events Kindle speaks
   the first sentence of a page and never advances.
+- **Never time synthesis through `CMD_SYNTH`.** That stream is paced to ~real time
+  (`pipe.rs`), so any engine faster than realtime clocks in at ~1.0x and GPU and CPU
+  measure identical. The panel's "Test speed" dialog uses `CMD_BENCH` →
+  `native_synth::bench` instead: same worker, same session builder, unpaced, on a fixed
+  sentence the **host** owns (comparable numbers; a client can't hand the worker an
+  arbitrary text). It shares the serialized worker with real synthesis, so the panel
+  refuses to start one while Kokoro is speaking.
 - **`fetch-deps.ps1` must run before building `kokoro-host`.** `build.rs` panics if the
   provisioned dep folders under `native-deps/` (ORT + Dawn DLLs + espeak) are missing.
   It also stages the 5 runtime DLLs next to the exe.

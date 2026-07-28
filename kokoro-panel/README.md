@@ -19,10 +19,11 @@ cargo run   # or launch it from the host's tray → Settings
 
 | File | What |
 |---|---|
-| `ui/panel.slint` | The Fluent UI (sliders, narrator dropdown, Preview + transport buttons, "Narrate Kindle with Kokoro" checkbox, Read Aloud switch, "Synthesize on GPU" checkbox). |
-| `src/main.rs` | Wires the Slint UI to the modules below; background work runs on threads and pushes results back via `upgrade_in_event_loop`. The Kindle-narration checkbox raises a Yes/No confirm dialog; Yes persists `kindle_kokoro` and closes Kindle (the flag only lands on Kindle's next launch), No reverts the checkbox. |
+| `ui/panel.slint` | The Fluent UI (sliders, narrator dropdown, Preview + transport buttons, "Narrate Kindle with Kokoro" checkbox, Read Aloud switch, "Synthesize on GPU" checkbox + the sprint-icon speed test beside it). `IconButton` is the shared glyph-button chrome (Material Symbols SVG + accent + hover + a `Tooltip` child for the label); `ModalCard` is the shared dialog chrome (scrim + centred card). |
+| `src/main.rs` | Wires the Slint UI to the modules below; background work runs on threads and pushes results back via `upgrade_in_event_loop`. The Kindle-narration checkbox raises a Yes/No confirm dialog; Yes persists `kindle_kokoro` and closes Kindle (the flag only lands on Kindle's next launch), No reverts the checkbox. Also drives the speed test (`run_speed_test`) and applies its verdict to `gpu_synth`. |
 | `src/download.rs` | Model download/verify (framework-agnostic). |
 | `src/preview.rs` | Synth via the host pipe + rodio playback. |
+| `src/benchmark.rs` | The `CMD_BENCH` client: times one execution provider on the host and returns its realtime factor. |
 | `src/kindle_reader.rs` | Drives Kindle's "Assistive reader" (Read Aloud) hands-free — foregrounds Kindle and sends its Ctrl+A shortcut via raw `SendInput` (works whether or not the Aa menu is open); UI Automation is used only for best-effort state readback and to dismiss an open Aa/ToC flyout first. Also `close()`s Kindle (found by process name via Toolhelp32, `WM_CLOSE`'d — not relaunched) for the narration-voice confirm dialog. |
 
 ## Contract (do not rediscover)
@@ -34,6 +35,17 @@ cargo run   # or launch it from the host's tray → Settings
   rebuild, since the execution provider is fixed at session-build time). `kindle_kokoro`
   is read by `kokoro-host/src/kindle_watch.rs` (gates Kindle auto-injection); `paused` is read
   by `read_controls` and consumed in `pipe.rs` (a live pause command that stalls the stream).
+- **The speed test measures, it doesn't guess.** GPU-vs-CPU can't be decided from the
+  hardware name (an integrated GPU may run at half the CPU's rate or several times it),
+  so the sprint button beside "Synthesize on GPU" times both via `CMD_BENCH` and ticks
+  the winner. It goes through
+  `benchmark.rs`, **not** Preview: the `CMD_SYNTH` stream is paced to ~real time, so timing a
+  preview would measure the pacing. It refuses to start while the host reports it is
+  speaking (the test and Kindle share one serialized synth worker) — best-effort, since
+  nothing reserves that worker — and treats a result inside `BENCH_TIE_RATIO` as a tie and
+  changes nothing. Unlike the "Speaking" indicator, that check does **not** discount the
+  panel's own prefetch: a false "idle" would stall a live Read Aloud, a false "speaking"
+  only costs a retry.
 - The narrator list is derived from the embedded `model-manifest.json` (accent from
   `id[0]` a/b, gender from `id[1]` f/m).
 - Slint `step` on a `Slider` only affects keyboard/scroll, not mouse drag — the dragged

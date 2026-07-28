@@ -145,19 +145,32 @@ sub-frame. The lead (500 ms) and sub-frame (250 ms) are fixed built-in defaults
 (`DEFAULT_LEAD_MS` / `DEFAULT_SUBFRAME_MS` in `pipe.rs`); the narrator, speed, gain,
 per-chunk sentence count, and GPU/CPU engine choice are the user-facing knobs.
 
+**Choosing GPU or CPU.** Which execution provider is faster is a property of the
+machine, not of the software — an integrated GPU can run at half the CPU's rate on one
+laptop and several times it on the next — and it isn't something a reader can be asked to
+know. So the panel's speed-test dialog measures it: `CMD_BENCH` times each EP on a fixed
+sentence on the host's synth worker, and the winner is written to `gpu_synth`. It is a
+separate command precisely *because* of the pacing above: timing a `'S'` request would
+measure the pacing, not the engine, and everything faster than realtime would tie at
+~1.0x. The measurement runs on the same serialized worker as real synthesis — so the panel
+declines to start one while the host reports it is speaking (best-effort: nothing reserves
+the worker), and the host itself runs at most one measurement at a time, refusing rather
+than queueing a second. It is the same comparison `kokoro-bench` makes offline, run against
+the engine the user actually has installed.
+
 ## Layout
 
 | Path | What |
 |---|---|
 | `kokoro-host/` | The windowless tray host (x64): `main.rs` (tao event loop + tray + `auto-launch` + Kindle-watcher tick), `pipe.rs` (named-pipe server; owns chunking + prefetch + pacing), `native_synth.rs` (serialized Rust synth, GPU or CPU EP + `controls.json` reader) + `text.rs`/`espeak.rs` (kokoro-js text normalizer + espeak-ng FFI), `split_text.rs` (the sentence-chunk splitter), `kindle_watch.rs` (polls for Kindle, spawns the injector). `build.rs` links the espeak-ng import lib and stages the runtime DLLs + `espeak-ng-data`. |
-| `kokoro-panel/` | The native settings panel (Slint/Fluent): `ui/panel.slint` + `src/main.rs`, the framework-agnostic `download.rs` / `preview.rs`, and `kindle_reader.rs` (hands-free Ctrl+A toggle of Kindle's Read Aloud + closing Kindle after the narration-voice checkbox, both via raw Win32/Toolhelp32 — UI Automation is only for best-effort state readback). Writes `controls.json`. |
+| `kokoro-panel/` | The native settings panel (Slint/Fluent): `ui/panel.slint` + `src/main.rs`, the framework-agnostic `download.rs` / `preview.rs` / `benchmark.rs` (the GPU-vs-CPU speed test's `CMD_BENCH` client), and `kindle_reader.rs` (hands-free Ctrl+A toggle of Kindle's Read Aloud + closing Kindle after the narration-voice checkbox, both via raw Win32/Toolhelp32 — UI Automation is only for best-effort state readback). Writes `controls.json`. |
 | `kokoro-bench/` | Standalone GPU-vs-CPU synth timing tool, not part of the shipping app: reuses `kokoro-host/src/{text,espeak}.rs` via `#[path]` includes (`kokoro-host` is bin-only, no lib target). |
 | `kokoro-hook/` | x86 `cdylib` injected into Kindle 18632+: `DllMain` patches the shared `ISpVoice::SetVoice` vtable slot (index 18) → Kokoro token. `selftest` bin proves it Kindle-free. |
 | `kokoro-inject/` | x86 exe the host spawns: `LoadLibrary`-injects `kokoro_hook.dll` into `Kindle.exe`. |
 | `native-deps/` | Synth **dependency provisioning** only (no source): `fetch-deps.ps1` populates the gitignored dep folders alongside itself (`native-deps/runtime/` + `espeak-ng-src/`) — the Dawn/WebGPU runtime DLLs (from the `onnxruntime-webgpu` wheel) + espeak-ng (x64 build + import lib + `espeak-ng-data`). |
 | `kokoro-sapi/` | The x86 SAPI engine — a Rust `cdylib` (thin COM shim + pipe client, no deps): `lib.rs` (COM exports + registration), `engine.rs` (`ISpTTSEngine`), `worker.rs` (pipe client), `sapi.rs` (hand-declared `sapiddk.h` interfaces). Plus the `voice-setup.ps1` / `kindle-voice-guard.ps1` (Kindle hive patch) / `test-speak.ps1` scripts. |
 | `kokoro-sapi-smoke/` | No-Kindle COM + Speak smoke test for the engine (`run-speak-test.ps1`). |
-| `kokoro-protocol/` | The named-pipe wire constants (pipe name, `'S'`/`'I'`, `STREAM_END`/`SYNTH_ERROR`, sample rate) as a small crate shared by **both** `kokoro-host` and `kokoro-sapi` — the single source of truth for the format. |
+| `kokoro-protocol/` | The named-pipe wire constants (pipe name, the `'S'`/`'I'`/`'T'`/`'B'` commands, `STREAM_END`/`SYNTH_ERROR`/`CHUNK_INFO`, sample rate) as a small crate shared by `kokoro-host`, `kokoro-sapi` and `kokoro-panel` — the single source of truth for the format. |
 | `model-manifest.json` | Files the model downloads from HF (paths + sizes + SHA-256); embedded in `kokoro-panel` (the narrator list is derived from it). |
 | `icons/` | Shared app icons (LFS); embedded in the exes' version resource and the installer. |
 | `packaging/` | `installer.nsi` + `build-installer.ps1` (standalone NSIS build) — per-user install with self-elevating voice registration. See [`packaging/README.md`](packaging/README.md). |

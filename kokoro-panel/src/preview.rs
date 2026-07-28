@@ -68,8 +68,9 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-/// Connect to the pipe, retrying briefly while all instances are busy.
-fn connect() -> Result<std::fs::File, String> {
+/// Connect to the pipe, retrying briefly while all instances are busy. Shared with
+/// `benchmark.rs`, which speaks a different command over the same connection.
+pub fn connect() -> Result<std::fs::File, String> {
     for _ in 0..20 {
         match OpenOptions::new().read(true).write(true).open(PIPE_NAME) {
             Ok(f) => return Ok(f),

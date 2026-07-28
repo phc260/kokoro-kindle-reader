@@ -59,8 +59,12 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
 - **Synthesis is serialized.** espeak has global state and isn't thread-safe, and the `ort`
   session is owned by one worker thread. Any code calling espeak or running the session off
   that thread is a bug.
-- **The wire format lives in `kokoro-protocol`**, a path dep of both ends. Neither
-  `kokoro-host` nor `kokoro-sapi` may hardcode the constants inline.
+- **The wire format lives in `kokoro-protocol`**, a path dep of every consumer. Neither
+  `kokoro-host`, `kokoro-sapi` nor `kokoro-panel` may hardcode the constants inline.
+- **Synthesis timing must not go through `CMD_SYNTH`.** That stream is paced to ~real time,
+  so timing it measures the pacing — every engine faster than realtime reads ~1.0x. The
+  panel's speed test uses `CMD_BENCH` (unpaced, fixed host-owned sample). Flag any timing
+  code that reaches for the synth path instead.
 - **Kindle 18632's narrator is event-driven.** The SAPI engine must emit word/sentence/
   bookmark events at true audio offsets, or Kindle speaks one sentence per page and stops.
 - **The bundle is GPLv3 even though the source is MIT.** The app links espeak-ng

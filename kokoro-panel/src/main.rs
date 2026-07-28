@@ -16,6 +16,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+mod benchmark;
 mod download;
 mod kindle_reader;
 mod preview;
@@ -205,6 +206,165 @@ fn commit_voice(ui: &AppWindow, voices: &[Voice], controls: &Arc<Mutex<Controls>
         c.voice = id;
         c.save();
     }
+}
+
+// --- GPU-vs-CPU speed test -------------------------------------------------
+// "Synthesize on GPU" asks the user to answer a question they have no way to answer:
+// on one laptop the integrated GPU runs at half the CPU's rate, on the next machine
+// it's several times faster, and the hardware name doesn't tell you which. So the panel
+// measures it — kokoro-bench, which settled the same question during development, but
+// wired to a dialog and run against the engine the user actually has installed.
+
+/// A measured engine, as the results row shows it.
+fn speed_text(s: Option<benchmark::Speed>) -> String {
+    match s {
+        Some(s) => format!("{:.1}× real time", s.realtime),
+        None => "unavailable".to_string(),
+    }
+}
+
+/// Below this ratio the two engines are called a tie: a single timed run each can't
+/// resolve a few percent, and flipping the user's engine on that noise would be
+/// pretending to a precision the test doesn't have.
+const BENCH_TIE_RATIO: f32 = 1.05;
+
+/// Show what's being timed right now.
+fn bench_phase(weak: &slint::Weak<AppWindow>, msg: &str) {
+    let msg = msg.to_string();
+    let _ = weak.upgrade_in_event_loop(move |ui| ui.set_bench_phase(msg.into()));
+}
+
+/// Give up on the test: close the dialog and explain in the panel's status line (where
+/// the rest of the panel's failures are reported), changing no setting.
+fn bench_abort(weak: &slint::Weak<AppWindow>, status: String) {
+    let _ = weak.upgrade_in_event_loop(move |ui| {
+        ui.set_bench_running(false);
+        ui.set_bench_visible(false);
+        ui.set_status(status.into());
+    });
+}
+
+/// Time both engines and tick the winner. Blocking (tens of seconds per engine) — runs
+/// on a background thread. `cancel` is checked between engines, which is as often as it
+/// can be: a run in flight holds the host's synth worker until it finishes.
+fn run_speed_test(
+    weak: slint::Weak<AppWindow>,
+    cancel: Arc<AtomicBool>,
+    controls: Arc<Mutex<Controls>>,
+) {
+    // The test and Kindle share the one serialized synth worker, so starting mid-
+    // narration would stall the reading AND time the contention rather than the engine.
+    //
+    // Unlike the state poll, this deliberately does NOT discount the panel's own intro
+    // prefetch (which stamps the same clock). The two readings have opposite costs: a
+    // false "speaking" only asks the user to click again a moment later, while a false
+    // "idle" drops a ~40 s benchmark in front of a live Read Aloud. Best-effort either
+    // way — nothing reserves the worker, so Kindle can begin an utterance in the instant
+    // after this reads idle.
+    if preview::host_speaking().unwrap_or(false) {
+        bench_abort(
+            &weak,
+            "Kokoro is speaking right now — stop Read Aloud, then run the speed test."
+                .to_string(),
+        );
+        return;
+    }
+
+    // GPU first (the phase label for it is set by the click handler, so the dialog never
+    // paints an empty line before this thread gets going).
+    //
+    // Known skew, accepted: on a laptop where the iGPU and the CPU cores share one
+    // package power budget (see kokoro-bench), the CPU is measured on a warmer package
+    // than the GPU was, so a near-tie can tilt toward whichever runs first. Every remedy
+    // costs more than it buys — a cooldown adds dead time to a modal the user is already
+    // waiting at, and reversing or shuffling the order just moves the bias. The tie band
+    // below absorbs the small differences this can produce; a gap big enough to matter is
+    // bigger than thermals explain.
+    let gpu = match benchmark::measure(true) {
+        Ok(v) => v,
+        Err(e) => return bench_abort(&weak, format!("Speed test failed: {e}")),
+    };
+    if cancel.load(Ordering::SeqCst) {
+        return bench_abort(&weak, "Speed test stopped; the setting is unchanged.".to_string());
+    }
+    bench_phase(&weak, "Timing the processor — 2 of 2…");
+    let cpu = match benchmark::measure(false) {
+        Ok(v) => v,
+        Err(e) => return bench_abort(&weak, format!("Speed test failed: {e}")),
+    };
+    if cancel.load(Ordering::SeqCst) {
+        return bench_abort(&weak, "Speed test stopped; the setting is unchanged.".to_string());
+    }
+
+    // `select` is None wherever the measurement doesn't justify touching the user's
+    // setting — a tie, or a test that measured nothing at all.
+    let (gpu_wins, cpu_wins, verdict, select) = match (gpu, cpu) {
+        (Some(g), Some(c)) => {
+            let gpu_faster = g.realtime >= c.realtime;
+            let (fast, slow) = if gpu_faster {
+                (g.realtime, c.realtime)
+            } else {
+                (c.realtime, g.realtime)
+            };
+            let ratio = fast / slow.max(f32::MIN_POSITIVE);
+            if ratio < BENCH_TIE_RATIO {
+                (false, false, "Both engines run at about the same speed here, so the setting is unchanged.".to_string(), None)
+            } else {
+                let name = if gpu_faster { "The graphics card" } else { "The processor" };
+                let mut v = format!("{name} is {ratio:.1}× faster here — now selected.");
+                if fast < 1.0 {
+                    v.push_str(
+                        " Even so, it synthesizes slower than it speaks on this PC, so expect reading to pause to catch up.",
+                    );
+                }
+                (gpu_faster, !gpu_faster, v, Some(gpu_faster))
+            }
+        }
+        (Some(_), None) => (
+            true,
+            false,
+            "Only the graphics card could synthesize on this PC — now selected.".to_string(),
+            Some(true),
+        ),
+        (None, Some(_)) => (
+            false,
+            true,
+            "The graphics card can't synthesize on this PC — switched to the processor."
+                .to_string(),
+            Some(false),
+        ),
+        (None, None) => (
+            false,
+            false,
+            "Neither engine could run the test — check that the model finished downloading. The setting is unchanged."
+                .to_string(),
+            None,
+        ),
+    };
+
+    if let Some(want) = select {
+        let mut c = controls.lock().unwrap();
+        c.gpu_synth = want;
+        c.save();
+    }
+
+    let gpu_text = speed_text(gpu);
+    let cpu_text = speed_text(cpu);
+    let _ = weak.upgrade_in_event_loop(move |ui| {
+        ui.set_bench_gpu_text(gpu_text.into());
+        ui.set_bench_cpu_text(cpu_text.into());
+        ui.set_bench_gpu_wins(gpu_wins);
+        ui.set_bench_cpu_wins(cpu_wins);
+        ui.set_bench_verdict(verdict.into());
+        ui.set_bench_running(false);
+        ui.set_bench_done(true);
+        // Mirror the applied engine onto the checkbox (two-way bound, so this moves the
+        // widget too). Setting the property doesn't re-fire `toggled`, so it won't
+        // bounce back through gpu-synth-changed and re-save.
+        if let Some(want) = select {
+            ui.set_gpu_synth(want);
+        }
+    });
 }
 
 /// The persisted settings (controls.json).
@@ -412,6 +572,70 @@ fn main() -> Result<(), slint::PlatformError> {
             let mut c = controls.lock().unwrap();
             c.gpu_synth = v;
             c.save();
+        });
+    }
+
+    // --- GPU-vs-CPU speed test (dialog) ---
+    // `running` outlives the dialog: Stop only takes effect between engines, so the
+    // worker can still be finishing a run after the user has dismissed the card.
+    let bench_running = Arc::new(AtomicBool::new(false));
+    let bench_cancel = Arc::new(AtomicBool::new(false));
+    {
+        let weak = ui.as_weak();
+        let running = bench_running.clone();
+        ui.on_bench_open(move || {
+            if let Some(ui) = weak.upgrade() {
+                let busy = running.load(Ordering::SeqCst);
+                ui.set_bench_running(busy); // reopening mid-test shows the progress face
+                ui.set_bench_done(false);
+                ui.set_bench_visible(true);
+            }
+        });
+    }
+    {
+        let weak = ui.as_weak();
+        ui.on_bench_close(move || {
+            if let Some(ui) = weak.upgrade() {
+                ui.set_bench_visible(false);
+            }
+        });
+    }
+    {
+        let weak = ui.as_weak();
+        let cancel = bench_cancel.clone();
+        ui.on_bench_stop(move || {
+            cancel.store(true, Ordering::SeqCst);
+            if let Some(ui) = weak.upgrade() {
+                // The dialog stays up until the engine mid-run releases the host, so
+                // say so rather than appearing to have ignored the click.
+                ui.set_bench_phase("Stopping after this engine finishes…".into());
+            }
+        });
+    }
+    {
+        let weak = ui.as_weak();
+        let controls = controls.clone();
+        let running = bench_running.clone();
+        let cancel = bench_cancel.clone();
+        ui.on_bench_start(move || {
+            if running.swap(true, Ordering::SeqCst) {
+                return; // a previous test is still finishing
+            }
+            cancel.store(false, Ordering::SeqCst);
+            if let Some(ui) = weak.upgrade() {
+                ui.set_bench_running(true);
+                ui.set_bench_done(false);
+                ui.set_bench_phase("Timing the graphics card — 1 of 2…".into());
+                ui.set_status(slint::SharedString::new());
+            }
+            let weak = weak.clone();
+            let controls = controls.clone();
+            let running = running.clone();
+            let cancel = cancel.clone();
+            std::thread::spawn(move || {
+                run_speed_test(weak, cancel, controls);
+                running.store(false, Ordering::SeqCst);
+            });
         });
     }
 
