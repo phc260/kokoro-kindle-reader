@@ -37,7 +37,7 @@ export interface PanelHandle {
 type Prefs = { folded: boolean; voice: string; rate: number };
 
 const PREFS_KEY = 'kwr.panel.prefs';
-const HOST_ID = 'kokoro-kindle-web-reader-panel';
+const HOST_ID = 'kokoro-kindle-cloud-reader-panel';
 
 function loadPrefs(): Prefs {
   try {
