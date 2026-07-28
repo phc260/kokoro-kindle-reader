@@ -19,7 +19,9 @@
 // It also reaches further into the extension. A content script has `fetch` and (outside a
 // Chrome service worker) its own AudioContext, so the HTTP path does not structurally require
 // the background-script-plus-offscreen-document apparatus that exists purely to work around
-// Chrome service worker limits. That is what makes this the viable route to Firefox.
+// Chrome service worker limits. That is what would make this the viable route to Firefox --
+// though the extension does not currently take it: its Firefox build has no narrator wired to
+// this endpoint. Chrome and Edge are what is actually supported.
 //
 // The cost is a PAIRING step, once per browser: without the browser vouching for the client,
 // the client has to present something. That something is the token below.
@@ -51,6 +53,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::time::Duration;
 
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
@@ -72,9 +75,20 @@ pub const DEFAULT_PORT: u16 = 8787;
 const DEFAULT_EXTENSION_ID: &str = "acbnkbiijeckelpogcboafgllhccbngm";
 
 /// Caps on a request's headers, so a peer cannot make the host buffer without bound before the
-/// token check has had a chance to run.
+/// token check has had a chance to run. Enforced by READING at most this much (see
+/// `read_line_capped`) — checking the length after the read is not a cap at all, since the
+/// allocation has already happened by then.
 const MAX_HEADERS: usize = 64;
 const MAX_HEADER_BYTES: usize = 8 * 1024;
+
+/// How long one connection gets to deliver a complete request head + body.
+///
+/// Everything above is a SIZE bound; this is the time bound, and both are needed. A peer that
+/// declares a body and then drips it a byte a minute never trips a size cap, it just parks the
+/// task forever — and these tasks share a Tokio runtime with the named-pipe server that feeds
+/// Kindle, so parked connections are not a self-contained problem. Generous enough that a real
+/// request can never hit it: the client is on loopback.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub struct Endpoint {
     pub port: u16,
@@ -100,10 +114,16 @@ impl Endpoint {
         if let Ok(txt) = std::fs::read_to_string(&path) {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&txt) {
                 if let Some(tok) = v.get("token").and_then(|t| t.as_str()) {
+                    // try_from, not `as`: `as u16` turns a hand-edited 65536 into 0, which binds
+                    // an ephemeral port while the pairing string still says `kwr_0_...` — the
+                    // extension then cannot connect and nothing says why. Out of range falls
+                    // back to the default, which at least matches what the extension probes.
                     let port = v
                         .get("port")
                         .and_then(|p| p.as_u64())
-                        .unwrap_or(DEFAULT_PORT as u64) as u16;
+                        .and_then(|p| u16::try_from(p).ok())
+                        .filter(|p| *p != 0)
+                        .unwrap_or(DEFAULT_PORT);
                     return Ok(Endpoint { port, token: tok.to_string(), allowed_origins });
                 }
             }
@@ -158,7 +178,12 @@ struct Request {
     body: Vec<u8>,
 }
 
-/// Length-independent comparison, so a timing signal cannot be used to recover the token.
+/// Constant-time in the token's CONTENTS: the fold always visits every byte, so no early exit
+/// leaks where two tokens first differ.
+///
+/// It is not constant-time in LENGTH — a wrong-length guess returns immediately. That is
+/// deliberate and harmless here: the token is always 64 hex characters (`random_token`), so the
+/// length carries no secret. Don't restate this as "length-independent"; it isn't.
 fn secret_eq(a: &str, b: &str) -> bool {
     if a.len() != b.len() {
         return false;
@@ -166,11 +191,29 @@ fn secret_eq(a: &str, b: &str) -> bool {
     a.bytes().zip(b.bytes()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
-async fn read_request(reader: &mut BufReader<TcpStream>) -> Option<Request> {
-    let mut line = String::new();
-    if reader.read_line(&mut line).await.ok()? == 0 {
+/// Read one CRLF-terminated line, reading AT MOST `MAX_HEADER_BYTES`.
+///
+/// The bound has to be on the read itself. Calling `read_line` and then checking `.len()`
+/// afterwards bounds nothing — an unterminated line grows the `String` until the peer stops or
+/// the host is out of memory, and the check never runs. `take` makes the reader itself refuse to
+/// supply more, so an over-long line comes back truncated (no trailing newline) and is rejected.
+///
+/// Returns None on EOF or a line that hit the cap.
+async fn read_line_capped(reader: &mut BufReader<TcpStream>, out: &mut String) -> Option<()> {
+    let n = reader
+        .take(MAX_HEADER_BYTES as u64)
+        .read_line(out)
+        .await
+        .ok()?;
+    if n == 0 || !out.ends_with('\n') {
         return None;
     }
+    Some(())
+}
+
+async fn read_request(reader: &mut BufReader<TcpStream>) -> Option<Request> {
+    let mut line = String::new();
+    read_line_capped(reader, &mut line).await?;
     let mut parts = line.split_whitespace();
     let method = parts.next()?.to_string();
     let path = parts.next()?.to_string();
@@ -178,12 +221,7 @@ async fn read_request(reader: &mut BufReader<TcpStream>) -> Option<Request> {
     let (mut origin, mut host, mut auth, mut len) = (None, None, None, 0usize);
     for _ in 0..MAX_HEADERS {
         let mut h = String::new();
-        if reader.read_line(&mut h).await.ok()? == 0 {
-            return None;
-        }
-        if h.len() > MAX_HEADER_BYTES {
-            return None;
-        }
+        read_line_capped(reader, &mut h).await?;
         let h = h.trim_end();
         if h.is_empty() {
             let mut body = vec![0u8; len.min(MAX_TEXT_BYTES as usize)];
@@ -274,7 +312,13 @@ pub async fn serve_loop(web: WebCtx) -> std::io::Result<()> {
 
 async fn serve_conn(stream: TcpStream, web: WebCtx) -> std::io::Result<()> {
     let mut stream = BufReader::new(stream);
-    let Some(req) = read_request(&mut stream).await else { return Ok(()) };
+    // Bound the whole request head + body in TIME as well as size. Dropping the connection on
+    // expiry is the right answer: nothing has authenticated yet, so there is no one to apologize
+    // to, and a parked task would otherwise sit on the runtime the pipe server shares.
+    let req = match tokio::time::timeout(REQUEST_TIMEOUT, read_request(&mut stream)).await {
+        Ok(Some(req)) => req,
+        _ => return Ok(()),
+    };
 
     let ep = &web.endpoint;
     let cors = cors_headers(req.origin.as_deref(), &ep.allowed_origins);

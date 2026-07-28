@@ -2,7 +2,7 @@
 //
 // The ONLY route to the backend. A native-messaging bridge was tried ahead of this and removed:
 // it needs per-browser registry registration, two manifest dialects and a browser restart, it
-// cannot serve Firefox at all, and every symptom arrives as the same one string. This needs no
+// could never serve Firefox at all, and every symptom arrives as the same one string. This needs no
 // registration, works in any browser, and can be reproduced with curl.
 //
 // What replaces the browser's gating lives in the host: 127.0.0.1 bind + origin allowlist +

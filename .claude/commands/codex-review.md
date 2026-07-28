@@ -153,6 +153,23 @@ Worth keeping honest, since it tells you how much verification each round needs.
   whether a behavior is deliberate — and it does not distinguish regressions from
   pre-existing conditions. Tell it which is which in the prompt.**
 
+- **2026-07-28, the browser path** (`gpt-5.6-terra`, `high`, 10 commits / 51 files since
+  `origin/main`): 7 findings, **6 real, 1 moot**. Its best catch was a *documentation* claim, not
+  a code bug — the repo asserted in five places that HTTP was "the only route to Firefox" while
+  `getNarrator()` returns `PortNarrator` whenever `chrome.runtime.connect` exists, and the
+  Firefox build ships no worker for it to reach. The capability was architecturally available
+  and entirely unbuilt. Also caught that the HTTP path never got the cancel-on-stop that the
+  deleted native-messaging bridge *did* have (documented in `CLAUDE.md`, so the gap was visible
+  in prose and invisible in code), and that `MAX_HEADER_BYTES` was checked **after** `read_line`
+  returned — a cap that bounds nothing. Verified both fixes with real sockets: an unterminated
+  4 MB request line now closes at 64 KB with 0 RSS delta, and a declared-but-undelivered body
+  hangs up at exactly 15.0 s. The moot one was against a native-messaging registrar script that
+  is not in the tree — it reviewed a path the prompt had pointed it at.
+  **Pattern holds and extends: excellent at "this claim has no implementation / this path has no
+  consumer".** Two of six were sub-severity nits it graded honestly (a length-leaking
+  `secret_eq` whose *comment* was the real defect; a `as u16` reachable only by hand-editing the
+  host's own file) — it did not inflate them.
+
 ## Notes
 
 - Requires `codex` >= 0.144 and a logged-in ChatGPT account. Older CLIs fail with a 400: the

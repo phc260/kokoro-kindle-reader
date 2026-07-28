@@ -30,6 +30,8 @@ let queued = 0;
  * Stop arrives with a stale epoch and is dropped instead of playing over the silence.
  */
 let epoch = 0;
+/** The `/synth` request in flight, so Stop can abandon it rather than wait it out. */
+let inflight: AbortController | null = null;
 
 function audio(): { ctx: AudioContext; gain: GainNode } {
   if (!ctx || !gain) {
@@ -48,6 +50,14 @@ function audio(): { ctx: AudioContext; gain: GainNode } {
  * `pushSamples` never gets a chance to work.
  */
 function startStream(): number {
+  // A previous generation still has sources scheduled means it was superseded WITHOUT a Stop -
+  // two `speak` messages overlapping. Tear it down rather than start on top of it. Two things go
+  // wrong otherwise: its audio keeps playing under the new stream (only `stopAudio` closes the
+  // context, so nothing else cancels a scheduled source), and its `onended` handlers fire
+  // against the reset counter and drive `queued` NEGATIVE - after which the drain poll's
+  // `queued === 0` never matches again and the new page never finishes.
+  if (queued > 0) stopAudio();
+
   const { ctx } = audio();
   queued = 0;
   // Start slightly ahead of "now" so the first frame is not already late.
@@ -76,12 +86,28 @@ function pushSamples(samples: Float32Array<ArrayBuffer>): void {
   cursor = at + buf.duration;
 
   queued++;
-  src.onended = () => queued--;
+  // Scoped to the generation that scheduled it. `startStream`'s teardown above is the primary
+  // guard; this is the one that holds if a source somehow outlives it, since a decrement from a
+  // dead generation would corrupt the live count and there is no way to notice that happening.
+  const mine = epoch;
+  src.onended = () => {
+    if (mine === epoch) queued--;
+  };
 }
 
 function stopAudio(): void {
   epoch++; // anything still being synthesized for the old epoch is now unwanted
   queued = 0;
+  // Abandon the request in flight, if any. Without this the fetch runs to completion and the
+  // offscreen document sits waiting for audio nobody will hear.
+  //
+  // It does NOT reclaim the host's synth worker: that chunk was already dispatched and will
+  // finish rendering. The exposure is bounded to one chunk (~4 sentences) because `speakAll`
+  // sends them one at a time and bails on a stale epoch, so it will not queue more. Kindle
+  // shares that one worker, so this is the difference between its next page waiting on one
+  // abandoned chunk and waiting on a whole abandoned page.
+  inflight?.abort();
+  inflight = null;
   // Dropping the context is the only reliable way to cancel already-scheduled sources.
   ctx?.close();
   ctx = null;
@@ -156,11 +182,27 @@ chrome.runtime.onMessage.addListener((msg: Message, _sender, sendResponse) => {
           return;
         }
 
-        const res = await fetch(`${msg.base}/synth`, {
-          method: 'POST',
-          headers: { authorization: `Bearer ${msg.token}`, 'content-type': 'application/json' },
-          body: JSON.stringify({ text: msg.text, voice: msg.voice, speed: msg.speed ?? 1 }),
-        });
+        const ac = new AbortController();
+        inflight = ac;
+        let res: Response;
+        try {
+          res = await fetch(`${msg.base}/synth`, {
+            method: 'POST',
+            headers: { authorization: `Bearer ${msg.token}`, 'content-type': 'application/json' },
+            body: JSON.stringify({ text: msg.text, voice: msg.voice, speed: msg.speed ?? 1 }),
+            signal: ac.signal,
+          });
+        } catch (e) {
+          // An abort is Stop working as intended, not a failure - report it as stale so the
+          // caller unwinds quietly instead of surfacing "AbortError" as a synthesis error.
+          if (ac.signal.aborted) {
+            sendResponse({ ok: true, stale: true });
+            return;
+          }
+          throw e;
+        } finally {
+          if (inflight === ac) inflight = null;
+        }
         if (!res.ok) throw new Error(`synth ${res.status}: ${await res.text()}`);
 
         const pcm = new Float32Array(await res.arrayBuffer());

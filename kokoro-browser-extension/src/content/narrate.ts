@@ -189,10 +189,30 @@ export function kokoroStatus(): Promise<unknown> {
   });
 }
 
+/**
+ * Is there a background worker to bridge to?
+ *
+ * `chrome.runtime.connect` is NOT the test. It exists in any content script, including the
+ * Firefox build — which ships no background script at all (see `build.ts`'s `skip` map; Firefox
+ * has neither `chrome.tts` nor `chrome.offscreen`). There `connect` succeeds, `onDisconnect`
+ * fires immediately, and every utterance rejects: not a fallback, a hard failure.
+ *
+ * The manifest is the honest signal, since it is the thing that actually decides whether a
+ * worker exists.
+ */
+function hasWorker(): boolean {
+  if (typeof chrome === 'undefined' || typeof chrome.runtime?.connect !== 'function') return false;
+  try {
+    return Boolean(chrome.runtime.getManifest().background);
+  } catch {
+    return false;
+  }
+}
+
 export function getNarrator(): Narrator {
-  // `chrome.runtime.connect` exists in a content script; `chrome.tts` does not, so reaching
-  // the platform engine always means the worker bridge.
-  narrator ??= typeof chrome !== 'undefined' && typeof chrome.runtime?.connect === 'function' ? new PortNarrator() : new WebSpeechNarrator();
+  // With a worker, everything goes through it — it owns both Kokoro and `chrome.tts`, neither of
+  // which a content script can reach. Without one, speechSynthesis is all there is.
+  narrator ??= hasWorker() ? new PortNarrator() : new WebSpeechNarrator();
   return narrator;
 }
 

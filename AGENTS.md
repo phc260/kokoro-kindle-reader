@@ -70,7 +70,7 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
   extension cannot open a named pipe. A native-messaging bridge was prototyped first and
   rejected. **Flag any change that adds one as a fallback**: two
   transports mean every failure is diagnosed twice, and HTTP is the one that needs no
-  per-browser registration, reaches Firefox, and can be curl'd.
+  per-browser registration, could reach Firefox, and can be curl'd.
   Flag any change that weakens the endpoint's four checks (127.0.0.1 bind, origin allowlist,
   constant-time token, `Host` check) or binds anything other than loopback. The extension
   manifest's `key` is load-bearing: it pins the id the origin allowlist matches.

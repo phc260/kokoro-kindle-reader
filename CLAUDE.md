@@ -21,7 +21,7 @@ artifacts Kindle loads in-process:
 ```
 Kindle.exe (x86) ──in-proc COM (LoadLibrary + vtable)──▶ KokoroSapi.dll (x86 shim)
                                                             │ named pipe \\.\pipe\KokoroSapiSynth
-Chrome/Edge/Firefox                                         │
+Chrome/Edge (Firefox: see below)                            │
   └─ kokoro-browser-extension (read.amazon.com)             │
        └── loopback HTTP 127.0.0.1:8787 ──▶ webserve.rs ────┤
                                                             ▼
@@ -51,7 +51,7 @@ Load the detail on demand:
 | SAPI engine: COM exports, interfaces, dev registration, smoke tests | [`kokoro-sapi/README.md`](kokoro-sapi/README.md) · [`kokoro-sapi-smoke/README.md`](kokoro-sapi-smoke/README.md) |
 | Pipe wire format (the single source of truth) | [`kokoro-protocol/README.md`](kokoro-protocol/README.md) + the crate itself |
 | Kindle 18632 hook + injector | [`kokoro-hook/README.md`](kokoro-hook/README.md) · [`kokoro-inject/README.md`](kokoro-inject/README.md) |
-| Browser path: the extension itself — setup, pairing, layout, Firefox split | [`kokoro-browser-extension/README.md`](kokoro-browser-extension/README.md) |
+| Browser path: the extension itself — setup, pairing, layout, browser support | [`kokoro-browser-extension/README.md`](kokoro-browser-extension/README.md) |
 | Browser path: the loopback HTTP endpoint and its four security checks | [`kokoro-host/src/webserve.rs`](kokoro-host/src/webserve.rs) |
 | Dep provisioning (ORT/Dawn DLLs, espeak-ng) | [`native-deps/README.md`](native-deps/README.md) |
 | GPU-vs-CPU synth timings + settled perf dead ends | [`kokoro-bench/README.md`](kokoro-bench/README.md) |
@@ -169,9 +169,12 @@ the panel and Read Aloud in Kindle (or `test-speak.ps1`).
     keys per browser, two manifest dialects, a gecko id and a hashed Chrome id, a BOM trap, a
     mandatory browser restart — and every one of those failures surfaces as the same one string
     ("Specified native messaging host not found"), which is exactly what happened here.
-  - HTTP is the only route to **Firefox**, whose extension build ships no background script (so
-    nothing there could call `connectNative` anyway) — a content script can `fetch` and, outside
-    a Chrome service worker, own its own `AudioContext`.
+  - HTTP is the only transport that *could* reach **Firefox** — a content script can `fetch`
+    and, outside a Chrome service worker, own its own `AudioContext`, whereas native messaging
+    needs a background script Firefox's build doesn't have. **But Firefox is NOT supported
+    today**: `getNarrator()` reaches the backend through that same absent worker, so the Firefox
+    build falls back to `speechSynthesis`. Chrome and Edge are what works. Don't write "the only
+    route to Firefox" as though it were shipped — it's an available shape, not a feature.
   - It is reproducible outside the browser: `curl` with the bearer token *is* the transport.
   - Cost of the choice: a **pairing step**, once per browser (tray → "Web pairing code"). That's
     the price of not having the browser vouch for the client, and it's a paste.

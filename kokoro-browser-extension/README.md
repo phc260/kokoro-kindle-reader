@@ -48,7 +48,7 @@ in the panel's status line. That is the intended degradation, not a failure.
 **Loopback HTTP, and nothing else.** A native-messaging bridge was built and tried ahead of it,
 then removed. Two transports meant every failure had to be diagnosed twice, and the half that
 broke was never the half you were looking at. HTTP needs no per-browser registration, is the
-only route that works in Firefox, and can be reproduced with `curl`:
+only transport that *could* reach Firefox (see below), and can be reproduced with `curl`:
 
 ```bash
 curl -H "Authorization: Bearer $TOKEN" -H "Origin: chrome-extension://$ID" http://127.0.0.1:8787/status
@@ -71,9 +71,20 @@ header) live in [`kokoro-host/src/webserve.rs`](../kokoro-host/src/webserve.rs).
 | `src/kokoro-http.ts` | The narrator, pairing storage, and the daemon probe |
 | `scripts/make-key.ts` | Regenerates the pinned extension identity. Read its header before running it |
 
-**Firefox ships no background script or offscreen document** (`build.ts`'s `skip` map): it has
-neither `chrome.tts` nor `chrome.offscreen`. A content script there can `fetch` and own its own
-`AudioContext` directly, which is exactly why the HTTP transport is the one that reaches it.
+## Browser support
+
+**Chrome and Edge are supported. Firefox is not — the build exists but has no Kokoro path.**
+
+Firefox ships no background script or offscreen document (`build.ts`'s `skip` map), because it
+has neither `chrome.tts` nor `chrome.offscreen`. But `getNarrator()` reaches the backend
+*through* that worker, so with no worker there is nothing wired to the HTTP endpoint. The
+Firefox build falls back to `speechSynthesis` and narrates in a platform voice.
+
+The architecture does not prevent Firefox — a content script there can `fetch` and own its own
+`AudioContext` directly, which is exactly the shape the HTTP transport allows and native
+messaging never could. Finishing it means a content-script narrator that reads the pairing from
+`chrome.storage` and posts to `/synth` itself. That is unbuilt and untested; don't describe
+Firefox as working until it is.
 
 ## Checks
 
