@@ -54,6 +54,43 @@ fn main() {
         let _ = std::fs::copy(runtime.join(dll), profile_dir.join(dll));
     }
     copy_dir(&espk_data, &profile_dir.join("espeak-ng-data"));
+
+    // Stage the x86 hook + injector into `resources\` beside the exe, mirroring the layout the
+    // installer produces.
+    //
+    // Without this a RELEASE build run from the dev tree cannot inject at all:
+    // `kindle_watch::resource_path` looks in `resources\`, and its dev-tree fallback is
+    // `#[cfg(debug_assertions)]`, so in release it falls through to a bare relative filename
+    // that never resolves. The failure is near-silent — Kindle 18632 ignores `DefaultTokenId`,
+    // so it simply narrates in the WinRT default voice, which reads as "Kokoro broke" rather
+    // than "the injector was not found".
+    //
+    // Best-effort: the x86 crates build to their own target dirs and may not have been built
+    // yet, and a missing injector must not fail the host's build (the pipe and synth are
+    // useful without it). Build them with:
+    //   cargo build --release --target i686-pc-windows-msvc --manifest-path kokoro-hook/Cargo.toml
+    //   cargo build --release --target i686-pc-windows-msvc --manifest-path kokoro-inject/Cargo.toml
+    let root = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap())
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let resources = profile_dir.join("resources");
+    for (crate_dir, file) in [
+        ("kokoro-inject", "kokoro-inject.exe"),
+        ("kokoro-hook", "kokoro_hook.dll"),
+    ] {
+        let src = root
+            .join(crate_dir)
+            .join("target")
+            .join("i686-pc-windows-msvc")
+            .join("release")
+            .join(file);
+        if src.exists() {
+            let _ = std::fs::create_dir_all(&resources);
+            let _ = std::fs::copy(&src, resources.join(file));
+        }
+        println!("cargo:rerun-if-changed={}", src.display());
+    }
 }
 
 /// Embed a Windows version resource (FileDescription/ProductName/FileVersion +
