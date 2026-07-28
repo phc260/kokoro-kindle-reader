@@ -16,8 +16,6 @@
 //!     those don't cross the wire. `gain` (the user's volume, fresh per chunk) rides
 //!     along in each frame and the engine applies it when converting to int16.
 //!
-//! - [`CMD_INFO`] (`'I'`): `-> [u16 jsonBytes][utf8 json]`.
-//!
 //! - [`CMD_BENCH`] (`'B'`): `[u8 engine] -> [u32 status][f32 audioSecs][f32 elapsedSecs]`.
 //!   Times one execution provider ([`BENCH_ENGINE_CPU`] / [`BENCH_ENGINE_GPU`]) on a fixed
 //!   sample the *host* owns, so the answer can't be skewed by what a client sends and the
@@ -45,8 +43,6 @@ pub const PIPE_NAME: &str = r"\\.\pipe\KokoroSapiSynth";
 
 /// Command byte: synthesize the whole utterance.
 pub const CMD_SYNTH: u8 = b'S';
-/// Command byte: return a small JSON info blob.
-pub const CMD_INFO: u8 = b'I';
 /// Command byte: report `[u32 msSinceLastAudio]` — how long since the host last wrote
 /// audio to any client (`u32::MAX` if never). See the module docs.
 pub const CMD_STATUS: u8 = b'T';

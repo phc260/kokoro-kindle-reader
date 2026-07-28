@@ -22,6 +22,7 @@ mod split_text;
 mod text;
 
 mod pipe;
+mod webserve;
 
 use tao::event::{Event, StartCause};
 use tao::event_loop::{ControlFlow, EventLoopBuilder};
@@ -57,8 +58,15 @@ fn espeak_data_dir() -> PathBuf {
         .join("espeak-ng-data")
 }
 
-/// Spawn the native synth worker + tokio pipe server on a background thread. The
-/// tray/event loop stays on the main thread.
+/// Spawn the native synth worker, the tokio pipe server, and the loopback HTTP endpoint,
+/// all on one background thread. The tray/event loop stays on the main thread.
+///
+/// Two client paths, ONE serialized synth worker: Kindle over the pipe, and the browser
+/// extension over this HTTP endpoint. They queue behind each other rather than contending,
+/// which is the only correct arrangement — espeak has global state and the ORT session is
+/// owned by that one worker.
+///
+/// HTTP is the browser's ONLY transport; see webserve.rs for why, and why not two.
 fn start_pipe_server() {
     let app_data = app_data_dir();
     let base = app_data.join(MODEL_ID);
@@ -70,14 +78,26 @@ fn start_pipe_server() {
         eprintln!("[host] WARNING: model.onnx not found — synthesis fails until the model is downloaded.");
     }
 
-    let native = native_synth::NativeSynth::spawn(base, espeak);
+    let native = native_synth::NativeSynth::spawn(base.clone(), espeak);
     let ctx = pipe::Ctx {
-        app_data,
+        app_data: app_data.clone(),
+        // Where the voices/*.bin live, for the HTTP endpoint's /status voice list.
+        model_base: base,
         native,
         // Shared "last audio written" clock the pipe answers CMD_STATUS from.
         last_audio_ms: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
         // Shared across every client connection, so CMD_BENCH stays one-at-a-time.
         bench_busy: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    };
+
+    // The web endpoint is best-effort: a failure to create or bind it must not take the pipe
+    // down with it, because Kindle depends on the pipe and not on this.
+    let web = match webserve::Endpoint::load_or_create(&app_data) {
+        Ok(ep) => Some(webserve::WebCtx { ctx: ctx.clone(), endpoint: std::sync::Arc::new(ep) }),
+        Err(e) => {
+            eprintln!("[host] web endpoint disabled: {e}");
+            None
+        }
     };
 
     std::thread::Builder::new()
@@ -88,6 +108,15 @@ fn start_pipe_server() {
                 .build()
                 .expect("build tokio runtime");
             rt.block_on(async move {
+                if let Some(web) = web {
+                    // A taken port (a second host instance, or the sibling kokoro-web-host)
+                    // ends this task alone; the pipe below keeps serving Kindle.
+                    tokio::spawn(async move {
+                        if let Err(e) = webserve::serve_loop(web).await {
+                            eprintln!("[host] web endpoint stopped: {e}");
+                        }
+                    });
+                }
                 if let Err(e) = pipe::serve_loop(ctx).await {
                     eprintln!("[host] pipe server stopped: {e}");
                 }
@@ -167,12 +196,19 @@ fn main() {
 
     let menu = Menu::new();
     let settings_i = MenuItem::new("Settings…", true, None);
+    // The browser extension needs a port + token pasted into its options page once per browser.
+    // A release host is a windows-subsystem exe with no console to print them to, so the only
+    // way out is the file — this opens it. Not optional plumbing: without this menu item the
+    // transport is unusable, because there is nowhere else the token is visible.
+    let pairing_i = MenuItem::new("Web pairing code…", true, None);
     let quit_i = MenuItem::new("Quit", true, None);
     menu.append(&settings_i).expect("append settings");
+    menu.append(&pairing_i).expect("append pairing");
     menu.append(&tray_icon::menu::PredefinedMenuItem::separator())
         .expect("append separator");
     menu.append(&quit_i).expect("append quit");
     let settings_id = settings_i.id().clone();
+    let pairing_id = pairing_i.id().clone();
     let quit_id = quit_i.id().clone();
     // Track the panel child so a second Settings click doesn't pile up windows.
     let mut panel_child: Option<std::process::Child> = None;
@@ -220,6 +256,14 @@ fn main() {
                                 eprintln!("[host] failed to launch panel {}: {e}", path.display())
                             }
                         }
+                    }
+                } else if menu_event.id == pairing_id {
+                    // Hand it to the shell's default handler for .json rather than assuming an
+                    // editor is installed. `explorer` also avoids the console window a `cmd /c
+                    // start` would flash from a windows-subsystem process.
+                    let path = webserve::endpoint_path(&app_data_dir());
+                    if let Err(e) = std::process::Command::new("explorer").arg(&path).spawn() {
+                        eprintln!("[host] failed to open {}: {e}", path.display());
                     }
                 } else if menu_event.id == quit_id {
                     // The pipe thread is a daemon; exiting the process stops it and

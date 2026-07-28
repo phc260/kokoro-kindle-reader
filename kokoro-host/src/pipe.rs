@@ -1,7 +1,11 @@
 // Named-pipe server bridging the SAPI engine (running inside Kindle) to the native
 // Dawn WebGPU synth. The x86 KokoroSapi.dll connects to \\.\pipe\KokoroSapiSynth
-// and speaks the kokoro-protocol wire format ('S' = synth whole utterance, 'I' =
-// info).
+// and speaks the kokoro-protocol wire format ('S' = synth whole utterance); the
+// settings panel connects to the same pipe for 'T' (status) and 'B' (bench).
+//
+// The browser extension does NOT come through here — it goes over webserve.rs, which
+// calls the synth worker directly. So every client of this pipe is a real-time sink,
+// which is why the pacing below is unconditional.
 //
 // This end owns all chunking: a single 'S' request carries the whole utterance; we
 // split it into sentence chunks (crate::split_text), synthesize each on the
@@ -10,7 +14,7 @@
 // a STREAM_END / SYNTH_ERROR marker), paced to ~real time. Narrator/speed/gain/chunk
 // come from controls.json in the app-data dir (no webview round-trips).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -23,8 +27,7 @@ use crate::split_text::split_text;
 // The named-pipe wire format is shared with the SAPI engine (one source of truth).
 use kokoro_protocol::{
     BENCH_BUSY, BENCH_ENGINE_CPU, BENCH_ENGINE_GPU, BENCH_FAILED, BENCH_OK, CHUNK_INFO,
-    CMD_BENCH, CMD_INFO, CMD_STATUS, CMD_SYNTH, MAX_TEXT_BYTES, PIPE_NAME, STREAM_END,
-    SYNTH_ERROR,
+    CMD_BENCH, CMD_STATUS, CMD_SYNTH, MAX_TEXT_BYTES, PIPE_NAME, STREAM_END, SYNTH_ERROR,
 };
 
 // Default send-pacing lead (ms): keep at most this much audio ahead of real time so
@@ -44,6 +47,10 @@ const SAMPLE_RATE: f64 = kokoro_protocol::SAMPLE_RATE as f64;
 #[derive(Clone)]
 pub struct Ctx {
     pub app_data: PathBuf,
+    /// The model dir (`<app_data>/<MODEL_ID>`), used to enumerate the narrators actually
+    /// downloaded for `webserve`'s `/status` voice list. Kept beside `app_data` rather than
+    /// re-derived here so `MODEL_ID` stays owned by one place (main.rs).
+    pub model_base: PathBuf,
     pub native: NativeSynth,
     /// Wall-clock ms (Unix epoch) when the host last wrote an audio sub-frame to any
     /// client; 0 until the first synth. Shared across all client tasks (the struct is
@@ -72,7 +79,7 @@ impl Drop for BenchGuard {
 /// Wall-clock milliseconds since the Unix epoch (0 if the clock is before it). Used
 /// for `last_audio_ms`: both the stamp and the `CMD_STATUS` elapsed math run in this
 /// one process, so it needn't be monotonic — a ~2 s debounce tolerates minor skew.
-fn now_ms() -> u64 {
+pub fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
@@ -89,6 +96,26 @@ fn stream_config(ctx: &Ctx) -> (usize, f64, usize) {
     let lead_secs = DEFAULT_LEAD_MS as f64 / 1000.0;
     let subframe_samples = (DEFAULT_SUBFRAME_MS as f64 * SAMPLE_RATE / 1000.0) as usize;
     (sentences, lead_secs, subframe_samples)
+}
+
+/// Narrators actually present on disk (`<model_base>/voices/<id>.bin`), sorted. Enumerated
+/// rather than read from model-manifest.json so the list is what can really be synthesized
+/// right now — a half-downloaded model advertises only what it has, and a client's picker
+/// never offers a voice whose .bin is missing.
+pub fn available_voices(model_base: &Path) -> Vec<String> {
+    let mut v: Vec<String> = std::fs::read_dir(model_base.join("voices"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .strip_suffix(".bin")
+                .map(str::to_string)
+        })
+        .collect();
+    v.sort();
+    v
 }
 
 /// Current gain from controls.json ("gain"), read fresh per sub-frame so a volume
@@ -147,11 +174,6 @@ async fn serve_client(mut pipe: NamedPipeServer, ctx: Ctx) -> std::io::Result<()
         let mut cmd = [0u8; 1];
         pipe.read_exact(&mut cmd).await?;
         match cmd[0] {
-            CMD_INFO => {
-                let json = br#"{"provider":"WebGPU(native)","voice":""}"#;
-                pipe.write_all(&(json.len() as u16).to_le_bytes()).await?;
-                pipe.write_all(json).await?;
-            }
             CMD_STATUS => {
                 // Milliseconds since we last wrote audio to any client (saturating to
                 // u32::MAX, which also covers "never synthesized" where last == 0).

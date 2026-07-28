@@ -23,6 +23,10 @@ kokoro-protocol = { path = "../kokoro-protocol" }
 tokio = { version = "1", features = ["net", "io-util", "rt", "rt-multi-thread", "sync", "time", "macros"] }
 # controls.json + tokenizer.json parsing (native_synth.rs).
 serde_json = "1"
+# OS CSPRNG for the web endpoint's bearer token (webserve.rs). That token is the only thing
+# gating the synth endpoint against other local software, so it must never come from a
+# clock-seeded PRNG.
+getrandom = "0.3"
 # Kokoro ONNX inference on the Dawn WebGPU EP. load-dynamic loads the staged
 # onnxruntime.dll at runtime (the WebGPU EP register() is enabled by it); an explicit
 # api-NN feature is required under default-features=false (the 1.27 wheel is API 27, so
