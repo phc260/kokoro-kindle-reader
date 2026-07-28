@@ -57,6 +57,18 @@ function savePrefs(p: Prefs): void {
   }
 }
 
+/**
+ * The speed readout: a percentage of normal, not a multiplier.
+ *
+ * The slider spans 0.5-2.0 in 0.1 steps, so this reads 50% to 200% in 10-point moves. Rounded
+ * because a 0.1 step lands on values like 1.2000000000000002, which would otherwise show as
+ * 120.00000000000003%.
+ *
+ * The wire value is untouched - `rate` stays a multiplier all the way to the model, which is
+ * what it is. Only the label changes.
+ */
+const fmtRate = (rate: number): string => `${Math.round(rate * 100)}%`;
+
 const CSS = `
 :host { all: initial; }
 .wrap {
@@ -67,7 +79,11 @@ const CSS = `
   width: 260px; overflow: hidden;
   transition: width .15s ease;
 }
-.wrap.folded { width: 152px; }
+/* Folded, the panel is just the status dot + the title, so its width is set by the title. 180px
+   fits "Kokoro Kindle Reader" (118px at 600 12px, measured) plus the dot, the chevron, the two
+   gaps and the padding. Shrink this and the name clips - the point of the folded state is that
+   you can still tell what the thing is. */
+.wrap.folded { width: 180px; }
 header {
   display: flex; align-items: center; gap: 8px;
   padding: 8px 10px; cursor: pointer; user-select: none;
@@ -78,7 +94,15 @@ header {
 .dot.busy { background: #fb4; animation: pulse 1s infinite; }
 .dot.error { background: #f55; }
 @keyframes pulse { 50% { opacity: .35; } }
-h1 { font-size: 12px; font-weight: 600; margin: 0; flex: 1; letter-spacing: .02em; white-space: nowrap; }
+/* NB: this whole block is a JS template literal - no backticks in these comments.
+   system-ui is a different typeface per OS - Segoe UI here, San Francisco on macOS, whatever the
+   desktop set on Linux - so the title's width is not the same everywhere and the 180px above is
+   calibrated on Windows. Ellipsis rather than nowrap alone, so a wider face degrades to
+   "Kokoro Kindle Rea..." instead of being silently cut mid-glyph by the wrapper's overflow. */
+h1 {
+  font-size: 12px; font-weight: 600; margin: 0; flex: 1; letter-spacing: .02em;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 .chev { transition: transform .15s ease; opacity: .6; flex: none; }
 .wrap.folded .chev { transform: rotate(180deg); }
 .body { padding: 10px; display: grid; gap: 9px; }
@@ -147,7 +171,7 @@ const HTML = `
 <div class="wrap" part="wrap">
   <header title="Click to fold">
     <span class="dot"></span>
-    <h1>Kokoro Reader</h1>
+    <h1>Kokoro Kindle Reader</h1>
     <svg class="chev" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
       <path d="M1 3.5 5 7 9 3.5" fill="none" stroke="currentColor" stroke-width="1.6"/>
     </svg>
@@ -183,7 +207,7 @@ const HTML = `
       <select data-el="voice"><option value="">Loading…</option></select>
     </label>
     <label>
-      <span class="lbl">Speed <b data-el="rateval">1.0x</b></span>
+      <span class="lbl">Speed <b data-el="rateval">100%</b></span>
       <input type="range" data-el="rate" min="0.5" max="2" step="0.1" value="1">
     </label>
     <div class="status" data-el="status"></div>
@@ -330,10 +354,10 @@ export function mountPanel(actions: PanelActions): PanelHandle {
   });
 
   rateEl.value = String(prefs.rate);
-  rateVal.textContent = `${prefs.rate.toFixed(1)}x`;
+  rateVal.textContent = fmtRate(prefs.rate);
   rateEl.addEventListener('input', () => {
     prefs.rate = Number(rateEl.value);
-    rateVal.textContent = `${prefs.rate.toFixed(1)}x`;
+    rateVal.textContent = fmtRate(prefs.rate);
     savePrefs(prefs);
   });
 
