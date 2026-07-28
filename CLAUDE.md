@@ -21,6 +21,9 @@ artifacts Kindle loads in-process:
 ```
 Kindle.exe (x86) ──in-proc COM (LoadLibrary + vtable)──▶ KokoroSapi.dll (x86 shim)
                                                             │ named pipe \\.\pipe\KokoroSapiSynth
+Chrome/Edge/Firefox                                         │
+  └─ kokoro-browser-extension (read.amazon.com)             │
+       └── loopback HTTP 127.0.0.1:8787 ──▶ webserve.rs ────┤
                                                             ▼
       kokoro-host.exe (x64, tray): pipe.rs ──▶ native_synth.rs (Rust synth:
                                        ▲          text.rs + espeak.rs + ort/Dawn WebGPU EP)
@@ -48,6 +51,8 @@ Load the detail on demand:
 | SAPI engine: COM exports, interfaces, dev registration, smoke tests | [`kokoro-sapi/README.md`](kokoro-sapi/README.md) · [`kokoro-sapi-smoke/README.md`](kokoro-sapi-smoke/README.md) |
 | Pipe wire format (the single source of truth) | [`kokoro-protocol/README.md`](kokoro-protocol/README.md) + the crate itself |
 | Kindle 18632 hook + injector | [`kokoro-hook/README.md`](kokoro-hook/README.md) · [`kokoro-inject/README.md`](kokoro-inject/README.md) |
+| Browser path: the extension itself — setup, pairing, layout, Firefox split | [`kokoro-browser-extension/README.md`](kokoro-browser-extension/README.md) |
+| Browser path: the loopback HTTP endpoint and its four security checks | [`kokoro-host/src/webserve.rs`](kokoro-host/src/webserve.rs) |
 | Dep provisioning (ORT/Dawn DLLs, espeak-ng) | [`native-deps/README.md`](native-deps/README.md) |
 | GPU-vs-CPU synth timings + settled perf dead ends | [`kokoro-bench/README.md`](kokoro-bench/README.md) |
 | User-facing install/usage | [`README.md`](README.md) |
@@ -66,6 +71,14 @@ cargo run --manifest-path kokoro-panel\Cargo.toml    # settings panel (or via th
 
 # SAPI engine — x86 Rust cdylib, no deps (thin COM shim + pipe client).
 cargo build --release --target i686-pc-windows-msvc --manifest-path kokoro-sapi\Cargo.toml
+
+# Browser path. The extension lives in kokoro-browser-extension/ (bun) and reaches the host
+# over loopback HTTP only - nothing to register, but it must be PAIRED once per browser
+# (tray -> "Web pairing code"). The endpoint is webserve.rs, inside the host; there is no
+# separate exe to build.
+bun run build.ts --stage         # from kokoro-browser-extension/; --stage copies off U:\ for Chrome
+bun test test/                   # manifest/permission drift guards
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8787/status   # the whole transport, reproducible
 
 # Kindle 18632 hook + injector — both x86 (Kindle is 32-bit; the host spawns the injector).
 cargo build --release --target i686-pc-windows-msvc --manifest-path kokoro-hook\Cargo.toml
@@ -144,6 +157,49 @@ the panel and Read Aloud in Kindle (or `test-speak.ps1`).
 - The pacing lead (500 ms) / sub-frame size (250 ms) are **not** user-tunable; fixed
   constants in `pipe.rs` (`DEFAULT_LEAD_MS` / `DEFAULT_SUBFRAME_MS`).
 
+### The browser path (Kindle Cloud Reader)
+- **A browser extension cannot open a named pipe.** MV3 offers `fetch`/`WebSocket`/`chrome.*`,
+  none of which address `\\.\pipe\...`; `chrome.sockets.*` was Chrome Apps only and is gone. So
+  the browser needs a transport of its own.
+- **There is exactly ONE browser transport: loopback HTTP** (`webserve.rs`, port 8787). A
+  native-messaging bridge was prototyped first and rejected before any of it shipped. Don't add
+  one as a fallback: **two transports mean every failure has to be diagnosed twice**, and the
+  half that broke is never the half you're looking at.
+  - HTTP needs **no registration**. Native messaging *is* per-browser configuration: registry
+    keys per browser, two manifest dialects, a gecko id and a hashed Chrome id, a BOM trap, a
+    mandatory browser restart — and every one of those failures surfaces as the same one string
+    ("Specified native messaging host not found"), which is exactly what happened here.
+  - HTTP is the only route to **Firefox**, whose extension build ships no background script (so
+    nothing there could call `connectNative` anyway) — a content script can `fetch` and, outside
+    a Chrome service worker, own its own `AudioContext`.
+  - It is reproducible outside the browser: `curl` with the bearer token *is* the transport.
+  - Cost of the choice: a **pairing step**, once per browser (tray → "Web pairing code"). That's
+    the price of not having the browser vouch for the client, and it's a paste.
+- **The HTTP endpoint's four checks are not optional**: 127.0.0.1 bind, origin allowlist,
+  constant-time bearer token, `Host` check (DNS-rebinding guard). No TLS — 127.0.0.1 is already
+  a trustworthy origin and a self-signed cert defends against nobody. The security delta versus
+  the pipe is narrower than "socket vs no socket" suggests: `PIPE_NAME` is already openable by
+  any process running as this user (that's why `bench_busy` and `MAX_FRAME_SAMPLES` exist), so
+  the local-process threat was already accepted. What a port uniquely adds is reachability from
+  **web pages** — which is what the origin allowlist and bearer token address.
+- **The extension's manifest `key` is load-bearing** even with no native messaging: an unpacked
+  extension's id derives from its path, and the endpoint allowlists that id as an **origin**.
+  Unpinned, the id changes whenever the folder moves and every request 403s.
+- **The browser never gets the paced path**: `webserve.rs` calls `native_synth::synth` directly.
+  The paced stream is correct for Kindle (the SAPI engine plays what it is handed) and wrong for
+  a client that schedules onto its own AudioContext cursor and *depends* on synthesis outrunning
+  playback to build a lead — pacing it clamps it to ~1.0x and puts mid-page silence back. Same
+  reason `CMD_BENCH` exists: the paced path is the wrong tool whenever the caller isn't a
+  real-time sink.
+- **The browser shares the one serialized synth worker with Kindle**, so the two queue behind
+  each other rather than contending — the only correct arrangement, since espeak has global
+  state and the ORT session is owned by that worker.
+- **Every client of the *pipe* is a real-time sink**, and that's what keeps its command set
+  small (`'S'`/`'T'`/`'B'`). The browser isn't one and doesn't use the pipe. `CMD_SYNTH_RAW`
+  (`'R'`, unpaced) and `CMD_INFO` (`'I'`) existed only for the bridge and were removed with it —
+  if a non-real-time pipe client ever appears, the three differences it needs (unpaced, no gain,
+  voice on the wire) are in that commit.
+
 ### Bitness, registration, file placement
 - **The engine must stay x86** — Kindle is a 32-bit process and loads the COM DLL
   in-process by registry path. It **cannot** be merged into the x64 host.
@@ -192,7 +248,9 @@ the panel and Read Aloud in Kindle (or `test-speak.ps1`).
   pure/self-contained (no `kokoro-host`-specific state) because `kokoro-bench` reuses them
   via `#[path]` includes (`kokoro-host` is bin-only, no lib target).
 - `model-manifest.json` + `icons/` are at the repo root (the panel embeds the manifest; the
-  exes + installer use the icons). `icons/*` are in Git LFS.
+  exes, the installer **and the browser extension** use the icons — `build.ts` copies
+  `32x32.png`/`128x128.png` into each `dist/<target>/icons/` rather than keeping a second copy,
+  so the toolbar and the tray can't show different art). `icons/*` are in Git LFS.
 - The pipe wire constants live in the `kokoro-protocol` crate — a `path` dep of **both**
   `kokoro-host` and `kokoro-sapi`, so the two ends can't drift. Neither may hardcode them.
 - The Kindle-18632 hook + injector are standalone root crates (`kokoro-hook/`,

@@ -17,7 +17,7 @@ commit, tag, or push (those are deliberate, separate steps).
 2. **Read the current version** from `packaging/installer.nsi` (the `!define VERSION`
    line) so you can report the old → new transition and match the exact old strings.
 
-3. **Edit these 10 locations** (the version was previously confirmed to live in exactly
+3. **Edit these 13 locations** (the version was previously confirmed to live in exactly
    these spots):
 
    Three-part `version = "X.Y.Z"` — the `[package]` `version` (line ~3) of every Rust
@@ -37,6 +37,11 @@ commit, tag, or push (those are deliberate, separate steps).
    - `VIProductVersion "X.Y.Z.0"`  (Windows version resources are four-part; the `.0` is
      the unused revision field — keep it)
 
+   The browser extension, which ships its version to the browser's own UI:
+   - `kokoro-browser-extension/manifest.chrome.json` (`"version"`)
+   - `kokoro-browser-extension/manifest.firefox.json` (`"version"`)
+   - `kokoro-browser-extension/package.json` (`"version"`)
+
    Match each old string exactly so the edits are unambiguous.
 
 4. **Do NOT touch** these — they pick the version up automatically:
@@ -45,9 +50,15 @@ commit, tag, or push (those are deliberate, separate steps).
      Cargo.toml bump flows through with no edit here.
    - `installer.nsi`'s `VIAddVersionKey "FileVersion" "${VERSION}"` — derived from the define.
    - all `Cargo.lock` files — the `version` entries refresh on the next `cargo build`.
+   - `kokoro-browser-extension/dist/**` and the staged copy — build output; `build.ts`
+     copies the manifest through verbatim, so they update on the next `bun run build.ts`.
+   - `kokoro-browser-extension/manifest.*.json`'s `key` and
+     `browser_specific_settings.gecko.id` — those are **identity**, not version. Changing
+     them changes the extension id, and `kokoro-host`'s HTTP endpoint allowlists that id as an
+     origin, so every request would 403.
 
 5. **Verify.** Grep the repo for both the old and new version and confirm: no stale
    occurrences of the old version remain outside `Cargo.lock` and `native-deps/` dep
-   folders; and all 10 edited locations now show the new version. Report a short table of
+   folders; and all 13 edited locations now show the new version. Report a short table of
    the files changed (old → new) and remind me that building the installer, committing,
    and tagging are separate steps I run when ready.

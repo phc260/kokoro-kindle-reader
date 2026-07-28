@@ -61,10 +61,19 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
   that thread is a bug.
 - **The wire format lives in `kokoro-protocol`**, a path dep of every consumer. Neither
   `kokoro-host`, `kokoro-sapi` nor `kokoro-panel` may hardcode the constants inline.
-- **Synthesis timing must not go through `CMD_SYNTH`.** That stream is paced to ~real time,
-  so timing it measures the pacing — every engine faster than realtime reads ~1.0x. The
-  panel's speed test uses `CMD_BENCH` (unpaced, fixed host-owned sample). Flag any timing
-  code that reaches for the synth path instead.
+- **`CMD_SYNTH` is for real-time sinks only.** That stream is paced to ~real time, which is
+  right for Kindle (the SAPI engine plays what it's handed) and wrong for everyone else.
+  Timing it measures the pacing — every engine faster than realtime reads ~1.0x — so the
+  panel's speed test uses `CMD_BENCH`, and the browser path bypasses the pipe entirely.
+  Flag any new consumer that reaches for the paced path instead.
+- **The browser has exactly ONE transport: loopback HTTP** (`webserve.rs`, port 8787). An
+  extension cannot open a named pipe. A native-messaging bridge was prototyped first and
+  rejected. **Flag any change that adds one as a fallback**: two
+  transports mean every failure is diagnosed twice, and HTTP is the one that needs no
+  per-browser registration, reaches Firefox, and can be curl'd.
+  Flag any change that weakens the endpoint's four checks (127.0.0.1 bind, origin allowlist,
+  constant-time token, `Host` check) or binds anything other than loopback. The extension
+  manifest's `key` is load-bearing: it pins the id the origin allowlist matches.
 - **Kindle 18632's narrator is event-driven.** The SAPI engine must emit word/sentence/
   bookmark events at true audio offsets, or Kindle speaks one sentence per page and stops.
 - **The bundle is GPLv3 even though the source is MIT.** The app links espeak-ng
