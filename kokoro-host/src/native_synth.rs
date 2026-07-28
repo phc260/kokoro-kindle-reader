@@ -137,6 +137,27 @@ pub struct Bench {
     pub elapsed_secs: f32,
 }
 
+/// Permissive bounds on the model's `speed` input. Wider than any UI offers (the panel's slider
+/// is well inside this), because the job here is to exclude the impossible, not to enforce taste.
+const MIN_SPEED: f32 = 0.1;
+const MAX_SPEED: f32 = 5.0;
+
+/// Clamp a caller-supplied speed to something the model can actually use.
+///
+/// `speed` is a model INPUT tensor, and it arrives from three places that are all outside this
+/// process's control: a raw `f32` off the pipe (`CMD_SYNTH`), a JSON number over the HTTP
+/// endpoint, and `controls.json`. None of them validated it, so a NaN, an infinity (`1e300 as
+/// f32` is `inf`), or a zero went straight into the graph — and anything on this machine can
+/// open the pipe. Sanitizing at this one choke point rather than at each call site means the
+/// next transport can't reintroduce the hole.
+fn sanitize_speed(speed: f32) -> f32 {
+    if speed.is_finite() {
+        speed.clamp(MIN_SPEED, MAX_SPEED)
+    } else {
+        1.0
+    }
+}
+
 /// Handle to the serialized native synth worker thread. Cloneable Sender inside.
 #[derive(Clone)]
 pub struct NativeSynth {
@@ -162,6 +183,7 @@ impl NativeSynth {
     /// (24 kHz mono) — same shape the webview `synth_result` used, so pipe_server's
     /// framing is unchanged. None on init/synth failure (pipe host emits SYNTH_ERROR).
     pub async fn synth(&self, text: String, speed: f32, voice: String, engine: Engine) -> Option<Vec<u8>> {
+        let speed = sanitize_speed(speed);
         let (reply, rx) = oneshot::channel();
         if self.tx.send(Job::Synth(Req { text, speed, voice, engine, reply })).is_err() {
             return None; // worker thread gone
