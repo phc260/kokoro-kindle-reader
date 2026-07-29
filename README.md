@@ -6,12 +6,13 @@
 
 **Give Kindle for PC a natural voice — local, offline Kokoro-82M text-to-speech, running on your own GPU.**
 
-[![Platform: Windows](https://img.shields.io/badge/platform-Windows-0078D6?logo=windows&logoColor=white)](#install)
-[![TTS: Kokoro-82M](https://img.shields.io/badge/TTS-Kokoro--82M-ff69b4)](https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX)
-[![100% Offline](https://img.shields.io/badge/100%25-offline-2ea44f)](#)
-[![Source: MIT](https://img.shields.io/badge/source-MIT-blue.svg)](LICENSE)
-[![Binaries: GPLv3](https://img.shields.io/badge/binaries-GPLv3-blue.svg)](THIRD_PARTY_NOTICES.md)
-[![Latest release](https://img.shields.io/github/v/release/phc260/kokoro-kindle-reader?include_prereleases&label=release)](https://github.com/phc260/kokoro-kindle-reader/releases)
+[![Platform: Windows](https://img.shields.io/badge/platform-Windows-1976D2?logo=windows&logoColor=white)](#install)
+[![TTS: Kokoro-82M](https://img.shields.io/badge/TTS-Kokoro--82M-E91E63)](https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX)
+[![Language: English](https://img.shields.io/badge/language-English-673AB7)](#)
+[![100% Offline](https://img.shields.io/badge/100%25-offline-43A047)](#)
+[![Source: MIT](https://img.shields.io/badge/source-MIT-009688)](LICENSE)
+[![Binaries: GPLv3](https://img.shields.io/badge/binaries-GPLv3-00695C)](THIRD_PARTY_NOTICES.md)
+[![Latest release](https://img.shields.io/github/v/release/phc260/kokoro-kindle-reader?include_prereleases&label=release&color=F4511E)](https://github.com/phc260/kokoro-kindle-reader/releases)
 
 </div>
 
