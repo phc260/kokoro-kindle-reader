@@ -49,6 +49,43 @@ Two rules keep the seam from being audible or visible:
 
 `kwr.readPage()` still recognizes the whole page in one go; it has nothing to overlap with.
 
+## Turning the page
+
+Play reads on: when a page finishes, `turnPage()` advances the reader and the next page is
+captured, OCR'd and spoken.
+
+**One action does it: `ArrowRight`.** That is the reader's own shortcut — its pages turn on the
+left and right arrows — and it works with the browser window minimized, which nothing that depends
+on hit-testing a point can promise. It is dispatched on the page image, so a `composed` event
+bubbles out through every shadow root to whatever is listening, with `keyCode` set by hand
+(handlers still branch on it and the constructor leaves it at 0).
+
+Clicking a next-page control found by accessible name, and tapping the forward half of the page,
+both worked in the fixture and are gone. They could only ever have run once the key had already
+failed — which is exactly when firing more untested actions at the reader is least wise — and a
+second path that runs only in the case you cannot reproduce is the trap this project already
+refuses for [transports](#the-transport).
+
+**A turn is claimed only on evidence: a new `blob:` URL at an unchanged layout.** The keypress
+having gone out is not a turn. Nor is a new URL on its own: the reader renders to the viewport, so
+a resize or a zoom gives the *same* page a fresh URL with the text reflowed — the thing
+`followReflow` exists for — and counting one as a turn would have the loop OCR and narrate the page
+it just read. A render is rejected only on positive proof that the layout changed under it: the
+viewport or the rendered size actually differing.
+
+Those two do not catch everything, and the code says which case they miss: a **font-size** change
+reflows the page at the same viewport and the same rendered size, so it looks exactly like a turn.
+Nothing cheap can tell those apart — the only difference is the text, and reading that is an OCR
+pass. What keeps it from costing a page is that an accepted turn is handed back only once the page
+**holds still**: if the turn we asked for lands behind a re-render that was mistaken for it, the
+caller still captures the render that stayed, instead of narrating a page that is already gone.
+
+Nothing advancing is what the **last page of the book** looks like — and, indistinguishably, what a
+reader that has stopped answering the arrow keys looks like. Both get the same treatment: the loop
+says so and waits for a page turn by hand, which then carries on from wherever the reader actually
+is, and which is also what absorbs a turn that was merely slow. That fallback is a path the reader
+uses, not a spare one kept warm.
+
 ## Where the word boundaries come from
 
 The highlight needs to know *when* each word is said, and the two kinds of engine answer that

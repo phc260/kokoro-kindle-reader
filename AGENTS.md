@@ -81,6 +81,24 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
   queue is not closed (finish, Stop, superseded, disconnect - a missed close parks the worker
   forever), that cuts a part anywhere but a sentence end, or that infers a part's `base` from a
   running total of part lengths instead of the producer stating it.
+- **The page is turned by ONE action, `ArrowRight`, and a turn is claimed only on EVIDENCE - a new
+  `blob:` URL at an unchanged layout.** `turnPage` dispatches the key on the page image; a
+  next-page control found by accessible name and a tap on the forward half of the page were both
+  built and deliberately removed - they could only ever run after the key had already failed, and a
+  fallback that runs only in the case you cannot reproduce is the second-transport trap. A resize
+  or zoom re-renders the SAME page under a fresh URL, so a render is rejected only on positive
+  proof of a re-layout (viewport or rendered size differing). Those two do not catch a font-size
+  reflow, which nothing cheap can - so an accepted turn is handed back only once the page holds
+  still, which is what keeps the real turn landing behind such a re-render from being read past.
+  A turn stays "pending" (for `settleTurn`) only while nobody has watched it to the end of a
+  budget: `turnPage` clears it after its own uncancelled wait, and a `settleTurn` cut short by a
+  Stop must leave it for the next reader. Flag anything that reports a turn because the key was
+  sent, that treats any new URL as a turn, that hands back a turn without waiting for the page to
+  settle, that re-adds a fallback action, that distinguishes "end of book" from "the reader stopped
+  answering" by appearance, that dispatches the key on `document.activeElement` (pressing Play
+  leaves focus inside this extension's own panel), that ties the pending window to `TURN_WAIT_MS`
+  rather than to the wait actually performed, or that starts a read without `settleTurn()` (Stop
+  cannot unsend a keypress already dispatched, and its render lands under whatever reads next).
 - **In `ocr.ts`, a rule that can silently remove or reorder text must act on EVIDENCE, not on
   appearance.** Four content losses came from thresholds encoding what a page was assumed to look
   like. Appearance may pick candidates; only evidence may act — text no book has in its body, the

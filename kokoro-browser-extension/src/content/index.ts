@@ -282,11 +282,29 @@ const api = {
     });
 
     try {
+      // A turn fired by a loop that has since been stopped can still land - `dispatchEvent` is
+      // synchronous, the reader's render is not. Absorbing it here is what stops a Stop-then-Play
+      // inside that beat from reading the page that is about to be swapped and then advancing off
+      // the one it was swapped to, which would leave that page unread.
+      await capture.settleTurn(() => cancelled);
+
       while (!cancelled) {
         await api.speakPage(options);
         if (cancelled) break;
-        // Auto-advance is Phase 4; for now wait for the reader's own page turn.
-        console.log('[kwr] page finished - turn the page to continue');
+
+        // Auto-advance. `turnPage` reports only what it can prove - a new page - so a false here
+        // is "nothing moved", which is the last page of the book and a reader that has stopped
+        // answering the arrow keys, indistinguishably. Both want the same thing: stay in the loop,
+        // say so, and let a turn by hand carry on from wherever the reader actually is.
+        if (await capture.turnPage({ cancelled: () => cancelled })) {
+          const pos = capture.position();
+          console.log(`[kwr] page turned${pos.page ? ` - now page ${pos.page}` : ''}`);
+          continue;
+        }
+        if (cancelled) break;
+
+        console.log('[kwr] could not turn the page - end of the book? Turn it yourself to continue.');
+        panel?.status('Waiting for a page turn - turn the page to continue.');
         await new Promise<void>((resolve) => {
           const done = () => {
             off();
@@ -296,6 +314,8 @@ const api = {
           const off = capture.onPageChange(done);
           wake = done;
         });
+        // The wait is also released by Stop, which has its own status to show.
+        if (!cancelled) panel?.status('Reading…', 'busy');
       }
     } finally {
       // However the loop ended - Stop, or a thrown OCR/synthesis/port error - the reader has to

@@ -226,6 +226,38 @@ the panel and Read Aloud in Kindle (or `test-speak.ps1`).
   between chunks and loses a character at every paragraph break — invisible for a sentence, about
   a word wide by the foot of a page, which is precisely where a highlight is most obviously
   wrong.
+- **ONE action turns the page: `ArrowRight`** — the reader's own shortcut, confirmed on a live book
+  and working with the window minimized. `turnPage` (`capture.ts`) dispatches it on the page image
+  (`composed`, so it bubbles out of every shadow root; `keyCode` set by hand since the constructor
+  drops it), never on `document.activeElement` — pressing Play leaves the focus inside this
+  extension's own panel. A next-page control found by accessible name and a tap on the forward half
+  of the page were both built and both removed: they could only run once the key had failed, which
+  is the worst moment to fire untested actions at the reader, and a fallback that runs only in the
+  case you cannot reproduce is the same trap as a second transport. Don't re-add one; the manual
+  turn below is the fallback, and it is a path that gets used.
+- **A page turn is only ever claimed on EVIDENCE — a new `blob:` URL at the SAME layout.** The
+  keypress having gone out is not a turn, and neither is a new URL by itself: the reader renders to
+  the viewport, so a resize or zoom gives the same page a fresh URL (this is why `followReflow`
+  exists), and one taken for a turn has the loop narrate the page it just read. A render is
+  rejected only on positive proof of a re-layout — the viewport or the rendered size actually
+  differing. **Those two are not a complete test** and the code says so: a font-size change leaves
+  both identical, and only the text could tell that page apart from the next one, which is an OCR
+  pass. What bounds the damage is that an accepted turn is handed back only once the page holds
+  still (`waitForSettled` inside `waitForTurn`) — so when the real turn lands behind a re-render
+  that was mistaken for it, the caller still captures the page that stayed rather than reading a
+  page that is already gone.
+- `turnPage` returning false is the last page of the book and a reader that has stopped answering
+  the key, indistinguishably and deliberately; `readBook` treats both as "nothing moved", says so,
+  and parks on a manual turn — which is also what absorbs a turn that was merely slow.
+- **A turn is "pending" only while nobody has finished watching for it.** `turnPage` clears it when
+  its own wait ran out uncancelled (whatever `waitMs` it was given — tying that to the constant
+  parks the next reader for the remainder), and `settleTurn` hands it back untouched when a second
+  Stop cuts *it* short, or a Stop-Play-Stop-Play consumes the turn without ever seeing it and the
+  reader after that starts on a page about to be swapped.
+- **A dispatched turn outlives the loop that asked for it.** `dispatchEvent` is synchronous, the
+  reader's render is not, so Stop cannot unsend it. `readBook` therefore opens with
+  `capture.settleTurn()`: without it a Stop-then-Play inside that beat starts reading the page
+  about to be swapped, then advances off the one it was swapped to — leaving that page unread.
 - **The highlight is a box over the page image, keyed to the capture it was measured on.** The
   reader is pixels, so there is no range to style; `highlight.ts` maps an OCR bbox through the
   image's *live* rect (never a cached one) and refuses to draw unless the displayed `blob:` URL is

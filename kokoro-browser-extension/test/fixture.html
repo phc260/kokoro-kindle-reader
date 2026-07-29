@@ -83,6 +83,33 @@
       return pageImg.src;
     };
 
+    // A resize: the reader renders to the viewport, so the SAME page comes back as a fresh blob
+    // URL at a different size. Must never be taken for a page turn.
+    window.fixtureRerender = async (w, h) => {
+      const old = pageImg.src;
+      pageImg.src = URL.createObjectURL(await pngBlob(w, h, 'REFLOWED'));
+      await pageImg.decode();
+      URL.revokeObjectURL(old);
+      return pageImg.src;
+    };
+
+    // The reader's own shortcut, behind a switch. Switched off, the listener is still there and
+    // still counts the keypress - which is the case that matters: an action that reached the
+    // reader and moved nothing is not a turn.
+    window.fixtureTurn = true;
+    window.fixtureFired = 0;
+    // How long the reader takes to render the turn. Dispatch is synchronous and the render is not,
+    // which is the whole reason a turn can land under a reader that has since been stopped.
+    window.fixtureDelay = 0;
+
+    addEventListener('keydown', (e) => {
+      if (e.key !== 'ArrowRight' || e.keyCode !== 39) return;
+      window.fixtureFired++;
+      if (!window.fixtureTurn) return;
+      if (window.fixtureDelay) setTimeout(() => void window.turnPage(), window.fixtureDelay);
+      else window.turnPage();
+    });
+
     // The real reader revokes each blob URL right after the <img> loads it, leaving the
     // element displayable but the URL dead. Capture must survive that.
     window.revokePageBlob = () => { URL.revokeObjectURL(pageImg.currentSrc || pageImg.src); };

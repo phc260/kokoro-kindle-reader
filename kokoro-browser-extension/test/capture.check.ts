@@ -27,6 +27,10 @@ declare global {
     __pageImg: HTMLImageElement;
     __preImg: HTMLImageElement;
     turnPage: () => Promise<string>;
+    fixtureRerender: (w: number, h: number) => Promise<string>;
+    fixtureTurn: boolean;
+    fixtureFired: number;
+    fixtureDelay: number;
     fixtureReady: boolean;
   }
 }
@@ -125,6 +129,135 @@ try {
   });
   check('page turn detected by fresh blob URL', turn.length === 1, JSON.stringify(turn));
   check('turned page captured, position advanced', (turn[0]?.bytes ?? 0) > 1000 && turn[0]?.page === 365, JSON.stringify(turn));
+
+  // Auto-advance: ArrowRight reaches the reader out of a shadow root, and - the case that matters -
+  // a keypress that arrived and moved nothing is not reported as a turn.
+  const advance = await page.evaluate(async () => {
+    const src = () => window.__pageImg.currentSrc || window.__pageImg.src;
+    const out: { want: string; got: boolean; moved: boolean; fired: number }[] = [];
+
+    for (const [want, live] of [
+      ['turns', true],
+      ['none', false],
+    ] as [string, boolean][]) {
+      window.fixtureTurn = live;
+      window.fixtureFired = 0;
+      const before = src();
+      const got = await window.kwr.turnPage({ waitMs: 400 });
+      out.push({ want, got, moved: src() !== before, fired: window.fixtureFired });
+    }
+    return out;
+  });
+
+  const [turned, none] = advance as [(typeof advance)[0], (typeof advance)[0]];
+  check('ArrowRight turns the page from inside the shadow tree', turned.got && turned.moved, JSON.stringify(turned));
+  check('a keypress that moves nothing is not a turn', !none.got && !none.moved && none.fired === 1, JSON.stringify(none));
+
+  // A resize re-renders the SAME page under a fresh blob URL. The reader does this on every resize
+  // and zoom - counting it as a turn would have the loop OCR and narrate the page it just read.
+  const reflow = await page.evaluate(async () => {
+    window.fixtureTurn = false;
+    const turning = window.kwr.turnPage({ waitMs: 500 });
+    setTimeout(() => void window.fixtureRerender(1600, 1120), 120);
+    const got = await turning;
+
+    // Put the page back to the size the later checks assert, via a real turn this time.
+    window.fixtureTurn = true;
+    await window.turnPage();
+    await window.__pageImg.decode();
+    return { got, natural: { w: window.__pageImg.naturalWidth, h: window.__pageImg.naturalHeight } };
+  });
+
+  check('a re-render at a new size is not a page turn', !reflow.got, JSON.stringify(reflow));
+  check('...and the fixture is back at page size for the checks below', reflow.natural.w === 2388, JSON.stringify(reflow.natural));
+
+  // Stop cannot unsend an action. A turn dispatched by a loop that is then stopped lands anyway,
+  // and a Play inside that beat would read the page about to be swapped - then advance off the one
+  // it was swapped to, leaving it unread. `settleTurn` is what the next loop waits on.
+  const pendingTurn = await page.evaluate(async () => {
+    window.fixtureTurn = true;
+    window.fixtureDelay = 300; // the reader renders the turn well after the dispatch returns
+    const src = window.__pageImg.currentSrc || window.__pageImg.src;
+
+    let stop = false;
+    const turning = window.kwr.turnPage({ cancelled: () => stop });
+    setTimeout(() => (stop = true), 60); // Stop, after the action is already out
+    const got = await turning;
+    const atStop = window.__pageImg.currentSrc || window.__pageImg.src;
+
+    const settled = await window.kwr.settleTurn();
+    window.fixtureDelay = 0;
+    return { got, landedBeforeStop: atStop !== src, settled, moved: (window.__pageImg.currentSrc || window.__pageImg.src) !== src };
+  });
+
+  check(
+    'a stopped turn is reported as no turn',
+    !pendingTurn.got && !pendingTurn.landedBeforeStop,
+    JSON.stringify(pendingTurn),
+  );
+  check('...and the next reader waits it out rather than reading the page it replaces', pendingTurn.settled && pendingTurn.moved, JSON.stringify(pendingTurn));
+
+  // The caller captures and OCRs whatever is on screen when the turn is handed back, so what it
+  // must be handed is the render that STAYED. A second one landing right behind the first - the
+  // reader re-laying out, or the real turn arriving behind a re-render mistaken for it - has to be
+  // the one the caller sees, or it narrates a page that is already gone.
+  const settles = await page.evaluate(async () => {
+    window.fixtureTurn = true;
+    let second: string | null = null;
+    const turning = window.kwr.turnPage({ waitMs: 1000 });
+    setTimeout(() => void window.turnPage().then((s) => (second = s)), 60);
+    const got = await turning;
+    const showing = window.__pageImg.currentSrc || window.__pageImg.src;
+    return { got, second: Boolean(second), showingIsLatest: showing === second };
+  });
+
+  check(
+    'a turn is handed back only once the page holds still',
+    settles.got && settles.second && settles.showingIsLatest,
+    JSON.stringify(settles),
+  );
+
+  // A wait cut short by a Stop leaves the turn pending - for the reader after next, too. Consuming
+  // it on the first Stop would let a Stop-Play-Stop-Play sequence start a reader on a page that is
+  // about to be swapped, with nothing left to say so.
+  const twoStops = await page.evaluate(async () => {
+    window.fixtureTurn = true;
+    window.fixtureDelay = 400;
+    const src = window.__pageImg.currentSrc || window.__pageImg.src;
+
+    let stopA = false;
+    const a = window.kwr.turnPage({ cancelled: () => stopA });
+    setTimeout(() => (stopA = true), 50);
+    const first = await a;
+
+    let stopB = false;
+    const b = window.kwr.settleTurn(() => stopB);
+    setTimeout(() => (stopB = true), 60);
+    const second = await b;
+
+    const third = await window.kwr.settleTurn();
+    window.fixtureDelay = 0;
+    return { first, second, third, moved: (window.__pageImg.currentSrc || window.__pageImg.src) !== src };
+  });
+
+  check(
+    'a settle cut short by a second Stop does not consume the pending turn',
+    !twoStops.first && !twoStops.second && twoStops.third && twoStops.moved,
+    JSON.stringify(twoStops),
+  );
+
+  // ...but a turn watched to the end of its own budget is not pending, whatever budget that was.
+  // Tying it to the constant instead would park the next reader for the remainder.
+  const noWait = await page.evaluate(async () => {
+    window.fixtureTurn = false;
+    await window.kwr.turnPage({ waitMs: 200 });
+    const at = Date.now();
+    const settled = await window.kwr.settleTurn();
+    window.fixtureTurn = true;
+    return { settled, ms: Date.now() - at };
+  });
+
+  check('a turn that failed on a short budget leaves nothing pending', !noWait.settled && noWait.ms < 100, JSON.stringify(noWait));
 
   // The live reader revokes the blob URL as soon as the <img> has it, so fetching currentSrc
   // gives ERR_FILE_NOT_FOUND. Capture must read the decoded element instead.

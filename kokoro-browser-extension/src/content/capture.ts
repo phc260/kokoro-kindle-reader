@@ -406,6 +406,216 @@ export function onPageChange(cb: (page: PageImage, pos: Position) => void): () =
   };
 }
 
+// -------------------------------------------------------------------------- page turn
+
+export interface TurnOptions {
+  /** Give up as soon as this returns true - a Stop arriving mid-turn. */
+  cancelled?: () => boolean;
+  /** How long the turn is given to produce a new page. */
+  waitMs?: number;
+}
+
+/**
+ * How long a turn is given to land.
+ *
+ * Far longer than the reader takes, because the cost is lopsided: waiting too long stalls once at
+ * the end of a book, while giving up too early reports a page as unturnable when it was merely
+ * slow. It is also the outside limit `settleTurn` will wait for a turn abandoned by a Stop -
+ * beyond it, a keypress nobody has seen the effect of is written off rather than waited for.
+ */
+const TURN_WAIT_MS = 5000;
+
+/**
+ * A turn that has been asked for and not yet seen.
+ *
+ * `dispatchEvent` is synchronous but the reader's re-render is not, so a turn can still be on its
+ * way when the loop that asked for it has been stopped. Nothing can revoke it - the only honest
+ * thing to do is let the next reader wait it out (`settleTurn`) rather than start reading a page
+ * that is about to be swapped.
+ */
+let pending: { at: number; from: Render; laidOut: string } | null = null;
+
+/**
+ * Ask the reader to advance.
+ *
+ * **One action, not a ladder.** The reader turns its pages on the left and right arrow keys - that
+ * is its own shortcut, confirmed on a live book - so `ArrowRight` is the whole strategy. Clicking a
+ * next-page control found by accessible name and tapping the forward half of the page both worked
+ * in the fixture and were removed: they could only ever run when the key had already failed, which
+ * is precisely when firing more untested actions at the reader is least wise, and a second path
+ * that only runs in the case you cannot reproduce is the same trap as a second transport
+ * (see `webserve.rs` and the note in CLAUDE.md). When the key stops working the loop falls back to
+ * a manual page turn, which is a path that gets exercised.
+ *
+ * Dispatched on the PAGE IMAGE, not on `document.body` and not on `document.activeElement`. The
+ * image is inside the reader's own tree, so a `composed` event from it bubbles out through every
+ * shadow boundary and reaches handlers on the container, the document and the window alike - and
+ * a handler that inspects `target` sees the reader's own element. `activeElement` would be this
+ * extension's panel for the whole of the common case, since pressing Play is what starts the loop.
+ *
+ * `keyCode`/`which` are set by hand: they are legacy, plenty of handlers still branch on them, and
+ * the constructor leaves both at 0 whatever is passed in the init dictionary.
+ */
+function pressKey(key: string, keyCode: number): boolean {
+  const target = findPageImage() ?? document.body;
+  if (!target) return false;
+
+  for (const type of ['keydown', 'keyup'] as const) {
+    const ev = new KeyboardEvent(type, { key, code: key, bubbles: true, cancelable: true, composed: true });
+    Object.defineProperty(ev, 'keyCode', { get: () => keyCode });
+    Object.defineProperty(ev, 'which', { get: () => keyCode });
+    target.dispatchEvent(ev);
+  }
+  return true;
+}
+
+/** What is on screen, in the two terms a turn is judged by. */
+interface Render {
+  src: string;
+  natural: { w: number; h: number };
+}
+
+function displayed(): Render | null {
+  const el = findPageImage();
+  if (!el) return null;
+  // Mid-decode the element has a new src and no dimensions yet. Not a render to judge anything
+  // against: taking it as one would compare against zeroes and call the turn a re-layout.
+  if (!el.naturalWidth || !el.naturalHeight) return null;
+  return { src: el.currentSrc || el.src, natural: { w: el.naturalWidth, h: el.naturalHeight } };
+}
+
+/** Everything the reader lays a page out against, as one cheap string. */
+const viewport = (): string => `${innerWidth}x${innerHeight}@${devicePixelRatio}`;
+
+/**
+ * Is `now` a different PAGE from `base`, or the same one laid out again?
+ *
+ * A new `blob:` URL is necessary evidence but not sufficient: the reader renders to the viewport,
+ * so a resize or a zoom produces a fresh URL for the same page with the text reflowed (which is
+ * the whole reason `followReflow` exists). Taking one of those for a turn would have the loop
+ * capture, OCR and narrate the page it just read.
+ *
+ * So a new render is rejected only on POSITIVE evidence that the layout changed under it - the
+ * viewport or the rendered size actually differing.
+ *
+ * What it cannot see is a re-layout that changes neither - the reader's own font-size control,
+ * used in the moment between the key going out and its render arriving. Nothing cheap can: the
+ * only thing that separates "this page again, reflowed" from "the next page" is the text, and
+ * reading that is an OCR pass. On its own that costs a page read twice; worse, the turn we asked
+ * for then lands under the re-read and the page it lands on is never narrated. That is what the
+ * settle in `waitForTurn` is for - it does not identify the render, it waits for the one that
+ * stays.
+ */
+function isTurn(base: Render, now: Render, laidOutAt: string): boolean {
+  if (now.src === base.src) return false;
+  return viewport() === laidOutAt && now.natural.w === base.natural.w && now.natural.h === base.natural.h;
+}
+
+/**
+ * Watch for the page to change. A rejected re-render becomes the new baseline, since the key that
+ * was pressed may still be on its way.
+ *
+ * The turn is only handed back once the page has stopped moving. What the caller does next is
+ * capture and OCR whatever is on screen, so the render that matters is the one that STAYS - and if
+ * a second lands right behind the first (the reader re-laying out, or the turn we asked for
+ * arriving behind a font-size change that was mistaken for it), the caller must be given that one.
+ * `waitForSettled` is the same wait `capture` already makes; failing it changes nothing here,
+ * because the evidence for the turn has already been collected.
+ */
+async function waitForTurn(
+  from: Render,
+  laidOut: string,
+  timeoutMs: number,
+  cancelled: () => boolean,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  let base = from;
+  let laidOutAt = laidOut;
+
+  while (Date.now() < deadline) {
+    if (cancelled()) return false;
+    const now = displayed();
+    if (now && now.src !== base.src) {
+      if (isTurn(base, now, laidOutAt)) {
+        pending = null;
+        try {
+          await waitForSettled();
+        } catch {
+          // Nothing held still long enough. The turn still happened; the caller's own
+          // `waitForSettled` will fail the same way and say so there.
+        }
+        return true;
+      }
+      base = now;
+      laidOutAt = viewport();
+    }
+    await sleep(POLL_MS / 5);
+  }
+  return false;
+}
+
+/**
+ * Wait out a turn that was asked for by a reader that has since stopped.
+ *
+ * Stop cannot unsend a keypress, and the reader's render lands a beat later, so a Play issued in
+ * that beat would otherwise start reading the page that is about to be swapped - and then advance
+ * from the page it was swapped to, leaving that one unread. Cheap when there is nothing pending,
+ * which is every ordinary Play: a turn that was watched to the end of its budget is not pending
+ * (see `turnPage`), so only one cut short by a Stop ever gets here.
+ *
+ * **A wait cut short leaves the turn pending**, exactly as `turnPage` does, or the second Stop of
+ * a Stop-Play-Stop-Play would consume the turn without ever seeing it and the third reader would
+ * start on a page about to be swapped. It is dropped only when seen (`waitForTurn` does that) or
+ * when its window has run out.
+ *
+ * Returns whether a turn actually landed.
+ */
+export async function settleTurn(cancelled: () => boolean = () => false): Promise<boolean> {
+  const p = pending;
+  if (!p) return false;
+
+  const left = p.at + TURN_WAIT_MS - Date.now();
+  if (left <= 0) {
+    pending = null;
+    return false;
+  }
+
+  const turned = await waitForTurn(p.from, p.laidOut, left, cancelled);
+  if (!turned && Date.now() >= p.at + TURN_WAIT_MS) pending = null;
+  return turned;
+}
+
+/**
+ * Advance the reader by one page. False if it did not move.
+ *
+ * **A turn is only ever claimed on evidence** (see `isTurn`): the keypress having gone out is not
+ * a turn, however plausible it looked. So the last page of a book and a reader that has stopped
+ * answering the arrow keys are the same answer here, deliberately - both mean "nothing advanced",
+ * and telling them apart would be guessing from appearance. The caller decides what to do about
+ * it rather than being told the page moved when it did not.
+ */
+export async function turnPage(opts: TurnOptions = {}): Promise<boolean> {
+  const cancelled = opts.cancelled ?? (() => false);
+  const waitMs = opts.waitMs ?? TURN_WAIT_MS;
+
+  const from = displayed();
+  // With no page on screen there is nothing to compare against, so no turn could be proved: the
+  // first render to appear would look like one. Say nothing moved rather than guess it did.
+  if (!from) return false;
+  const laidOut = viewport();
+
+  if (cancelled() || !pressKey('ArrowRight', 39)) return false;
+  pending = { at: Date.now(), from, laidOut };
+
+  const turned = await waitForTurn(from, laidOut, waitMs, cancelled);
+  // Having watched the whole budget and seen nothing, this caller is entitled to declare the turn
+  // not coming - whatever `waitMs` it chose. Only a Stop leaves it pending, because only a Stop
+  // stopped the watch before it finished. Tying that to `TURN_WAIT_MS` instead would leave a
+  // `turnPage({waitMs: 400})` from the console parking the next reader for the other 4.6 seconds.
+  if (!turned && !cancelled()) pending = null;
+  return turned;
+}
+
 // --------------------------------------------------------------------------- position
 
 const PAGE_OF = /Page\s+(\d+)\s+of\s+(\d+)/i;
