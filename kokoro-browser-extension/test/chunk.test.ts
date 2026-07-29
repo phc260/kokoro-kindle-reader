@@ -7,7 +7,7 @@
 
 import { test, expect } from 'bun:test';
 import path from 'node:path';
-import { chunk, PLAYBACK_RAMP } from '../src/speak';
+import { chunk, planChunks, PLAYBACK_RAMP, type WordBoundary } from '../src/speak';
 
 const fixture = await Bun.file(path.join(import.meta.dir, 'ocr-fixture.html')).text();
 const PROSE = fixture.match(/GROUND_TRUTH\s*=\s*`([\s\S]*?)`/)![1]!.replace(/\s+/g, ' ').trim();
@@ -71,4 +71,46 @@ test('the schedule repeats its last entry rather than running out', () => {
   const out = chunk(page, [40, 400]);
   expect(out[0]!.length).toBeLessThan(120);
   expect(out.slice(1, -1).every((c) => c.length > 200)).toBe(true);
+});
+
+// --- offsets ------------------------------------------------------------------------------
+//
+// A boundary arrives measured against the chunk that was spoken; the highlight needs it against
+// the page. Getting that back wrong does not fail loudly - it just marks the wrong word, further
+// and further from the right one as the page goes on.
+
+const boundary = (charIndex: number, charLength: number): WordBoundary => ({ charIndex, charLength, elapsedMs: 0 });
+
+test('every boundary maps back to the exact word it names', () => {
+  for (const schedule of [400, 60, PLAYBACK_RAMP] as const) {
+    const plan = planChunks(page, schedule);
+    for (let i = 0; i < plan.pieces.length; i++) {
+      for (const m of plan.pieces[i]!.matchAll(/\S+/g)) {
+        const b = plan.remap(boundary(m.index, m[0].length), i);
+        expect(page.slice(b.charIndex, b.charIndex + (b.charLength ?? 0))).toBe(m[0]);
+      }
+    }
+  }
+});
+
+test('paragraph breaks do not shift the mapping', () => {
+  // The regression this replaces: offsets were the running total of chunk lengths plus one
+  // space, so every separator that was not a single space lost a character. A page of short
+  // paragraphs drifted a whole word by the foot of it.
+  const prose = ['One two three four.', 'Five six seven eight.', 'Nine ten eleven twelve.'];
+  const text = prose.join('\n\n');
+  const plan = planChunks(text, 20);
+  const last = plan.pieces.length - 1;
+  const lastWord = [...plan.pieces[last]!.matchAll(/\S+/g)].pop()!;
+
+  const b = plan.remap(boundary(lastWord.index, lastWord[0].length), last);
+  expect(text.slice(b.charIndex, b.charIndex + (b.charLength ?? 0))).toBe('twelve.');
+  expect(b.charIndex).toBe(text.lastIndexOf('twelve.'));
+});
+
+test('a boundary landing on whitespace resolves to the word after it', () => {
+  const text = 'Alpha beta gamma.';
+  const plan = planChunks(text, 400);
+  const b = plan.remap(boundary(5, 5), 0); // the space before "beta"
+  expect(text.slice(b.charIndex, b.charIndex + (b.charLength ?? 0))).toBe('beta');
 });

@@ -77,7 +77,7 @@ cargo build --release --target i686-pc-windows-msvc --manifest-path kokoro-sapi\
 # (tray -> "Web pairing code"). The endpoint is webserve.rs, inside the host; there is no
 # separate exe to build.
 bun run build.ts --stage         # from kokoro-browser-extension/; --stage copies off U:\ for Chrome
-bun test test/                   # manifest/permission drift guards
+bun test test/                   # chunking + offsets, word timing, manifest/permission drift
 curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8787/status   # the whole transport, reproducible
 
 # Kindle 18632 hook + injector — both x86 (Kindle is 32-bit; the host spawns the injector).
@@ -197,6 +197,97 @@ the panel and Read Aloud in Kindle (or `test-speak.ps1`).
 - **The browser shares the one serialized synth worker with Kindle**, so the two queue behind
   each other rather than contending — the only correct arrangement, since espeak has global
   state and the ORT session is owned by that worker.
+- **A page's columns feed ONE utterance — never one `speak` per column.** A two-column page is
+  OCR'd a column at a time so the first can be spoken while the second is still being recognized
+  (~1s off a ~4s wait for the first word). A second `speak` would start a second audio stream, and
+  `startStream` tears the running one down, so the page would go silent for as long as the new
+  stream's first chunk takes to synthesize — about what the streaming saved. Hence `{t:'part'}` on
+  the port and `PartQueue` in the worker; **every** way an utterance can end must close that queue
+  (finish, Stop, superseded, port disconnect) or the worker parks on it forever. Parts are cut at
+  a **sentence** end, not at the column boundary — a column runs into the next mid-sentence and
+  each part is chunked separately — and each carries its own `base`, since the sentence cut means
+  the bases are *not* a running total of part lengths.
+- **The browser's word highlight runs on ESTIMATED boundaries, and must keep saying so.** Kindle
+  gets true audio-stream offsets (`CHUNK_INFO`); the browser cannot, because `/synth` returns PCM
+  and the stock `model.onnx` exposes only the waveform output — the per-phoneme durations the
+  model predicts are not an output you can ask for. So `word-timing.ts` splits each chunk's
+  *exact* duration (the sample count) across its words by syllable count plus a punctuation beat.
+  What makes that good enough is the error resetting at every chunk (one to four sentences), so
+  nothing accumulates down a page. Don't add a second estimator elsewhere, and don't describe
+  these as real boundaries.
+- **Those marks fire on the AudioContext clock, in the offscreen document — never `setTimeout`.**
+  `ctx.currentTime` stops while the context is suspended, which is what makes Pause freeze the
+  highlight on the word being spoken instead of running it to the end of the page. It is also the
+  clock the samples are scheduled on, so a mark cannot drift from its sound. They reach the
+  narrator as broadcasts filtered by epoch, because the lead means a chunk's audio is heard long
+  after the request that scheduled it was answered.
+- **Chunk offsets are aligned on non-whitespace characters, not summed lengths.** `chunk()` only
+  drops or normalizes whitespace, so counting ink is exact; summing lengths assumes one space
+  between chunks and loses a character at every paragraph break — invisible for a sentence, about
+  a word wide by the foot of a page, which is precisely where a highlight is most obviously
+  wrong.
+- **The highlight is a box over the page image, keyed to the capture it was measured on.** The
+  reader is pixels, so there is no range to style; `highlight.ts` maps an OCR bbox through the
+  image's *live* rect (never a cached one) and refuses to draw unless the displayed `blob:` URL is
+  still the one that was OCR'd. It is the second and last shadow host this extension adds.
+- **A rule that can silently remove or reorder text must act on EVIDENCE, not on appearance.**
+  This is the governing rule for `ocr.ts` and it was earned: four content losses, every one from a
+  threshold that encoded what a page was assumed to look like. Appearance is still allowed to
+  decide what is a *candidate*; only evidence may act. In practice that means one of three shapes —
+  text no book has in its body (`FURNITURE_PATTERN`, now two branches), the same thing seen on
+  another page (`repeatsAcrossPages`, for running heads and for folio *slots*, whose text changes
+  every page), or a decision checked after the fact and redone (`looksInterleaved` →
+  `preprocess({columns:'split'})`). A constant that only degrades quality — `PLAYBACK_RAMP`,
+  `PAD`, the word-timing weights — is not this and needs no ceremony.
+- **Furniture is only ever removed on PATTERN or REPETITION — never on how a line looks.** A
+  section heading and a running head are the same object geometrically: short, near the page edge,
+  no closing punctuation. Every attempt to separate them by appearance lost real content (three
+  rounds of it: a mid-sentence continuation line, a full-measure opening line at a larger font,
+  then four section headings on a chapter-per-page layout), and every loss was silent, because
+  furniture OCRs *perfectly* — no confidence or accuracy check can see the mistake. So `ocr.ts`
+  drops a line only when `FURNITURE_PATTERN` matches it (folio, `[293]`, copyright) or it has
+  already appeared in a band on **another page**. A running head is therefore read once per
+  session and never again; that is the intended trade, and it is the cheap mistake — audible,
+  over, and it removes none of the book.
+- **An OCR pass whose text is not narrated must not touch the furniture memory.** Two of them
+  exist and they take different routes. The re-split throws a read away *after* making it, so it
+  wraps in `furnitureCheckpoint()` — and the rollback must happen only once the replacement is
+  certain, or a read that IS narrated loses what it learned. The reflow re-OCR never needed the
+  rule at all, so it passes `{trial:true}` and never reaches it: a resize repaginates, so its page
+  fingerprint differs from the read being narrated and the same heading would count as seen on a
+  second page. That is the poisoning bug arriving through two more doors; it has already cost a
+  line of the book once.
+- **Dark pages are detected from the MODE of the luminance histogram, not the mean.** The mode is
+  the paper; a mean is dragged around by anything large that is not paper (a full-width plate, a
+  dark figure), so a page could average its way across a threshold while plainly being black on
+  white. With the paper level in hand the comparison is against 128 — the midpoint of the range,
+  not a tuned number.
+- **`bandSeen` counts PAGES, not sightings, which is why `pageToken` exists.** The same page gets
+  recognized more than once as a matter of course (a re-render while narrating, `kwr.readPage()`
+  before pressing Play), and counting those would condemn a heading on the second look at the page
+  it belongs to. The token is a fingerprint of the column's letters and digits only — a resize
+  reflows lines and rehyphenates words, so anything counting whitespace or line structure would
+  call the same page new. It is taken over **every** line before any is dropped, so a page's
+  identity never depends on the decisions being made about it.
+- **The measure and sentence-end guards decide what may ENTER that memory.** Body text is set to
+  the column's measure and a running head is not; a paragraph's last line is short but ends in a
+  full stop. Passing either means the line is never a candidate, so it can never be dropped as a
+  repeat however often the same sentence lands in a band. The spacing check beside the measure is
+  not decoration: a title-left/folio-right header spans the measure too, and is told apart by
+  having one huge gap where justification stretches every gap together. `measureOf` is computed
+  **per column** — a page-wide figure is the wider column's and disqualifies every line of the
+  other.
+- **Every page logs what it withheld** (`[kwr] not narrated: …`). Keep it: it is the only evidence
+  that exists when a line goes missing.
+- **A resize re-renders the page, and the highlight has to be re-OCR'd to survive it.** The reader
+  renders to the viewport, so any resize or zoom produces a new `blob:` URL with the text reflowed
+  onto different lines — at which point the boxes are stale and the refusal above fires *for the
+  rest of the page*. `followReflow` (in `content/index.ts`) re-OCRs each new render and hands it
+  over; `relocate` finds the current word in it by matching its neighbours, since reading order
+  survives a reflow even though line breaks do not. **The narration is never re-anchored** — it is
+  still speaking the text captured when the page started, and only the boxes moved. No match
+  (the reflow pushed the word onto the next page) and an ambiguous match both draw nothing: a
+  mark in the wrong place costs more than a missing one.
 - **Every client of the *pipe* is a real-time sink**, and that's what keeps its command set
   small (`'S'`/`'T'`/`'B'`). The browser isn't one and doesn't use the pipe. `CMD_SYNTH_RAW`
   (`'R'`, unpaced) and `CMD_INFO` (`'I'`) existed only for the bridge and were removed with it —

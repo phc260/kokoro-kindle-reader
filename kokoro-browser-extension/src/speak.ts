@@ -52,8 +52,18 @@ export interface Narrator {
    * silence, measured at 85 SECONDS across a five-minute page (backend/test-pipeline.ts). The
    * platform engines have nothing to overlap - they own their own audio - so they leave it
    * undefined and `speakChunked` drives them the plain way.
+   *
+   * A STREAM of chunks, not an array, because a page's text does not all exist at once: a
+   * two-column page is OCR'd a column at a time so the first word can be heard while the second
+   * column is still being recognized. The chunks that arrive late must join the utterance already
+   * playing - starting a second one would tear the first down (`startStream` in offscreen.ts) and
+   * put a synthesis-length silence in the middle of the page.
    */
-  speakAll?(chunks: string[], opts?: SpeakOptions, onWord?: (b: WordBoundary, chunkIndex: number) => void): Promise<void>;
+  speakAll?(
+    chunks: AsyncIterable<string>,
+    opts?: SpeakOptions,
+    onWord?: (b: WordBoundary, chunkIndex: number) => void,
+  ): Promise<void>;
   stop(): void;
   pause(): void;
   resume(): void;
@@ -261,39 +271,227 @@ export function chunk(text: string, max: number | readonly number[] = 400): stri
   return out;
 }
 
+// ------------------------------------------------------------------------ chunk offsets
+
+/** Non-whitespace characters in `s` before `end`. */
+function countInk(s: string, end = s.length): number {
+  let n = 0;
+  for (let i = 0; i < end && i < s.length; i++) if (!/\s/.test(s[i]!)) n++;
+  return n;
+}
+
 /**
- * Speak a whole page through whichever narrator is in play, chunked to suit it.
+ * A page's chunks, plus the exact map from a boundary inside one back to the original text.
+ *
+ * The alignment counts NON-WHITESPACE characters rather than summing chunk lengths. `chunk()`
+ * only ever drops or normalizes whitespace - it splits on it, trims, and rejoins with a single
+ * space - so the sequence of non-whitespace characters survives untouched, and counting them is
+ * exact. Summing lengths is not: it assumes one space between every pair of chunks, so a page
+ * whose paragraphs are separated by a blank line loses a character at each one. That drift is
+ * invisible for a sentence and about a word wide by the foot of a page, which is exactly where
+ * a highlight is most obviously wrong.
+ */
+export interface ChunkPlan {
+  pieces: string[];
+  /** Rewrite a boundary reported against `pieces[i]` into one against the original text. */
+  remap(b: WordBoundary, i: number): WordBoundary;
+}
+
+export function planChunks(text: string, max: number | readonly number[]): ChunkPlan {
+  const pieces = chunk(text, max);
+
+  // Original index of the nth non-whitespace character.
+  const ink: number[] = [];
+  for (let i = 0; i < text.length; i++) if (!/\s/.test(text[i]!)) ink.push(i);
+  const at = (n: number) => (n < ink.length ? ink[n]! : text.length);
+
+  const bases: number[] = [];
+  let seen = 0;
+  for (const p of pieces) {
+    bases.push(seen);
+    seen += countInk(p);
+  }
+
+  return {
+    pieces,
+    remap(b, i) {
+      const piece = pieces[i] ?? '';
+      const start = (bases[i] ?? 0) + countInk(piece, b.charIndex);
+      const charIndex = at(start);
+      // Measure the span in ink too, then take the index just past its last character - a word
+      // whose source had a line break inside it stays one highlight rather than two.
+      const span = countInk(piece.slice(b.charIndex, b.charIndex + (b.charLength ?? 0)));
+      const charLength = span > 0 ? at(start + span - 1) + 1 - charIndex : b.charLength;
+      return { ...b, charIndex, charLength };
+    },
+  };
+}
+
+// ------------------------------------------------------------------------ streaming a page
+
+/**
+ * A piece of a page's text, and where it starts within the page.
+ *
+ * The producer states `base` rather than it being inferred from the running total of part
+ * lengths, because the two do not have to agree: a part is cut at the last sentence end, not at
+ * the column boundary, so the pieces are slices of the page's text at positions only the producer
+ * knows. Everything downstream reports offsets against the page, so this is what makes a boundary
+ * from part two address the same string the highlight indexed.
+ */
+export interface TextPart {
+  text: string;
+  base: number;
+}
+
+export interface StreamPlan {
+  chunks: AsyncGenerator<string>;
+  /** Rewrite a boundary reported against the `i`th chunk into one against the whole page. */
+  remap(b: WordBoundary, i: number): WordBoundary;
+}
+
+/**
+ * A page's text as it arrives, pushed in and iterated out.
+ *
+ * Lives here rather than in background.ts, where it is used, because it is the one part of the
+ * streaming path with real concurrency in it and nothing about it is chrome-specific.
+ *
+ * `speakStream` parks on this between parts, so EVERY way an utterance can end has to close it -
+ * finishing, Stop, a superseded page, the port disconnecting. Miss one and the worker sits
+ * awaiting a part nobody will send, holding the utterance open, and the page never finishes.
+ */
+export class PartQueue implements AsyncIterable<TextPart> {
+  #queue: TextPart[] = [];
+  #wake: (() => void) | null = null;
+  #closed = false;
+
+  push(part: TextPart): void {
+    if (this.#closed) return;
+    this.#queue.push(part);
+    this.#release();
+  }
+
+  close(): void {
+    this.#closed = true;
+    this.#release();
+  }
+
+  get closed(): boolean {
+    return this.#closed;
+  }
+
+  #release(): void {
+    const wake = this.#wake;
+    this.#wake = null;
+    wake?.();
+  }
+
+  async *[Symbol.asyncIterator](): AsyncGenerator<TextPart> {
+    for (;;) {
+      // Drain before parking, and re-check on waking: a part can land between the two, and a
+      // close can land while parts are still queued - those still have to come out.
+      while (this.#queue.length) yield this.#queue.shift()!;
+      if (this.#closed) return;
+      await new Promise<void>((resolve) => (this.#wake = resolve));
+    }
+  }
+}
+
+/**
+ * Index just past the last sentence end at or after `from`, or `from` if there isn't one.
+ *
+ * Where a part may be cut. Each part is chunked and synthesized on its own, so the seam between
+ * two of them is heard - which is fine between sentences and plainly wrong in the middle of one.
+ * A column of a two-column page nearly always runs into the next mid-sentence, so the tail is
+ * held back and yielded with the column that continues it.
+ *
+ * The lookahead is what stops a decimal point or a mid-token dot ("3.14") from counting.
+ */
+export function sentenceEnd(text: string, from: number): number {
+  let last = -1;
+  for (const m of text.slice(from).matchAll(/[.!?]["'”’)\]]*(?=\s|$)/g)) last = m.index + m[0].length;
+  return last > 0 ? from + last : from;
+}
+
+/** One value as a stream, so a plain string goes down the same path as a column feed. */
+async function* only<T>(value: T): AsyncGenerator<T> {
+  yield value;
+}
+
+/**
+ * Chunk a stream of text parts, keeping every boundary addressed to the whole page.
+ *
+ * `owners` is filled as chunks are yielded and read when boundaries come back, which is always
+ * afterwards - a chunk has to be spoken before it can report a word.
+ */
+export function planStream(
+  parts: AsyncIterable<TextPart>,
+  first: number | readonly number[],
+  rest: number | readonly number[],
+): StreamPlan {
+  const owners: { plan: ChunkPlan; local: number; base: number }[] = [];
+
+  return {
+    chunks: (async function* () {
+      let opening = true;
+      for await (const part of parts) {
+        if (!part.text) continue;
+        // Only the FIRST part ramps. The ramp buys a fast first word by starting small; a later
+        // part is arriving mid-page with a lead already built, and restarting it there would
+        // emit a runt chunk that finishes before the one behind it is synthesized.
+        const plan = planChunks(part.text, opening ? first : rest);
+        opening = false;
+        for (let i = 0; i < plan.pieces.length; i++) {
+          owners.push({ plan, local: i, base: part.base });
+          yield plan.pieces[i]!;
+        }
+      }
+    })(),
+
+    remap(b, i) {
+      const o = owners[i];
+      if (!o) return b;
+      const m = o.plan.remap(b, o.local);
+      return { ...m, charIndex: o.base + m.charIndex };
+    },
+  };
+}
+
+/**
+ * Speak a page that arrives in parts, through whichever narrator is in play.
  *
  * This is the one place that decides the chunk schedule, and it has to be somewhere that knows
  * which engine was actually chosen - the ramp is tuned to Kokoro's throughput and would only
  * add utterance boundaries for a platform voice.
  *
- * `onWord` reports offsets into the ORIGINAL text, with each chunk's start added back.
+ * `onWord` reports offsets into the whole page's text, which is what the highlight keys on.
  */
-export async function speakChunked(
+export async function speakStream(
+  n: Narrator,
+  parts: AsyncIterable<TextPart>,
+  opts?: SpeakOptions,
+  onWord?: (b: WordBoundary) => void,
+): Promise<void> {
+  const settled = PLAYBACK_RAMP[PLAYBACK_RAMP.length - 1]!;
+  const plan = n.speakAll ? planStream(parts, PLAYBACK_RAMP, settled) : planStream(parts, 400, 400);
+
+  if (n.speakAll) {
+    await n.speakAll(plan.chunks, opts, (b, i) => onWord?.(plan.remap(b, i)));
+    return;
+  }
+
+  let i = 0;
+  for await (const piece of plan.chunks) {
+    const at = i++;
+    await n.speak(piece, opts, (b) => onWord?.(plan.remap(b, at)));
+  }
+}
+
+/** Speak a page whose text is all in hand. */
+export function speakChunked(
   n: Narrator,
   text: string,
   opts?: SpeakOptions,
   onWord?: (b: WordBoundary) => void,
 ): Promise<void> {
-  const pieces = chunk(text, n.speakAll ? PLAYBACK_RAMP : 400);
-
-  // Chunks rejoin with a single space, so each start offset is the running total. Approximate
-  // where the source had other whitespace - good enough to pick a word, which is all
-  // highlighting needs.
-  const bases: number[] = [];
-  let at = 0;
-  for (const p of pieces) {
-    bases.push(at);
-    at += p.length + 1;
-  }
-
-  if (n.speakAll) {
-    await n.speakAll(pieces, opts, (b, i) => onWord?.({ ...b, charIndex: (bases[i] ?? 0) + b.charIndex }));
-    return;
-  }
-
-  for (let i = 0; i < pieces.length; i++) {
-    await n.speak(pieces[i]!, opts, (b) => onWord?.({ ...b, charIndex: bases[i]! + b.charIndex }));
-  }
+  return speakStream(n, only({ text, base: 0 }), opts, onWord);
 }

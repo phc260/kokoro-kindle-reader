@@ -55,6 +55,32 @@ export async function startStream(): Promise<number> {
   return r.epoch ?? 0;
 }
 
+/** One word coming due, as the offscreen document's audio clock reports it. */
+export interface WordMarkMessage {
+  /** Index of the chunk this offset is measured against. */
+  chunk: number;
+  charIndex: number;
+  charLength: number;
+}
+
+/**
+ * Word marks for ONE playback generation. Returns an unsubscribe.
+ *
+ * These arrive as broadcasts rather than replies: a mark is due when the audio reaches it, which
+ * is long after the request that scheduled the chunk was answered. The epoch filter is what keeps
+ * a superseded page from moving the current page's highlight - marks for a stopped generation
+ * are dropped at the source too, but a message already in flight when Stop lands would otherwise
+ * still be delivered.
+ */
+export function onWordMarks(epoch: number, cb: (m: WordMarkMessage) => void): () => void {
+  const listener = (msg: { t?: string; epoch?: number } & Partial<WordMarkMessage>): void => {
+    if (msg?.t !== 'kwr-word' || msg.epoch !== epoch) return;
+    cb({ chunk: msg.chunk ?? 0, charIndex: msg.charIndex ?? 0, charLength: msg.charLength ?? 0 });
+  };
+  chrome.runtime.onMessage.addListener(listener);
+  return () => chrome.runtime.onMessage.removeListener(listener);
+}
+
 /**
  * Block while the buffer is full. Returns true if playback was cancelled meanwhile.
  *

@@ -4,7 +4,16 @@
 // works right here. Both are behind `Narrator` (src/speak.ts) so the page loop doesn't care
 // which one is in play - and neither will care when Kokoro replaces them.
 
-import { WebSpeechNarrator, chunk, type Narrator, type SpeakOptions, type VoiceInfo, type WordBoundary } from '../speak';
+import {
+  WebSpeechNarrator,
+  planChunks,
+  speakStream,
+  type Narrator,
+  type SpeakOptions,
+  type TextPart,
+  type VoiceInfo,
+  type WordBoundary,
+} from '../speak';
 
 /**
  * Talks to the service worker's ChromeTtsNarrator over a port.
@@ -153,6 +162,107 @@ export class PortNarrator implements Narrator {
     return attempt(true);
   }
 
+  /**
+   * Speak a page whose text arrives in parts, as ONE utterance on the worker's side.
+   *
+   * Not `speak()` per part: each call there is a separate utterance, and for the Kokoro narrator
+   * a second utterance tears the first one's audio down (`startStream` in offscreen.ts). Sending
+   * the parts under one id is what lets the second column of a page join the audio already
+   * playing instead of interrupting it.
+   *
+   * The opening message is retried on a dead port exactly as `speak` retries; later parts are
+   * not, because by then the worker is demonstrably alive - it answered the first one.
+   */
+  speakParts(
+    parts: AsyncIterable<TextPart>,
+    options?: SpeakOptions,
+    onWord?: (b: WordBoundary) => void,
+  ): Promise<void> {
+    const id = `u${++this.#seq}`;
+
+    return new Promise<void>((resolve, reject) => {
+      let live = this.#connect();
+      let done = false;
+
+      const settle = (fn: () => void) => {
+        done = true;
+        live.port.onMessage.removeListener(on);
+        live.pending.delete(fail);
+        fn();
+      };
+      const fail = (e: Error) => settle(() => reject(e));
+      const on = (m: { t: string; id?: string; message?: string } & Partial<WordBoundary>) => {
+        if (m.id !== id) return;
+        if (m.t === 'word') onWord?.(m as WordBoundary);
+        else if (m.t === 'end') settle(resolve);
+        else if (m.t === 'error') settle(() => reject(new Error(m.message)));
+      };
+      live.port.onMessage.addListener(on);
+      live.pending.add(fail);
+
+      /** Move the listeners to a fresh connection after the cached one turned out to be dead. */
+      const reconnect = () => {
+        live.port.onMessage.removeListener(on);
+        live.pending.delete(fail);
+        if (this.#port === live.port) {
+          this.#port = null;
+          this.#pending = new Set();
+        }
+        live = this.#connect();
+        live.port.onMessage.addListener(on);
+        live.pending.add(fail);
+      };
+
+      void (async () => {
+        let opened = false;
+        try {
+          const open = (part: TextPart) => {
+            const send = () =>
+              live.port.postMessage({ t: 'speak', id, text: part.text, base: part.base, options, streaming: true });
+            try {
+              send();
+            } catch {
+              // The ordinary case of a worker evicted while idle: reconnect and say it again.
+              // Only the opening message gets this - by the time later parts go out the worker
+              // has answered, so a failure there is a real fault.
+              reconnect();
+              send();
+            }
+            opened = true;
+          };
+
+          for await (const part of parts) {
+            if (done) return; // superseded or already failed; stop pulling text nobody wants
+            if (opened) live.port.postMessage({ t: 'part', id, text: part.text, base: part.base });
+            else open(part);
+          }
+          if (!opened) open({ text: '', base: 0 });
+
+          if (!done) live.port.postMessage({ t: 'part', id, end: true });
+        } catch (e) {
+          const err = e instanceof Error ? e : new Error(String(e));
+          if (done) return;
+          if (!opened) {
+            // Nothing was ever spoken and nothing will be. Reject, or the caller waits forever
+            // for an `end` the worker has no reason to send. Tagged as a source failure so the
+            // caller reports it instead of retrying an engine that would find the same nothing.
+            fail(new SourceError(err));
+            return;
+          }
+          // Mid-page: an OCR pass threw, or the port died. Close the feed so the worker finishes
+          // what it already has rather than parking on a part that will never come - the page
+          // ends short instead of hanging.
+          console.warn('[kwr] page text stopped arriving:', String(err));
+          try {
+            live.port.postMessage({ t: 'part', id, end: true });
+          } catch {
+            // The port is gone; its disconnect handler rejects through `pending`.
+          }
+        }
+      })();
+    });
+  }
+
   stop(): void {
     this.#signal({ t: 'stop' });
   }
@@ -161,6 +271,20 @@ export class PortNarrator implements Narrator {
   }
   resume(): void {
     this.#signal({ t: 'resume' });
+  }
+}
+
+/**
+ * A failure that came from the TEXT SOURCE rather than the transport.
+ *
+ * The difference decides what to do about it: a dead worker is worth retrying on another engine,
+ * but an OCR pass that threw leaves nothing to say, and falling back would swap the engine, find
+ * the same empty feed, and report success on a page that was never read.
+ */
+class SourceError extends Error {
+  constructor(readonly reason: Error) {
+    super(reason.message);
+    this.name = 'SourceError';
   }
 }
 
@@ -225,11 +349,14 @@ export function useEngine(which: 'chrome-tts' | 'web-speech'): string {
 let stopped = false;
 
 /**
- * Speak a page's worth of text, sentence-chunked. `onWord` reports the character offset within
- * the ORIGINAL text (chunk offsets are added back), which is what highlighting keys on.
+ * Speak a page whose text arrives in parts - a two-column page, a column at a time, so the first
+ * word is heard while the second column is still being recognized.
+ *
+ * Every part carries its own `base`, so `onWord` reports offsets into the WHOLE page's text
+ * whichever part the word came from. That is what the highlight keys on.
  */
-export async function narrate(
-  text: string,
+export async function narrateStream(
+  parts: AsyncIterable<TextPart>,
   options?: SpeakOptions,
   onWord?: (charIndex: number, charLength: number | undefined) => void,
 ): Promise<void> {
@@ -237,13 +364,16 @@ export async function narrate(
   const engine = getNarrator();
   const report = (b: WordBoundary) => onWord?.(b.charIndex, b.charLength);
 
-  // Over the port the page goes as ONE message and the worker chunks it, because the right
-  // chunk schedule depends on the engine the worker chose (src/speak.ts, speakChunked).
+  // Over the port the parts go as ONE utterance and the worker chunks them, because the right
+  // chunk schedule depends on the engine the worker chose (src/speak.ts, speakStream).
   if (engine instanceof PortNarrator) {
     try {
-      await engine.speak(text, options, report);
+      await engine.speakParts(parts, options, report);
       return;
     } catch (e) {
+      // The text never arrived - an OCR pass threw. Another engine would find the same nothing,
+      // so report it rather than pretending to read the page.
+      if (e instanceof SourceError) throw e.reason;
       // Firefox ships no background page at all, so the bridge fails on the first utterance.
       // Fall back once rather than making the caller know which browser it is on.
       console.warn('[kwr] worker bridge unavailable, falling back to speechSynthesis:', String(e));
@@ -251,12 +381,41 @@ export async function narrate(
     }
   }
 
-  let base = 0;
-  for (const piece of chunk(text)) {
-    if (stopped) return;
-    await narrator!.speak(piece, options, (b) => onWord?.(base + b.charIndex, b.charLength));
-    base += piece.length + 1;
-  }
+  // NOTE: `parts` is a stream, so the fallback resumes from wherever the failed attempt left it
+  // rather than restarting the page. That is the wanted behaviour for a worker that died
+  // mid-page - the text already spoken is not spoken again.
+
+  // Wrapped rather than passed straight to `speakStream`, so the loop re-checks `stopped`
+  // between parts. speechSynthesis RESOLVES rather than rejects on cancel, so without the check
+  // a Stop would be followed by every remaining chunk of the page being spoken in turn.
+  const halting = (async function* () {
+    for await (const part of parts) {
+      if (stopped) return;
+      yield part;
+    }
+  })();
+
+  await speakStream(narrator!, halting, options, (b) => {
+    if (!stopped) onWord?.(b.charIndex, b.charLength);
+  });
+}
+
+/**
+ * Speak a page's worth of text, sentence-chunked. `onWord` reports the character offset within
+ * the ORIGINAL text, which is what highlighting keys on.
+ */
+export function narrate(
+  text: string,
+  options?: SpeakOptions,
+  onWord?: (charIndex: number, charLength: number | undefined) => void,
+): Promise<void> {
+  return narrateStream(
+    (async function* () {
+      yield { text, base: 0 };
+    })(),
+    options,
+    onWord,
+  );
 }
 
 export function stop(): void {

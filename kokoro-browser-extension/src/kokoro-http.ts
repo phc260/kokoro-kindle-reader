@@ -15,11 +15,11 @@
 // every frame.
 //
 //   worker:    /status, orchestration          (small JSON)
-//   offscreen: POST /synth -> ArrayBuffer -> AudioContext
+//   offscreen: POST /synth -> ArrayBuffer -> AudioContext, and the word marks off its clock
 
 import type { Narrator, SpeakOptions, VoiceInfo, WordBoundary } from './speak';
 import { langOf } from './voices';
-import { sendToOffscreen, sleep, startStream, tellOffscreen, waitForRoom } from './offscreen-client';
+import { onWordMarks, sendToOffscreen, sleep, startStream, tellOffscreen, waitForRoom } from './offscreen-client';
 
 export interface Pairing {
   base: string;
@@ -118,8 +118,14 @@ export class KokoroHttpNarrator implements Narrator {
     return s.voices.map((name) => ({ name, lang: langOf(name) ?? 'en-US', remote: false }));
   }
 
-  async speak(text: string, opts: SpeakOptions = {}, _onWord?: (b: WordBoundary) => void): Promise<void> {
-    await this.speakAll([text], opts);
+  async speak(text: string, opts: SpeakOptions = {}, onWord?: (b: WordBoundary) => void): Promise<void> {
+    await this.speakAll(
+      (async function* () {
+        yield text;
+      })(),
+      opts,
+      (b) => onWord?.(b),
+    );
   }
 
   /**
@@ -129,30 +135,59 @@ export class KokoroHttpNarrator implements Narrator {
    * always more audio queued than time to play it - which is exactly what hides the next
    * chunk's synthesis. Two things keep that honest: the epoch, so Stop discards work already in
    * flight, and the lead cap, so a page does not render five minutes ahead and throw it away.
+   *
+   * That lead is also why word boundaries cannot be reported from here. By the time a chunk's
+   * request is answered its audio may be half a minute from being heard, so the offscreen
+   * document times the marks off its own audio clock and broadcasts them; this only forwards
+   * them (see `onWordMarks`).
    */
-  async speakAll(chunks: string[], opts: SpeakOptions = {}, _onWord?: (b: WordBoundary, i: number) => void): Promise<void> {
+  async speakAll(
+    chunks: AsyncIterable<string>,
+    opts: SpeakOptions = {},
+    onWord?: (b: WordBoundary, i: number) => void,
+  ): Promise<void> {
     const epoch = await startStream();
+    const started = performance.now();
+    const unsubscribe = onWord
+      ? onWordMarks(epoch, (m) =>
+          onWord(
+            { charIndex: m.charIndex, charLength: m.charLength, elapsedMs: performance.now() - started },
+            m.chunk,
+          ),
+        )
+      : null;
 
-    for (const text of chunks) {
-      if (await waitForRoom(epoch)) return; // stopped
-      const r = await sendToOffscreen({
-        t: 'http-synth',
-        epoch,
-        base: this.#pairing.base,
-        token: this.#pairing.token,
-        text,
-        voice: opts.voiceName,
-        speed: opts.rate ?? 1,
-      });
-      if (r.stale) return;
-    }
+    try {
+      // ONE epoch for the whole feed. Chunks that only exist minutes in - the second column of a
+      // page, recognized while the first is playing - schedule onto the cursor already running,
+      // which is the same mechanism that makes consecutive chunks gapless.
+      let i = 0;
+      for await (const text of chunks) {
+        if (await waitForRoom(epoch)) return; // stopped
+        const r = await sendToOffscreen({
+          t: 'http-synth',
+          epoch,
+          index: i++,
+          base: this.#pairing.base,
+          token: this.#pairing.token,
+          text,
+          voice: opts.voiceName,
+          speed: opts.rate ?? 1,
+        });
+        if (r.stale) return;
+      }
 
-    // Everything is scheduled; speak() must not resolve until it has actually been heard.
-    for (;;) {
-      const s = await sendToOffscreen({ t: 'audio-status', epoch });
-      if (s.stale) return;
-      if ((s.queued ?? 0) === 0 && (s.lead ?? 0) <= 0.05) return;
-      await sleep(Math.min(1000, (s.lead ?? 0) * 1000 + 100));
+      // Everything is scheduled; speak() must not resolve until it has actually been heard.
+      for (;;) {
+        const s = await sendToOffscreen({ t: 'audio-status', epoch });
+        if (s.stale) return;
+        if ((s.queued ?? 0) === 0 && (s.lead ?? 0) <= 0.05) return;
+        await sleep(Math.min(1000, (s.lead ?? 0) * 1000 + 100));
+      }
+    } finally {
+      // However this ended - drained, stopped, or thrown - the listener has to go, or a page's
+      // worth of them accumulates on the worker and every later mark is delivered many times.
+      unsubscribe?.();
     }
   }
 

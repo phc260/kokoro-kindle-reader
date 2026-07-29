@@ -1,11 +1,12 @@
 // Foldable in-page control panel.
 //
 // Lives inside its own shadow root, for symmetry with the rest of the project: Amazon's CSS
-// cannot reach in and restyle it, and ours cannot leak out and disturb their layout. The host
-// element is the ONLY thing this extension adds to their DOM.
+// cannot reach in and restyle it, and ours cannot leak out and disturb their layout. This host
+// element and highlight.ts's are the only two things this extension adds to their DOM.
 //
-// Note it adds one shadow host to the page, so `selftest()` will report 38 rather than 37 while
-// the panel is mounted. It contains no blob: images, so candidate scoring is unaffected.
+// Note it adds one shadow host to the page, so `selftest()` will report 39 rather than 37 while
+// the panel and the highlight are both mounted. Neither contains blob: images, so candidate
+// scoring is unaffected.
 
 import type { SpeakOptions, VoiceInfo } from '../speak';
 import { buildVoiceTree, locateVoice, type AccentBucket } from '../voices';

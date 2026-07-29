@@ -9,7 +9,16 @@
 // It receives a page image as base64 (extension messaging is JSON-only - Blobs and
 // ArrayBuffers do not survive the hop) and returns the OcrResult, which is already plain data.
 
-import { recognize, type OcrResult } from './content/ocr';
+import {
+  preprocess,
+  recognize,
+  recognizeColumn,
+  recognizeColumnChecked,
+  type ColumnOcr,
+  type OcrResult,
+  type Prepared,
+} from './content/ocr';
+import { scheduleWords } from './word-timing';
 
 // --------------------------------------------------------------------------- audio out
 //
@@ -60,6 +69,7 @@ function startStream(): number {
 
   const { ctx } = audio();
   queued = 0;
+  clearMarks();
   // Start slightly ahead of "now" so the first frame is not already late.
   cursor = ctx.currentTime + 0.08;
   return ++epoch;
@@ -70,9 +80,15 @@ function leadSeconds(): number {
   return ctx ? Math.max(0, cursor - ctx.currentTime) : 0;
 }
 
-function pushSamples(samples: Float32Array<ArrayBuffer>): void {
+/** Where a scheduled chunk sits on the AudioContext clock. */
+interface Span {
+  at: number;
+  duration: number;
+}
+
+function pushSamples(samples: Float32Array<ArrayBuffer>): Span | null {
   const { ctx, gain } = audio();
-  if (!samples.length) return;
+  if (!samples.length) return null;
 
   const buf = ctx.createBuffer(1, samples.length, ctx.sampleRate);
   buf.copyToChannel(samples, 0);
@@ -93,11 +109,82 @@ function pushSamples(samples: Float32Array<ArrayBuffer>): void {
   src.onended = () => {
     if (mine === epoch) queued--;
   };
+
+  return { at, duration: buf.duration };
+}
+
+// ------------------------------------------------------------------------- word marks
+//
+// Kokoro returns audio and nothing else, so word boundaries are derived here (word-timing.ts
+// splits a chunk's known duration across its words) and fired against the AUDIO clock.
+//
+// Against the audio clock specifically, not `setTimeout`. `ctx.currentTime` stops advancing
+// while the context is suspended, so Pause freezes the highlight and Resume picks it up on the
+// same word - which a wall-clock timer would have run straight past. It is also the clock the
+// samples are actually scheduled on, so a mark cannot drift away from the sound it names.
+
+interface Mark {
+  /** AudioContext time. */
+  at: number;
+  epoch: number;
+  chunk: number;
+  charIndex: number;
+  charLength: number;
+}
+
+/** Pending marks, earliest first. */
+let marks: Mark[] = [];
+let ticker: ReturnType<typeof setInterval> | null = null;
+
+/**
+ * Fine enough that the highlight lands within a frame or two of the word, coarse enough to be
+ * free. Words run 200-500 ms, so this is well inside one.
+ */
+const TICK_MS = 40;
+
+function queueMarks(ep: number, chunkIndex: number, text: string, span: Span): void {
+  for (const m of scheduleWords(text, span.duration)) {
+    marks.push({ at: span.at + m.at, epoch: ep, chunk: chunkIndex, charIndex: m.charIndex, charLength: m.charLength });
+  }
+  // Chunks are scheduled in order, so this is almost always already sorted; cheap insurance
+  // against a reordering upstream putting the highlight into reverse.
+  marks.sort((a, b) => a.at - b.at);
+  ticker ??= setInterval(tick, TICK_MS);
+}
+
+function clearMarks(): void {
+  marks = [];
+  if (ticker !== null) {
+    clearInterval(ticker);
+    ticker = null;
+  }
+}
+
+function tick(): void {
+  if (!ctx) return clearMarks();
+
+  const now = ctx.currentTime;
+  // Only the LAST mark that has come due is sent. A highlight has one position, so the ones
+  // behind it are already superseded by the time they would be delivered.
+  let due: Mark | null = null;
+  while (marks.length && marks[0]!.at <= now) {
+    const m = marks.shift()!;
+    if (m.epoch === epoch) due = m;
+  }
+  if (due) {
+    void chrome.runtime
+      .sendMessage({ t: 'kwr-word', epoch: due.epoch, chunk: due.chunk, charIndex: due.charIndex, charLength: due.charLength })
+      // Nobody listening is normal: narration can be driven from the console with no page
+      // waiting on boundaries. A missed highlight must never break playback.
+      .catch(() => {});
+  }
+  if (!marks.length) clearMarks();
 }
 
 function stopAudio(): void {
   epoch++; // anything still being synthesized for the old epoch is now unwanted
   queued = 0;
+  clearMarks();
   // Abandon the request in flight, if any. Without this the fetch runs to completion and the
   // offscreen document sits waiting for audio nobody will hear.
   //
@@ -120,6 +207,28 @@ interface RunMessage {
   target: 'offscreen';
   b64: string;
   type?: string;
+  /** Recognize only this column. Absent means the whole page, every column. */
+  column?: number;
+  /** Identity of the render, so a second column reuses the first's preprocessing. */
+  key?: string;
+  /** This read is for word boxes only - keep every line and touch no furniture memory. */
+  trial?: boolean;
+}
+
+/**
+ * The last page prepared, so asking for its second column does not grayscale, invert and
+ * gutter-detect the whole image again.
+ *
+ * One entry: the caller works through a page's columns in order and never goes back. A miss is
+ * only ever a wasted preprocess, never a wrong answer, since the bytes come with every request.
+ */
+let prepared: { key: string; page: Prepared } | null = null;
+
+async function prepareOnce(key: string | undefined, blob: Blob): Promise<Prepared> {
+  if (key && prepared?.key === key) return prepared.page;
+  const page = await preprocess(blob);
+  prepared = key ? { key, page } : null;
+  return page;
 }
 
 function b64ToBlob(b64: string, type = 'image/png'): Blob {
@@ -138,6 +247,8 @@ type Message =
       t: 'http-synth';
       target: 'offscreen';
       epoch?: number;
+      /** Which chunk of the page this is. Carried back on every word mark it produces. */
+      index?: number;
       base: string;
       token: string;
       text: string;
@@ -152,8 +263,30 @@ chrome.runtime.onMessage.addListener((msg: Message, _sender, sendResponse) => {
     case 'ocr-run':
       (async () => {
         const blob = b64ToBlob(msg.b64, msg.type);
-        const result: OcrResult = await recognize(blob);
-        sendResponse({ ok: true, result });
+        const opts = { trial: msg.trial === true };
+        if (msg.column === undefined) {
+          const result: OcrResult = await recognize(blob, undefined, opts);
+          sendResponse({ ok: true, result });
+          return;
+        }
+        const page = await prepareOnce(msg.key, blob);
+        // Asking for a column that isn't there is how the caller learns the page is single
+        // column: answer with the count rather than throwing, so it stops after the first.
+        if (msg.column >= page.columns.length) {
+          sendResponse({ ok: true, columns: page.columns.length });
+          return;
+        }
+        // Only the first column can discover that the page was cut wrongly; if it did, the
+        // corrected preparation replaces what is cached so the second column agrees with it.
+        let result: ColumnOcr;
+        if (msg.column === 0) {
+          const checked = await recognizeColumnChecked(blob, page, 0, undefined, opts);
+          result = checked.result;
+          if (msg.key && checked.prepared !== page) prepared = { key: msg.key, page: checked.prepared };
+        } else {
+          result = await recognizeColumn(page, msg.column, undefined, opts);
+        }
+        sendResponse({ ok: true, result, columns: result.columns });
       })().catch((e) => sendResponse({ ok: false, error: String(e) }));
       return true; // keep the channel open for the async reply
 
@@ -216,7 +349,10 @@ chrome.runtime.onMessage.addListener((msg: Message, _sender, sendResponse) => {
         // Resolve once SCHEDULED, not once heard. Waiting for the audio here is what made every
         // chunk boundary a silence - the caller's next request could not even be sent until
         // this chunk had finished playing.
-        if (pcm.length) pushSamples(pcm); // empty = a punctuation-only chunk
+        const span = pcm.length ? pushSamples(pcm) : null; // empty = a punctuation-only chunk
+        // The word marks can only be laid down once the chunk has a place on the clock - which
+        // is here, since `pushSamples` is what decides where that is.
+        if (span) queueMarks(mine, msg.index ?? 0, msg.text, span);
         sendResponse({ ok: true, lead: leadSeconds() });
       })().catch((e) => sendResponse({ ok: false, error: String(e) }));
       return true;

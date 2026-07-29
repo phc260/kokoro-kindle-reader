@@ -1,16 +1,22 @@
 // Service worker. Owns chrome.tts, which is not exposed to content scripts, and bridges it to
 // the page over a long-lived port so word-boundary events can stream back as they happen.
 //
-// Protocol (content -> worker):  {t:'speak', text, options} | {t:'stop'} | {t:'pause'}
-//                                {t:'resume'} | {t:'voices'}
+// Protocol (content -> worker):  {t:'speak', id, text, base, streaming?, options}
+//                                {t:'part', id, text, base} | {t:'part', id, end:true}
+//                                {t:'stop'} | {t:'pause'} | {t:'resume'} | {t:'voices'}
 //          (worker -> content):  {t:'word', ...} | {t:'end'} | {t:'error', message}
 //                                {t:'voices', voices}
+//
+// `streaming` + `part` exist because a page's text does not all arrive at once: a two-column page
+// is OCR'd a column at a time so the first word can be heard while the second column is still
+// being recognized. The parts feed ONE utterance - a second `speak` would tear the first one's
+// audio down (`startStream` in offscreen.ts) and put a synthesis-length silence mid-page.
 //
 // When the Kokoro backend lands this is also where the native port and the audio graph live,
 // for the reason given in ARCHITECTURE.md: the worker outlives a content-script reload, so
 // navigation inside the reader cannot interrupt playback.
 
-import { ChromeTtsNarrator, speakChunked, type Narrator, type SpeakOptions } from './speak';
+import { ChromeTtsNarrator, PartQueue, speakStream, type Narrator, type SpeakOptions } from './speak';
 import { KokoroHttpNarrator, describeProbe, loadPairing, probeDaemon } from './kokoro-http';
 
 // --- engine selection ----------------------------------------------------------------------
@@ -108,24 +114,60 @@ async function ensureOffscreen(): Promise<void> {
   await creating;
 }
 
-chrome.runtime.onMessage.addListener((msg: { t?: string; b64?: string; type?: string }, _sender, sendResponse) => {
-  if (msg?.t !== 'ocr') return;
+chrome.runtime.onMessage.addListener(
+  (
+    msg: { t?: string; b64?: string; type?: string; column?: number; key?: string; trial?: boolean },
+    _sender,
+    sendResponse,
+  ) => {
+    if (msg?.t !== 'ocr') return;
 
-  (async () => {
-    await ensureOffscreen();
-    const reply = await chrome.runtime.sendMessage({ t: 'ocr-run', target: 'offscreen', b64: msg.b64, type: msg.type });
-    sendResponse(reply);
-  })().catch((e) => sendResponse({ ok: false, error: String(e) }));
+    (async () => {
+      await ensureOffscreen();
+      // `column`/`key`/`trial` pass straight through: a page is recognized one column at a time so
+      // the first can be spoken while the second is still running, `key` is what lets the
+      // offscreen document reuse the preprocessing between the two, and `trial` marks a read whose
+      // text is discarded so it must not touch the furniture memory.
+      const reply = await chrome.runtime.sendMessage({
+        t: 'ocr-run',
+        target: 'offscreen',
+        b64: msg.b64,
+        type: msg.type,
+        column: msg.column,
+        key: msg.key,
+        trial: msg.trial,
+      });
+      sendResponse(reply);
+    })().catch((e) => sendResponse({ ok: false, error: String(e) }));
 
-  return true; // async reply
-});
+    return true; // async reply
+  },
+);
 
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== 'narrate') return;
 
   let generation = 0;
+  /** Feeds for utterances still accepting text, by request id. */
+  const feeds = new Map<string, PartQueue>();
 
-  port.onMessage.addListener(async (msg: { t: string; id?: string; text?: string; options?: SpeakOptions; which?: string }) => {
+  /** End every open feed. Anything parked on one unwinds instead of hanging. */
+  const closeAll = () => {
+    for (const feed of feeds.values()) feed.close();
+    feeds.clear();
+  };
+
+  port.onMessage.addListener(async (msg: {
+    t: string;
+    id?: string;
+    text?: string;
+    base?: number;
+    /** Set on `speak` when more parts will follow; set on `part` to close the feed. */
+    streaming?: boolean;
+    end?: boolean;
+    options?: SpeakOptions;
+    which?: string;
+  }) => {
     try {
       switch (msg.t) {
         case 'voices': {
@@ -156,24 +198,66 @@ chrome.runtime.onConnect.addListener((port) => {
           port.postMessage({ t: 'engine', engine: await useEngine(msg.which === 'kokoro' ? 'kokoro' : 'platform') });
           break;
 
-        // The whole page arrives as one string and is chunked HERE, not in the content script:
-        // the chunk schedule depends on which engine got picked, and only this side knows that.
+        // The page's text is chunked HERE, not in the content script: the chunk schedule depends
+        // on which engine got picked, and only this side knows that.
+        //
+        // `streaming` means the page will arrive in more than one part - a two-column page, sent
+        // a column at a time. They all feed ONE utterance, so the late text joins the audio
+        // already playing rather than starting a second stream on top of it.
         case 'speak': {
           const mine = ++generation;
+          const id = msg.id ?? '';
+          // A new page supersedes any still accepting text. Without this the old one's feed is
+          // never closed, so its `speakStream` parks on it for the life of the worker and the
+          // map grows a dead entry per page.
+          closeAll();
+          const feed = new PartQueue();
+          feed.push({ text: msg.text ?? '', base: msg.base ?? 0 });
+          if (msg.streaming) feeds.set(id, feed);
+          else feed.close();
+
           const n = await narratorFor();
-          await speakChunked(n, msg.text ?? '', msg.options, (b) => {
-            // A stale utterance can still emit a boundary after being superseded; drop it
-            // rather than let it move the highlight backwards.
-            if (mine === generation) port.postMessage({ t: 'word', id: msg.id, ...b });
-          });
+          try {
+            // Cancelled while the engine was being chosen? Then say nothing. That await is not
+            // instant - on a first Play it connects to the daemon and loads the model, so it is
+            // seconds wide - and `closeAll` deliberately does NOT discard text already queued
+            // (it must not, or Stop racing the last column would lose the tail of a page). So a
+            // closed feed still has the opening part in it, and without this check a Stop during
+            // the connection is followed by the page starting to speak anyway. The generation
+            // check below only suppresses word messages; it never stopped the audio.
+            if (mine === generation) {
+              await speakStream(n, feed, msg.options, (b) => {
+                // A stale utterance can still emit a boundary after being superseded; drop it
+                // rather than let it move the highlight backwards.
+                if (mine === generation) port.postMessage({ t: 'word', id: msg.id, ...b });
+              });
+            }
+          } finally {
+            feeds.get(id)?.close();
+            feeds.delete(id);
+          }
           // Always answer, even when superseded: a cancelled utterance still has a caller
           // awaiting it, and `Narrator.speak` resolves rather than rejects when stopped.
           port.postMessage({ t: 'end', id: msg.id });
           break;
         }
 
+        // More of a page that is already being spoken, or the word that there is no more.
+        case 'part': {
+          const feed = msg.id ? feeds.get(msg.id) : undefined;
+          if (!feed) break; // superseded or already finished - the text has nowhere to go
+          if (msg.end) {
+            feed.close();
+            feeds.delete(msg.id!);
+          } else {
+            feed.push({ text: msg.text ?? '', base: msg.base ?? 0 });
+          }
+          break;
+        }
+
         case 'stop':
           generation++;
+          closeAll();
           (chosen ?? platform).stop();
           break;
 
@@ -192,6 +276,9 @@ chrome.runtime.onConnect.addListener((port) => {
 
   port.onDisconnect.addListener(() => {
     generation++;
+    // The page that was going to send the rest of this one is gone. Without this the worker
+    // stays parked on a feed forever, holding the utterance open.
+    closeAll();
     (chosen ?? platform).stop();
   });
 });

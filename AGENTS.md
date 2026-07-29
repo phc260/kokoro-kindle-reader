@@ -74,6 +74,37 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
   Flag any change that weakens the endpoint's four checks (127.0.0.1 bind, origin allowlist,
   constant-time token, `Host` check) or binds anything other than loopback. The extension
   manifest's `key` is load-bearing: it pins the id the origin allowlist matches.
+- **A page's columns feed ONE utterance.** A two-column page is OCR'd a column at a time so the
+  first can be spoken while the second is recognized; the parts go over the port into one
+  `PartQueue`. Flag any change that issues a second `speak` per column (it tears the running
+  audio stream down and puts a synthesis-length silence mid-page), that leaves a path where the
+  queue is not closed (finish, Stop, superseded, disconnect - a missed close parks the worker
+  forever), that cuts a part anywhere but a sentence end, or that infers a part's `base` from a
+  running total of part lengths instead of the producer stating it.
+- **In `ocr.ts`, a rule that can silently remove or reorder text must act on EVIDENCE, not on
+  appearance.** Four content losses came from thresholds encoding what a page was assumed to look
+  like. Appearance may pick candidates; only evidence may act — text no book has in its body, the
+  same thing seen on another page, or a decision verified after the fact and redone. **Flag any
+  new threshold whose failure is silent.** Specifically flag: dropping a line on a first sighting;
+  counting sightings rather than distinct pages (`pageToken` stops a page read twice counting as
+  two) or building that token from anything a reflow changes (whitespace, line structure,
+  hyphens); an OCR pass whose text is not narrated reaching the rule at all (the re-split wraps in
+  `furnitureCheckpoint()`, the reflow re-OCR passes `{trial:true}`); `measureOf` computed
+  page-wide rather than per column; removing the even-spacing check (it serves both the measure
+  test and `looksInterleaved`); deciding page polarity from a mean rather than the histogram mode;
+  or removing the per-page log of what was withheld — furniture OCRs perfectly, so nothing else
+  can detect the mistake. A constant that only degrades quality (`PLAYBACK_RAMP`, `PAD`, the
+  word-timing weights) is not covered by this.
+- **The browser's word highlight runs on ESTIMATED boundaries.** `/synth` returns PCM and the
+  stock model exposes no alignment, so `word-timing.ts` splits each chunk's exact duration
+  across its words by syllable count. Flag anything that presents these as true offsets, adds
+  a second estimator, or times them off `setTimeout` rather than `AudioContext.currentTime` —
+  the audio clock is what makes Pause freeze the highlight instead of running it to the end of
+  the page. Chunk offsets must stay aligned on non-whitespace characters; summing chunk lengths
+  drifts a character per paragraph break. A resize re-renders the reader's page with the text
+  reflowed, so the highlight re-OCRs it and relocates the word by its neighbours — flag anything
+  that re-anchors the NARRATION to a reflow (it is still speaking the text captured at the start
+  of the page) or that draws on an ambiguous or unmatched relocation.
 - **Kindle 18632's narrator is event-driven.** The SAPI engine must emit word/sentence/
   bookmark events at true audio offsets, or Kindle speaks one sentence per page and stops.
 - **The bundle is GPLv3 even though the source is MIT.** The app links espeak-ng

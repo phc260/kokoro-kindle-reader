@@ -8,11 +8,24 @@
 // browser permits a worker from an extension URL under the page's origin - the exact
 // uncertainty the offscreen route exists to remove.
 
-import { recognize, type OcrResult } from './ocr';
+import {
+  preprocess,
+  recognize,
+  recognizeColumn,
+  recognizeColumnChecked,
+  type ColumnOcr,
+  type OcrResult,
+  type Prepared,
+  type RecognizeOptions,
+} from './ocr';
 
 export type OcrRoute = 'offscreen' | 'in-page';
 
 export interface RoutedOcr extends OcrResult {
+  route: OcrRoute;
+}
+
+export interface RoutedColumn extends ColumnOcr {
   route: OcrRoute;
 }
 
@@ -40,16 +53,23 @@ function blobToBase64(blob: Blob): Promise<string> {
   });
 }
 
-async function viaOffscreen(blob: Blob): Promise<OcrResult> {
+/** A recognized result, or - for a column past the end of the page - just the column count. */
+interface OcrOk<T> {
+  ok: true;
+  result?: T;
+  columns?: number;
+}
+
+async function viaOffscreen<T>(blob: Blob, extra: Record<string, unknown> = {}): Promise<OcrOk<T>> {
   const b64 = await blobToBase64(blob);
-  const reply = (await chrome.runtime.sendMessage({ t: 'ocr', b64, type: blob.type })) as
-    | { ok: true; result: OcrResult }
+  const reply = (await chrome.runtime.sendMessage({ t: 'ocr', b64, type: blob.type, ...extra })) as
+    | OcrOk<T>
     | { ok: false; error: string }
     | undefined;
 
   if (!reply) throw new Error('no reply from the service worker (was it evicted?)');
   if (!reply.ok) throw new Error(reply.error);
-  return reply.result;
+  return reply;
 }
 
 const canOffscreen = () => typeof chrome !== 'undefined' && typeof chrome.runtime?.sendMessage === 'function';
@@ -58,20 +78,63 @@ const canOffscreen = () => typeof chrome !== 'undefined' && typeof chrome.runtim
  * OCR one captured page image. Tries the offscreen document first and falls back to in-page on
  * failure, remembering which worked so later pages skip the failed attempt.
  */
-export async function recognizePage(blob: Blob): Promise<RoutedOcr> {
+export async function recognizePage(blob: Blob, options: RecognizeOptions = {}): Promise<RoutedOcr> {
   if (route === 'in-page' || !canOffscreen()) {
     route = 'in-page';
-    return { ...(await recognize(blob)), route };
+    return { ...(await recognize(blob, undefined, options)), route };
   }
 
   try {
-    const result = await viaOffscreen(blob);
+    const reply = await viaOffscreen<OcrResult>(blob, { trial: options.trial });
     route = 'offscreen';
-    return { ...result, route };
+    return { ...reply.result!, route };
   } catch (e) {
     console.warn('[kwr] offscreen OCR failed, falling back to in-page:', String(e));
-    const result = await recognize(blob);
+    const result = await recognize(blob, undefined, options);
     route = 'in-page';
     return { ...result, route };
   }
 }
+
+/**
+ * OCR ONE column of a page, so the caller can start speaking the first while the second is still
+ * being recognized. Null once `index` is past the last column - which is how a single-column page
+ * announces itself.
+ *
+ * `key` identifies the render so the offscreen document can reuse its preprocessing between
+ * columns; the in-page fallback keeps its own copy for the same reason.
+ */
+export async function recognizeColumnOf(blob: Blob, index: number, key: string): Promise<RoutedColumn | null> {
+  const local = async (): Promise<RoutedColumn | null> => {
+    if (inPagePrepared?.key !== key) inPagePrepared = { key, page: await preprocess(blob) };
+    let page = inPagePrepared.page;
+    if (index >= page.columns.length) return null;
+    // Same missed-gutter check the offscreen route does. Without it this path - Firefox, and the
+    // fallback whenever the offscreen document is unavailable - reads a two-column page whose
+    // gutter is hidden by a figure straight across both columns, and narrates fluent nonsense.
+    if (index === 0) {
+      const checked = await recognizeColumnChecked(blob, page, 0);
+      if (checked.prepared !== page) inPagePrepared = { key, page: (page = checked.prepared) };
+      return { ...checked.result, route: 'in-page' };
+    }
+    return { ...(await recognizeColumn(page, index)), route: 'in-page' };
+  };
+
+  if (route === 'in-page' || !canOffscreen()) {
+    route = 'in-page';
+    return local();
+  }
+
+  try {
+    const reply = await viaOffscreen<ColumnOcr>(blob, { column: index, key });
+    route = 'offscreen';
+    return reply.result ? { ...reply.result, route } : null;
+  } catch (e) {
+    console.warn('[kwr] offscreen OCR failed, falling back to in-page:', String(e));
+    route = 'in-page';
+    return local();
+  }
+}
+
+/** The in-page fallback's equivalent of the offscreen document's prepared-page cache. */
+let inPagePrepared: { key: string; page: Prepared } | null = null;
