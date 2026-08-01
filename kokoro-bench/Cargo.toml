@@ -1,6 +1,6 @@
 [package]
 name = "kokoro-bench"
-version = "0.3.2"
+version = "0.3.3"
 edition = "2021"
 description = "Standalone GPU-vs-CPU synth timing tool (not part of the shipping app)"
 

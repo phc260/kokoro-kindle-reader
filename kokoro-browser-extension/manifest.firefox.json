@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Kokoro Kindle Reader",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Reads Kindle Cloud Reader aloud: captures the rendered page, OCRs it locally, and narrates it. No text leaves your machine.",
   "icons": {
     "32": "icons/32x32.png",

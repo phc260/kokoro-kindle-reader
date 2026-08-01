@@ -1,6 +1,6 @@
 [package]
 name = "kokoro-host"
-version = "0.3.2"
+version = "0.3.3"
 edition = "2021"
 description = "Synthesis host for Kokoro Kindle Reader"
 
@@ -43,9 +43,20 @@ tray-icon = "0.19"
 auto-launch = "0.5"
 # Decode the bundled PNG into RGBA for the tray icon (png only — keep it light).
 image = { version = "0.25", default-features = false, features = ["png"] }
-# Kindle-watcher (kindle_watch.rs): enumerate processes to detect Kindle.exe. The actual
-# injection is done by the separate x86 kokoro-inject.exe the watcher spawns.
+# Drive Kindle's "Assistive reader" (Read Aloud) from the Kindle-control thread
+# (kindle_ctl.rs). Moved here from kokoro-panel in 0.3.3: the host is the only process that
+# coordinates Kindle, so the panel now sends intent over the pipe instead. UIA is an OS
+# service, so this x64 host can inspect the x86 Kindle across the bitness boundary; the
+# crate wraps the painful COM/VARIANT plumbing.
+uiautomation = "0.25"
+# Kindle-watcher (kindle_watch.rs): enumerate processes to detect Kindle.exe (the actual
+# injection is done by the separate x86 kokoro-inject.exe the watcher spawns). The window
+# and input features are the Kindle-control thread's: foreground Kindle's window
+# (AttachThreadInput), send its Ctrl+A toggle with raw SendInput, and WM_CLOSE it.
 windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
 ] }

@@ -1,6 +1,6 @@
 [package]
 name = "kokoro-panel"
-version = "0.3.2"
+version = "0.3.3"
 edition = "2021"
 description = "Native settings panel for Kokoro Kindle Reader (Slint)"
 
@@ -34,13 +34,8 @@ rodio = { version = "0.19", default-features = false }
 # SHA-256-verified before commit.
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "blocking"] }
 sha2 = "0.10"
-# Drive Kindle's "Assistive reader" (Read Aloud) toggle via UI Automation — the new
-# Kindle exposes it as a UIA ToggleButton, so the x64 panel can flip it in the x86
-# Kindle (UIA is an OS service, cross-bitness). Wraps the painful COM/VARIANT plumbing.
-uiautomation = "0.25"
-# Hands-free Read Aloud: foreground the x86 Kindle window (AttachThreadInput) and send
-# its Ctrl+A toggle shortcut via raw SendInput. Same version uiautomation already pulls.
-# Win32_System_Diagnostics_ToolHelp: find Kindle.exe by process image name (same
-# technique as kokoro-host's kindle-watch/kokoro-inject) instead of a UIA window-title
-# match, which only works for an English-language "Kindle" title.
-windows = { version = "0.62", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_Threading", "Win32_System_Diagnostics_ToolHelp"] }
+
+# No Windows/UI-Automation dependency here on purpose. Driving Kindle used to live in this
+# crate; as of 0.3.3 `kokoro-host` is the sole authority for Kindle reading and health, and
+# the panel reaches it over the pipe (src/hostlink.rs). Adding a Win32 or UIA dep back would
+# be the first step to two processes disagreeing about what Kindle is doing.
