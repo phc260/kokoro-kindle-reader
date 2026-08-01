@@ -221,6 +221,29 @@ the panel and Read Aloud in Kindle (or `test-speak.ps1`).
   clock the samples are scheduled on, so a mark cannot drift from its sound. They reach the
   narrator as broadcasts filtered by epoch, because the lead means a chunk's audio is heard long
   after the request that scheduled it was answered.
+- **A live speed change is TWO things, and one of them alone does nothing audible.** The rate must
+  be read per chunk from a live `SpeakOptions` object — the panel keeps one and mutates it, and the
+  worker is told separately (`{t:'options', rate}`) because the port *clones* the options at `speak`
+  time. A fresh object per Play froze the speed for the whole book, which is what made the slider
+  look dead. But applying it only to chunks not yet sent still isn't audible for up to `MAX_LEAD_S`
+  (30 s): the lead is already-rendered audio, and `speed` is a *synthesis* parameter (the model
+  predicts shorter phoneme durations — which is why it doesn't shift the pitch), so those samples
+  cannot be retuned. Hence `audio-retune`: stop every source that hasn't started, rewind the cursor
+  to the end of the chunk being HEARD, drop that audio's marks, and re-send from there — **at the
+  same chunk indices**, or every later boundary remaps onto the wrong word. The playing chunk
+  finishes at the old speed; cutting it is a click for the sake of a second.
+- **A flush leaves NO lead, so the chunk it resumes on must re-enter `PLAYBACK_RAMP`.** This is the
+  same cold start as the top of a page and it has the same fix. Re-sending that chunk whole put a
+  silence *one to two sentences long* right after the change — ~5.8 s to render a settled chunk with
+  nothing buffered to hide it — which is the entire reason the ramp exists. The pieces are cut by
+  `chunk()` (so they still end at a sentence or clause), each carries the character `offset` where it
+  starts in its chunk, and `queueMarks` adds that to every mark — so a boundary still addresses the
+  whole chunk and `remap` never learns pieces exist. `retune` reports **index and offset**, not index
+  alone: a second change mid-ramp would otherwise resume at the top of a part-heard chunk and say a
+  sentence twice. Chunks after the resumed one go out whole; the ramp has rebuilt the lead by then.
+  Don't reach for `playbackRate` — it is instant and it sounds like a chipmunk. The retune fires on
+  the slider's `change`, never `input`: each committed value costs a real re-synthesis on the one
+  worker Kindle also queues behind.
 - **Chunk offsets are aligned on non-whitespace characters, not summed lengths.** `chunk()` only
   drops or normalizes whitespace, so counting ink is exact; summing lengths assumes one space
   between chunks and loses a character at every paragraph break — invisible for a sentence, about

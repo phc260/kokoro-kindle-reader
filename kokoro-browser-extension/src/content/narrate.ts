@@ -263,6 +263,18 @@ export class PortNarrator implements Narrator {
     });
   }
 
+  /**
+   * Change the speed of the utterance in flight.
+   *
+   * Needed because the port CLONES the options object: mutating the one this side is holding is
+   * what makes a slider move land for a narrator running in this context, and over the port that
+   * mutation is invisible. Fire-and-forget for the same reason as `stop` - there is no useful
+   * response, and a dead port means nothing is speaking anyway.
+   */
+  retune(rate: number): void {
+    this.#signal({ t: 'options', rate });
+  }
+
   stop(): void {
     this.#signal({ t: 'stop' });
   }
@@ -425,6 +437,20 @@ export function stop(): void {
 
 export function pause(): void {
   getNarrator().pause();
+}
+
+/**
+ * Apply a new speed to the page already being read.
+ *
+ * The caller's own `SpeakOptions` object is read per chunk all the way down, so writing `rate` on
+ * the object it passed to `narrate` is half the job and covers a narrator running in this context.
+ * The other half is this: over the port those options were cloned at `speak` time, so the worker
+ * has to be told separately. Both are needed - hence one call that does the second and a caller
+ * that has already done the first.
+ */
+export function retune(rate: number): void {
+  const n = getNarrator();
+  if (n instanceof PortNarrator) n.retune(rate);
 }
 
 export function resume(): void {

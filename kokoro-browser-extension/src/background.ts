@@ -4,6 +4,7 @@
 // Protocol (content -> worker):  {t:'speak', id, text, base, streaming?, options}
 //                                {t:'part', id, text, base} | {t:'part', id, end:true}
 //                                {t:'stop'} | {t:'pause'} | {t:'resume'} | {t:'voices'}
+//                                {t:'options', rate}
 //          (worker -> content):  {t:'word', ...} | {t:'end'} | {t:'error', message}
 //                                {t:'voices', voices}
 //
@@ -150,6 +151,16 @@ chrome.runtime.onConnect.addListener((port) => {
   let generation = 0;
   /** Feeds for utterances still accepting text, by request id. */
   const feeds = new Map<string, PartQueue>();
+  /**
+   * The options of the utterance in flight - the same object the narrator is holding, so writing to
+   * it IS the way a speed change reaches a page already playing.
+   *
+   * `options` arrives cloned on each `speak` message, so this is never the content script's object
+   * and mutating it cannot surprise the page. Every consumer re-reads `rate` per chunk
+   * (`speakAll`, `ChromeTtsNarrator.speak`), which is what makes the write land rather than sit
+   * there.
+   */
+  let live: SpeakOptions | null = null;
 
   /** End every open feed. Anything parked on one unwinds instead of hanging. */
   const closeAll = () => {
@@ -166,6 +177,8 @@ chrome.runtime.onConnect.addListener((port) => {
     streaming?: boolean;
     end?: boolean;
     options?: SpeakOptions;
+    /** `options`: the new speed, as a multiplier. */
+    rate?: number;
     which?: string;
   }) => {
     try {
@@ -217,6 +230,8 @@ chrome.runtime.onConnect.addListener((port) => {
           else feed.close();
 
           const n = await narratorFor();
+          const options = { ...msg.options };
+          live = options;
           try {
             // Cancelled while the engine was being chosen? Then say nothing. That await is not
             // instant - on a first Play it connects to the daemon and loads the model, so it is
@@ -226,7 +241,7 @@ chrome.runtime.onConnect.addListener((port) => {
             // the connection is followed by the page starting to speak anyway. The generation
             // check below only suppresses word messages; it never stopped the audio.
             if (mine === generation) {
-              await speakStream(n, feed, msg.options, (b) => {
+              await speakStream(n, feed, options, (b) => {
                 // A stale utterance can still emit a boundary after being superseded; drop it
                 // rather than let it move the highlight backwards.
                 if (mine === generation) port.postMessage({ t: 'word', id: msg.id, ...b });
@@ -235,6 +250,9 @@ chrome.runtime.onConnect.addListener((port) => {
           } finally {
             feeds.get(id)?.close();
             feeds.delete(id);
+            // Identity, not a flag: a superseded utterance unwinds AFTER the one that replaced it
+            // started, and clearing then would freeze the new page's speed at whatever it opened on.
+            if (live === options) live = null;
           }
           // Always answer, even when superseded: a cancelled utterance still has a caller
           // awaiting it, and `Narrator.speak` resolves rather than rejects when stopped.
@@ -254,6 +272,17 @@ chrome.runtime.onConnect.addListener((port) => {
           }
           break;
         }
+
+        // The speed slider moved while a page is being read. Written into the options object the
+        // narrator is holding, which every engine re-reads per chunk - for Kokoro that also gives
+        // back the lead, so the change is heard after the chunk in progress rather than after the
+        // half-minute of audio already rendered at the old speed (see `speakAll`).
+        //
+        // Nothing to do when nothing is speaking: the panel sends the current value with the next
+        // `speak`, so a change made between pages is carried by that.
+        case 'options':
+          if (live && typeof msg.rate === 'number') live.rate = msg.rate;
+          break;
 
         case 'stop':
           generation++;

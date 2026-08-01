@@ -114,6 +114,47 @@ Offsets are mapped back to the page by counting **non-whitespace characters**, n
 chunk lengths — `chunk()` only ever drops or normalizes whitespace, so the ink is an exact
 alignment where the running total drifts a character at every paragraph break.
 
+## Changing the speed while it reads
+
+The lead that makes playback gapless is what makes the speed slider hard: by the time you move it,
+up to `MAX_LEAD_S` (30) seconds of the page has **already been rendered at the old speed**. And
+Kokoro's `speed` is a synthesis parameter — the model predicts shorter phoneme durations, which is
+why speeding up does not raise the pitch — so those samples cannot be adjusted afterwards. (Web
+Audio's `playbackRate` could, and would sound like a chipmunk doing it.)
+
+So a change is applied in two steps, both of them necessary:
+
+1. **The rate is read per chunk, from a live object.** The panel keeps one `SpeakOptions` object and
+   writes `rate` into it; `speakAll` reads it as it sends each chunk. Over the port that object is
+   cloned at `speak` time, so the worker is told separately (`{t:'options', rate}`) and writes into
+   its own copy. Before this the panel built a fresh object per Play, which froze the speed for the
+   whole book — the slider moved and nothing happened, ever.
+2. **The unheard tail is discarded and asked for again.** `audio-retune` stops every source that has
+   not started, rewinds the cursor to the end of the chunk being heard, drops that audio's word
+   marks, and reports where synthesis has to pick up; the send loop resumes from there, at the
+   **same chunk indices**, so the boundaries a re-sent chunk produces still remap onto the same
+   words.
+3. **The first chunk after the flush re-enters `PLAYBACK_RAMP`.** A flush hands back the lead, which
+   puts synthesis in exactly the state it is in at the start of a page — nothing buffered — and a
+   settled-size chunk takes ~5.8 s to render. Sending one whole meant that whenever the chunk still
+   playing had less than that left, you heard a silence **one to two sentences long**. So the chunk
+   is re-sent in ramp-sized pieces, cut by `chunk()` at sentence and clause ends: the first renders
+   in well under a second and the rest grow back to settled behind it. Chunks after that one go out
+   whole again, because by then the lead covers a full chunk.
+
+A piece carries the character `offset` where it starts within its chunk, and the offscreen document
+adds that to every word mark it derives. So a boundary is always addressed to the whole chunk and the
+narrator's `remap` never learns that pieces exist. It is also what lets a *second* speed change land
+mid-ramp without repeating a sentence: the flush reports chunk **and** offset, so it resumes at the
+piece after the one being heard rather than at the top of a part-heard chunk.
+
+The chunk playing when you let go of the slider finishes at the old speed — cutting it mid-word
+would be an audible click in exchange for a second or two.
+
+The retune fires on the slider's `change`, not `input`: a drag emits dozens of `input` events and
+each committed value costs a real re-synthesis on the one synth worker Kindle also queues behind.
+The readout follows the drag; the audio changes when you let go.
+
 ## Setup
 
 **1. Build.** `dist/` is not committed; regenerate it:
@@ -162,7 +203,7 @@ header) live in [`kokoro-host/src/webserve.rs`](../kokoro-host/src/webserve.rs).
 | `src/content/highlight.ts` | The word mark: `charIndex` → OCR word → bbox → screen rect, in its own shadow root. Relocates the word when a resize reflows the page |
 | `src/background.ts` | Service worker. Picks the engine (Kokoro if paired, else `chrome.tts`), owns the port to the page, and feeds a page's parts into one utterance |
 | `src/speak.ts` | The narration seam: chunk schedule, the part stream and its offset mapping, where a part may be cut |
-| `src/offscreen.ts` | Offscreen document: the Tesseract worker **and** the AudioContext — a service worker has neither. Fires the word marks off the audio clock |
+| `src/offscreen.ts` | Offscreen document: the Tesseract worker **and** the AudioContext — a service worker has neither. Fires the word marks off the audio clock, and gives back the lead on a speed change |
 | `src/offscreen-client.ts` | The pacing rules: lead cap, throttle loop, epoch handling, word-mark subscription |
 | `src/word-timing.ts` | Splits a chunk's known duration across its words. Kokoro's only source of boundaries |
 | `src/kokoro-http.ts` | The narrator, pairing storage, and the daemon probe |
@@ -187,8 +228,8 @@ Firefox as working until it is.
 
 ```bash
 bun run typecheck     # tsc --noEmit
-bun test test/        # chunking + offsets, part streaming, word timing, word lookup,
-                      # furniture, voices, tar, and manifest/permission drift guards
+bun test test/        # chunking + offsets, part streaming, word timing, word lookup, furniture,
+                      # voices, tar, the speed-change re-send, and manifest/permission drift guards
 ```
 
 The manifest tests exist because permission drift fails **silently**: Chrome simply omits the

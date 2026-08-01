@@ -26,6 +26,8 @@ export interface PanelActions {
   stop(): void;
   pause(): void;
   resume(): void;
+  /** Apply a new speed to the page already being read. See `narrate.retune`. */
+  retune(rate: number): void;
   voices(): Promise<VoiceInfo[]>;
   position(): Position;
 }
@@ -354,12 +356,43 @@ export function mountPanel(actions: PanelActions): PanelHandle {
     noteVoice();
   });
 
+  // --- speed
+  /**
+   * ONE options object for the session, MUTATED rather than replaced.
+   *
+   * Everything downstream re-reads `rate` as it sends each chunk, so writing to this object is what
+   * carries a speed change into the page already playing. A fresh object per Play froze the speed
+   * at the moment Play was pressed - for the whole book, since `readBook` passes what it was given
+   * to every page - and that is what made the slider look dead.
+   *
+   * The voice is deliberately NOT live: it is set at Play and left alone, so switching voices takes
+   * effect on the next Play rather than swapping narrator mid-sentence.
+   */
+  const live: SpeakOptions = { voiceName: prefs.voice || undefined, rate: prefs.rate };
+
+  const opts = (): SpeakOptions => {
+    live.voiceName = prefs.voice || undefined;
+    live.rate = prefs.rate;
+    return live;
+  };
+
   rateEl.value = String(prefs.rate);
   rateVal.textContent = fmtRate(prefs.rate);
+
+  // The readout follows the drag; the SPEED changes when the drag ends.
+  //
+  // `input` fires continuously - dozens of times across one drag - and each committed value costs a
+  // real retune: the audio rendered ahead at the old speed is thrown away and asked for again, on
+  // the single synth worker Kindle also queues behind. `change` is the same value a moment later
+  // (drag release, or each keyboard step), and it is once.
   rateEl.addEventListener('input', () => {
     prefs.rate = Number(rateEl.value);
     rateVal.textContent = fmtRate(prefs.rate);
     savePrefs(prefs);
+  });
+  rateEl.addEventListener('change', () => {
+    live.rate = prefs.rate;
+    actions.retune(prefs.rate);
   });
 
   // --- transport
@@ -379,8 +412,6 @@ export function mountPanel(actions: PanelActions): PanelHandle {
     paused = false;
     syncTransport();
   };
-
-  const opts = (): SpeakOptions => ({ voiceName: prefs.voice || undefined, rate: prefs.rate });
 
   btn('play').addEventListener('click', () => {
     void (async () => {

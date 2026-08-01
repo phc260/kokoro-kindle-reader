@@ -123,6 +123,21 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
   reflowed, so the highlight re-OCRs it and relocates the word by its neighbours — flag anything
   that re-anchors the NARRATION to a reflow (it is still speaking the text captured at the start
   of the page) or that draws on an ambiguous or unmatched relocation.
+- **A live speed change needs BOTH a per-chunk rate and a flush of the lead.** The panel mutates one
+  `SpeakOptions` object and tells the worker (`{t:'options', rate}`), since the port clones the
+  options at `speak` time; `speakAll` then re-reads the rate per send. That alone is inaudible for up
+  to `MAX_LEAD_S` — `speed` is a synthesis parameter, so already-rendered samples cannot be adjusted
+  — so `audio-retune` discards every source that has not started, rewinds the cursor to the end of
+  the chunk being heard, and the loop re-sends from there. A flush leaves no lead, so the chunk it
+  resumes on is re-sent in `PLAYBACK_RAMP`-sized pieces - the same cold start as the top of a page;
+  whole, it is a silence one to two sentences long. Flag: a fresh options object per Play (it freezes
+  the speed for the whole book); a re-send under a NEW chunk index (every later word boundary then
+  remaps onto the wrong word); a cold resume at the settled chunk size; dropping the per-piece
+  `offset` from the wire or from `queueMarks` (marks then address the piece instead of the chunk, and
+  a second change mid-ramp repeats a sentence); `playbackRate` used to retune scheduled audio (it
+  shifts the pitch); cutting the chunk currently playing; a retune driven by the slider's `input`
+  rather than `change` (a drag then costs dozens of re-syntheses on the worker Kindle shares); or a
+  flush that bumps the epoch (that is a Stop, and it ends the page).
 - **Kindle 18632's narrator is event-driven.** The SAPI engine must emit word/sentence/
   bookmark events at true audio offsets, or Kindle speaks one sentence per page and stops.
 - **The bundle is GPLv3 even though the source is MIT.** The app links espeak-ng

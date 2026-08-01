@@ -34,6 +34,13 @@ let cursor = 0;
 /** Sources scheduled but not yet finished. `audio-status` reports it; that is how a caller knows the page has been heard. */
 let queued = 0;
 /**
+ * The chunks scheduled on the cursor, in the order they were scheduled.
+ *
+ * Kept only so a SPEED change can throw away the ones nobody has heard yet - see `retune`. Pruned
+ * as they finish, so this is at most the handful of chunks covering the lead.
+ */
+let sources: { src: AudioBufferSourceNode; at: number; end: number; index: number; offset: number }[] = [];
+/**
  * Playback generation. Bumped by every `audio-start` and every stop, and carried on each
  * message that schedules or inspects audio. A chunk that was being synthesized when you pressed
  * Stop arrives with a stale epoch and is dropped instead of playing over the silence.
@@ -69,6 +76,7 @@ function startStream(): number {
 
   const { ctx } = audio();
   queued = 0;
+  sources = [];
   clearMarks();
   // Start slightly ahead of "now" so the first frame is not already late.
   cursor = ctx.currentTime + 0.08;
@@ -86,7 +94,7 @@ interface Span {
   duration: number;
 }
 
-function pushSamples(samples: Float32Array<ArrayBuffer>): Span | null {
+function pushSamples(samples: Float32Array<ArrayBuffer>, index: number, offset: number): Span | null {
   const { ctx, gain } = audio();
   if (!samples.length) return null;
 
@@ -110,7 +118,71 @@ function pushSamples(samples: Float32Array<ArrayBuffer>): Span | null {
     if (mine === epoch) queued--;
   };
 
+  // Anything that has finished playing can no longer be retuned, so it is only ballast.
+  sources = sources.filter((s) => s.end > ctx.currentTime);
+  sources.push({ src, at, end: at + buf.duration, index, offset });
+
   return { at, duration: buf.duration };
+}
+
+/**
+ * Throw away the scheduled-but-unheard tail, so a NEW speed is heard now rather than in half a
+ * minute. Returns where synthesis has to pick up again - the chunk index and the character offset
+ * within it - or undefined if the cursor held nothing spare.
+ *
+ * Speed is a synthesis parameter - the model predicts shorter phoneme durations, which is why it
+ * does not change the pitch. Already-rendered samples therefore cannot be retuned; the only way a
+ * speed change reaches the ear is to discard the audio rendered at the old one and ask for it
+ * again. Up to `MAX_LEAD_S` of it can be sitting on the cursor, and until this existed that was
+ * exactly how long a slider move took to be audible.
+ *
+ * The chunk being HEARD is never cut: it keeps playing to its end at the old speed, and the cursor
+ * rewinds to just after it. Cutting mid-chunk would be an audible click in exchange for a couple of
+ * seconds.
+ *
+ * The offset matters because a chunk can be scheduled in several pieces - which is what `speakAll`
+ * does with the first chunk after a flush, to get a sound out before the lead is rebuilt. Reporting
+ * only the index would resume at the START of a part-heard chunk on a second change, and the reader
+ * would hear a sentence twice.
+ */
+function retune(): { index: number; offset: number } | undefined {
+  if (!ctx) return undefined;
+
+  const now = ctx.currentTime;
+  const keep: typeof sources = [];
+  /**
+   * Where to resume. The FIRST thing dropped, not the lowest index found: everything is scheduled
+   * in send order onto one cursor, so `at` rises monotonically and so do index and offset - the
+   * first source past `now` is the earliest text nobody is going to hear.
+   */
+  let from: { index: number; offset: number } | undefined;
+
+  for (const s of sources) {
+    if (s.at <= now) {
+      keep.push(s); // playing, or already played
+      continue;
+    }
+    // Drop the handler BEFORE stopping: a stopped source fires `ended` too, and letting that
+    // decrement as well would drive `queued` negative - after which the drain poll's `queued === 0`
+    // never matches again and the page never finishes.
+    s.src.onended = null;
+    try {
+      s.src.stop();
+    } catch {
+      // Already stopped, or the context went away under us. Either way it is not going to be heard.
+    }
+    s.src.disconnect();
+    queued--;
+    from ??= { index: s.index, offset: s.offset };
+  }
+
+  sources = keep.filter((s) => s.end > now);
+  cursor = keep.reduce((end, s) => Math.max(end, s.end), now);
+  // The marks of a chunk that is no longer going to play. Its replacement lays down its own.
+  marks = marks.filter((m) => m.at < cursor);
+  if (!marks.length) clearMarks();
+
+  return from;
 }
 
 // ------------------------------------------------------------------------- word marks
@@ -142,9 +214,20 @@ let ticker: ReturnType<typeof setInterval> | null = null;
  */
 const TICK_MS = 40;
 
-function queueMarks(ep: number, chunkIndex: number, text: string, span: Span): void {
+/**
+ * `offset` is where `text` starts within chunk `chunkIndex` - non-zero when the chunk is being sent
+ * in pieces. Added to every mark, so a boundary is always addressed to the whole chunk and the
+ * narrator's `remap` needs to know nothing about the pieces.
+ */
+function queueMarks(ep: number, chunkIndex: number, text: string, span: Span, offset: number): void {
   for (const m of scheduleWords(text, span.duration)) {
-    marks.push({ at: span.at + m.at, epoch: ep, chunk: chunkIndex, charIndex: m.charIndex, charLength: m.charLength });
+    marks.push({
+      at: span.at + m.at,
+      epoch: ep,
+      chunk: chunkIndex,
+      charIndex: offset + m.charIndex,
+      charLength: m.charLength,
+    });
   }
   // Chunks are scheduled in order, so this is almost always already sorted; cheap insurance
   // against a reordering upstream putting the highlight into reverse.
@@ -184,6 +267,7 @@ function tick(): void {
 function stopAudio(): void {
   epoch++; // anything still being synthesized for the old epoch is now unwanted
   queued = 0;
+  sources = [];
   clearMarks();
   // Abandon the request in flight, if any. Without this the fetch runs to completion and the
   // offscreen document sits waiting for audio nobody will hear.
@@ -242,6 +326,7 @@ type Message =
   | RunMessage
   | { t: 'audio-start'; target: 'offscreen'; sampleRate?: number }
   | { t: 'audio-status'; target: 'offscreen'; epoch: number }
+  | { t: 'audio-retune'; target: 'offscreen'; epoch: number }
   | { t: 'audio-stop' | 'audio-pause' | 'audio-resume'; target: 'offscreen' }
   | {
       t: 'http-synth';
@@ -252,6 +337,8 @@ type Message =
       base: string;
       token: string;
       text: string;
+      /** Where `text` starts within chunk `index`. Non-zero only for a chunk sent in pieces. */
+      offset?: number;
       voice?: string;
       speed?: number;
     };
@@ -303,6 +390,14 @@ chrome.runtime.onMessage.addListener((msg: Message, _sender, sendResponse) => {
       sendResponse({ ok: true, stale: msg.epoch !== epoch, queued, lead: leadSeconds() });
       return false;
 
+    // The speed changed mid-page. Drop the tail rendered at the old one and say from which chunk.
+    // NOT a stop: the epoch stands, so the utterance carries on and the chunk being heard is
+    // undisturbed - only the lead is given back.
+    case 'audio-retune':
+      if (msg.epoch !== epoch) sendResponse({ ok: true, stale: true });
+      else sendResponse({ ok: true, resume: retune(), lead: leadSeconds() });
+      return false;
+
     // Fetching here rather than in the service worker is the whole point: the response is raw
     // f32 PCM, and an ArrayBuffer cannot survive extension messaging - it would have to be
     // base64'd through the worker at a 33% cost per frame.
@@ -349,10 +444,11 @@ chrome.runtime.onMessage.addListener((msg: Message, _sender, sendResponse) => {
         // Resolve once SCHEDULED, not once heard. Waiting for the audio here is what made every
         // chunk boundary a silence - the caller's next request could not even be sent until
         // this chunk had finished playing.
-        const span = pcm.length ? pushSamples(pcm) : null; // empty = a punctuation-only chunk
+        const offset = msg.offset ?? 0;
+        const span = pcm.length ? pushSamples(pcm, msg.index ?? 0, offset) : null; // empty = punctuation-only
         // The word marks can only be laid down once the chunk has a place on the clock - which
         // is here, since `pushSamples` is what decides where that is.
-        if (span) queueMarks(mine, msg.index ?? 0, msg.text, span);
+        if (span) queueMarks(mine, msg.index ?? 0, msg.text, span, offset);
         sendResponse({ ok: true, lead: leadSeconds() });
       })().catch((e) => sendResponse({ ok: false, error: String(e) }));
       return true;

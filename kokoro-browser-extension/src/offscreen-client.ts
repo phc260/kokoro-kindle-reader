@@ -15,6 +15,9 @@
  */
 export const MAX_LEAD_S = 30;
 
+/** How finely a wait is sliced when something has to be noticed during it. */
+const POLL_MS = 200;
+
 export const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 export interface OffscreenReply {
@@ -26,6 +29,17 @@ export interface OffscreenReply {
   /** Seconds of audio scheduled but not yet heard. */
   lead?: number;
   queued?: number;
+  /** `audio-retune` only: where synthesis has to pick up, if anything was discarded. */
+  resume?: Resume;
+}
+
+/**
+ * Where a flushed stream has to be synthesized again from: a chunk index, and how far into that
+ * chunk's text. The offset is only ever non-zero for a chunk that was scheduled in pieces.
+ */
+export interface Resume {
+  index: number;
+  offset: number;
 }
 
 /** Send one message to the offscreen document, throwing if it reports failure. */
@@ -82,17 +96,45 @@ export function onWordMarks(epoch: number, cb: (m: WordMarkMessage) => void): ()
 }
 
 /**
- * Block while the buffer is full. Returns true if playback was cancelled meanwhile.
+ * Give back the lead so a new speed can be heard now. Returns where to resume synthesis,
+ * `'stopped'` if playback ended meanwhile, or undefined if there was nothing spare.
+ *
+ * See `retune` in offscreen.ts for why discarding is the only way: speed is a property of the
+ * synthesis, so samples already rendered at the old one cannot be adjusted.
+ */
+export async function retuneStream(epoch: number): Promise<Resume | 'stopped' | undefined> {
+  const r = await sendToOffscreen({ t: 'audio-retune', epoch });
+  return r.stale ? 'stopped' : r.resume;
+}
+
+/**
+ * Block while the buffer is full. Returns why it stopped blocking.
  *
  * Also what keeps the MV3 service worker alive mid-page: a message every couple of seconds
  * resets its idle timer.
+ *
+ * `interrupt` is polled alongside the buffer, because a full buffer is exactly the state a speed
+ * change needs to be noticed in: this is where a page spends most of its time, and waiting the
+ * throttle out first would add seconds to the one change the reader is listening for.
  */
-export async function waitForRoom(epoch: number): Promise<boolean> {
+export async function waitForRoom(
+  epoch: number,
+  interrupt?: () => boolean,
+): Promise<'room' | 'stopped' | 'interrupted'> {
   for (;;) {
+    if (interrupt?.()) return 'interrupted';
     const s = await sendToOffscreen({ t: 'audio-status', epoch });
-    if (s.stale) return true;
+    if (s.stale) return 'stopped';
     const lead = s.lead ?? 0;
-    if (lead < MAX_LEAD_S) return false;
-    await sleep(Math.min(2000, (lead - MAX_LEAD_S) * 1000 + 250));
+    if (lead < MAX_LEAD_S) return 'room';
+
+    const nap = Math.min(2000, (lead - MAX_LEAD_S) * 1000 + 250);
+    if (!interrupt) {
+      await sleep(nap);
+      continue;
+    }
+    // Sliced, so a change made a moment after the nap started is acted on then rather than two
+    // seconds later. The slices are timers, not messages - the polling costs nothing.
+    for (let left = nap; left > 0 && !interrupt(); left -= POLL_MS) await sleep(Math.min(POLL_MS, left));
   }
 }

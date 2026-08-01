@@ -17,9 +17,17 @@
 //   worker:    /status, orchestration          (small JSON)
 //   offscreen: POST /synth -> ArrayBuffer -> AudioContext, and the word marks off its clock
 
-import type { Narrator, SpeakOptions, VoiceInfo, WordBoundary } from './speak';
+import { planChunks, PLAYBACK_RAMP, type Narrator, type SpeakOptions, type VoiceInfo, type WordBoundary } from './speak';
 import { langOf } from './voices';
-import { onWordMarks, sendToOffscreen, sleep, startStream, tellOffscreen, waitForRoom } from './offscreen-client';
+import {
+  onWordMarks,
+  retuneStream,
+  sendToOffscreen,
+  sleep,
+  startStream,
+  tellOffscreen,
+  waitForRoom,
+} from './offscreen-client';
 
 export interface Pairing {
   base: string;
@@ -140,6 +148,12 @@ export class KokoroHttpNarrator implements Narrator {
    * request is answered its audio may be half a minute from being heard, so the offscreen
    * document times the marks off its own audio clock and broadcasts them; this only forwards
    * them (see `onWordMarks`).
+   *
+   * `opts` is read on every send rather than once, and it is the LIVE object the caller is holding:
+   * that is how a speed change lands on the page already playing. That is only half of it - a rate
+   * applied to chunks not yet sent is still half a minute of the old speed, because the lead this
+   * method works to build is exactly that much already-rendered audio. The other half is
+   * `retuneStream`, which gives the lead back (see `retune` in offscreen.ts).
    */
   async speakAll(
     chunks: AsyncIterable<string>,
@@ -157,28 +171,102 @@ export class KokoroHttpNarrator implements Narrator {
         )
       : null;
 
-    try {
-      // ONE epoch for the whole feed. Chunks that only exist minutes in - the second column of a
-      // page, recognized while the first is playing - schedule onto the cursor already running,
-      // which is the same mechanism that makes consecutive chunks gapless.
-      let i = 0;
-      for await (const text of chunks) {
-        if (await waitForRoom(epoch)) return; // stopped
-        const r = await sendToOffscreen({
-          t: 'http-synth',
-          epoch,
-          index: i++,
-          base: this.#pairing.base,
-          token: this.#pairing.token,
-          text,
-          voice: opts.voiceName,
-          speed: opts.rate ?? 1,
-        });
-        if (r.stale) return;
-      }
+    // ONE epoch for the whole feed. Chunks that only exist minutes in - the second column of a
+    // page, recognized while the first is playing - schedule onto the cursor already running,
+    // which is the same mechanism that makes consecutive chunks gapless.
+    //
+    // The chunks are kept as they are sent, because a speed change has to be able to ask for the
+    // unheard ones again - at their ORIGINAL indices, so the boundaries a re-sent chunk produces
+    // still remap onto the same words (`planStream` keys its owners by chunk order).
+    const sent: string[] = [];
+    let next = 0;
+    let drained = false;
+    const feed = chunks[Symbol.asyncIterator]();
 
-      // Everything is scheduled; speak() must not resolve until it has actually been heard.
+    /** The speed everything scheduled so far was rendered at. */
+    let speed = opts.rate ?? 1;
+    const changed = () => (opts.rate ?? 1) !== speed;
+
+    /** Chunk `next` as the piece(s) it goes out in - one whole piece, normally. */
+    let pending: { text: string; offset: number }[] = [];
+
+    /**
+     * The pieces of chunk `index` from character `from` onward.
+     *
+     * `ramp` re-enters `PLAYBACK_RAMP` for the first chunk after a flush, and it is the difference
+     * between a change that is heard and one that leaves a hole. A flush hands back the lead, which
+     * puts synthesis in exactly the state it is in at the start of a page - nothing buffered - and a
+     * settled-size chunk takes ~5.8s to render. Whenever the chunk still playing had less than that
+     * left, the reader heard a silence one to two sentences long. The ramp's first piece renders in
+     * well under a second and the rest grow back to settled behind it, which is the same shape and
+     * the same reasoning as the opening of a page.
+     *
+     * Cut by `chunk()`, so a piece still ends at a sentence or clause end rather than mid-phrase,
+     * and each piece states where it starts in the chunk's text (counted in ink, since `chunk()`
+     * normalizes whitespace) so its word marks stay addressed to the chunk.
+     */
+    const load = (index: number, ramp: boolean, from = 0): { text: string; offset: number }[] => {
+      const text = sent[index]!;
+      if (!ramp) return [{ text, offset: 0 }];
+      const sub = planChunks(text, PLAYBACK_RAMP);
+      return sub.pieces
+        .map((text, i) => ({ text, offset: sub.remap({ charIndex: 0, elapsedMs: 0 }, i).charIndex }))
+        .filter((p) => p.offset >= from);
+    };
+
+    try {
       for (;;) {
+        // Take the new speed first, so nothing is sent at the old one after this point, and only
+        // then give back the lead. Anything discarded is re-sent by the loop below.
+        if (changed()) {
+          speed = opts.rate ?? 1;
+          const resume = await retuneStream(epoch);
+          if (resume === 'stopped') return;
+          if (resume) {
+            next = resume.index;
+            pending = load(next, true, resume.offset);
+          }
+          continue;
+        }
+
+        if (pending.length || next < sent.length || !drained) {
+          if (!pending.length) {
+            if (next === sent.length) {
+              const it = await feed.next();
+              if (it.done) {
+                drained = true;
+                continue;
+              }
+              sent.push(it.value);
+            }
+            pending = load(next, false);
+          }
+          const room = await waitForRoom(epoch, changed);
+          if (room === 'stopped') return;
+          if (room === 'interrupted') continue; // retune first, then send at the new speed
+          const piece = pending[0]!;
+          const r = await sendToOffscreen({
+            t: 'http-synth',
+            epoch,
+            index: next,
+            offset: piece.offset,
+            base: this.#pairing.base,
+            token: this.#pairing.token,
+            text: piece.text,
+            voice: opts.voiceName,
+            speed,
+          });
+          if (r.stale) return;
+          pending.shift();
+          // The chunk is only done when its last piece has gone out. Everything after the flushed
+          // one goes whole again - by then the ramp has rebuilt a lead that covers a full chunk.
+          if (!pending.length) next++;
+          continue;
+        }
+
+        // Everything is scheduled; speak() must not resolve until it has actually been heard. The
+        // speed can still change in here - a page's tail is up to the lead cap wide - and the check
+        // at the top of the loop is what picks that up, which is why this is one loop and not two.
         const s = await sendToOffscreen({ t: 'audio-status', epoch });
         if (s.stale) return;
         if ((s.queued ?? 0) === 0 && (s.lead ?? 0) <= 0.05) return;
@@ -188,6 +276,8 @@ export class KokoroHttpNarrator implements Narrator {
       // However this ended - drained, stopped, or thrown - the listener has to go, or a page's
       // worth of them accumulates on the worker and every later mark is delivered many times.
       unsubscribe?.();
+      // The feed is driven by hand rather than by `for await`, so closing it is by hand too.
+      await feed.return?.();
     }
   }
 

@@ -348,6 +348,7 @@ const api = {
         stop: () => api.stop(),
         pause: () => narrate.pause(),
         resume: () => narrate.resume(),
+        retune: (rate) => narrate.retune(rate),
         voices: () => narrate.voices(),
         engine: () => narrate.engineKind(),
         engineError: () => narrate.engineError(),
