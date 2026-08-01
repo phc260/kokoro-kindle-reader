@@ -59,11 +59,14 @@ Drift-prone claim types to check explicitly:
   `native-deps/*.ps1`, `model-manifest.json`, `icons/`).
 - **Wire-protocol names** — the markers named in docs match the `kokoro-protocol` crate
   (`STREAM_END`/`SYNTH_ERROR` = `0xFFFF_FFFE`/`0xFFFF_FFFF`, `CHUNK_INFO` = `0xFFFF_FFFD`,
-  the `'S'` request `[rate][textBytes][text]`, the `[nSamples][gain][f32…]` frame format).
+  the `'S'` request `[rate][textBytes][text]`, the `[nSamples][gain][f32…]` frame format,
+  and the `'P'`/`'K'` commands with `'K'`'s reply layout).
 - **`controls.json` keys** — the keys the docs list are the ones actually written/read
-  (`voice`, `speed`, `gain`, `chunk`, `kindle_kokoro`, `paused`, `gpu_synth`). `paused` is a
-  live pause command (not a persisted setting): the panel writes it and `pipe.rs` consumes it
-  per sub-frame to stall the stream. `gpu_synth` (GPU vs. CPU execution provider, default
+  (`voice`, `speed`, `gain`, `chunk`, `kindle_kokoro`, `gpu_synth`), and they are *settings*.
+  `paused` used to be in here and is not any more: it's a live command, so it's host-owned
+  state (`state.rs`) set over `CMD_KINDLE` and read by `pipe.rs` per sub-frame. Flag any doc
+  still describing it as a file key, and any doc describing the panel as driving Kindle
+  itself — the host owns that (`kindle_ctl.rs`). `gpu_synth` (GPU vs. CPU execution provider, default
   `true` = GPU, no auto-detection) triggers a session rebuild in `native_synth.rs` rather than
   landing free like the other synth fields — docs should say so, not imply it's as cheap as a
   speed/gain change. Note the pacing lead / sub-frame are *not* in the file — they're fixed
