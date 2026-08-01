@@ -52,7 +52,7 @@ component SliderRow inherits VerticalLayout {
 component IconButton inherits Rectangle {
     in property <image> icon;
     in property <color> accent: Palette.accent-background;
-    in property <bool> enabled: true; // model-ready gate; dims when off
+    in property <bool> enabled: true;
     callback clicked;
 
     width: 34px;
@@ -96,14 +96,14 @@ component PlayButton inherits IconButton {
     accent: Palette.accent-background;
 }
 
-// Preview: resume playback. Google Material Symbols resume (Rounded) with the left
+// Resume Kindle's reading. Google Material Symbols resume (Rounded) with the left
 // bar lengthened past the triangle at both ends, Tiffany blue.
 component ResumeButton inherits IconButton {
     icon: @image-url("resume.svg");
     accent: #0abab5;
 }
 
-// Preview: pause playback. Google Material Symbols pause (Rounded), amber.
+// Pause Kindle's reading. Google Material Symbols pause (Rounded), amber.
 component PauseButton inherits IconButton {
     icon: @image-url("pause.svg");
     accent: #f5a623;
@@ -120,6 +120,47 @@ component StopButton inherits IconButton {
 component SprintButton inherits IconButton {
     icon: @image-url("sprint.svg");
     accent: Palette.accent-background;
+}
+
+// A hover-for-help "?" that carries a control's explanation instead of spending three
+// permanent lines of the panel on it. Drawn rather than imported: at 18px a Material glyph
+// is mostly padding, and a circled question mark is the one icon nobody has to learn.
+//
+// Deliberately NOT an IconButton. It is the same size and shape as one, and that would read
+// as a second button next to the sprint runner — but there is nothing to click, so the
+// cursor is `help` and the styling stays at body-text weight so it reads as punctuation
+// after the label. Give it a `Tooltip` child; that is the entire point of it.
+//
+// It has NO `enabled` and never dims with the control it explains. Everything else in the
+// row goes dark together, and this deliberately doesn't: the question it answers ("what is
+// this, and why can't I click it?") is asked most often precisely when the control is
+// disabled, so an inert help icon withholds the answer at the one moment it's wanted. Dimming
+// it while its tooltip still fired was the worse of the two — it looked spent and wasn't.
+component HelpIcon inherits Rectangle {
+    // Plain width/height and x/y-centred content, exactly as `IconButton` above does it.
+    // `min-height`/`max-height` did NOT hold here — the row stretched it into a tall pill —
+    // so copy the pattern that visibly works in this same layout rather than the one that
+    // ought to. `border-radius` is half the side, so the shape is a circle by construction:
+    // if the size ever changes, change both.
+    width: 18px;
+    height: 18px;
+    border-radius: 9px;
+    border-width: 1px;
+    border-color: touch.has-hover ? #a0a0a0 : #6a6a6a;
+    animate border-color { duration: 130ms; }
+    Text {
+        text: "?";
+        font-size: 11px;
+        font-weight: 700;
+        color: touch.has-hover ? #d0d0d0 : #a0a0a0;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        animate color { duration: 130ms; }
+    }
+    touch := TouchArea {
+        mouse-cursor: MouseCursor.help;
+    }
+    @children
 }
 
 // The shared chrome for the panel's modal dialogs: a full-window scrim that swallows
@@ -208,9 +249,9 @@ export component AppWindow inherits Window {
     default-font-size: 15px;
     preferred-width: 400px;
     preferred-height: 600px;
-    // Floor of the narrator row: accent (100, fits "American") + gender (90,
-    // fits "Female") + name (~120 min before its chevron clips) + 16 spacing +
-    // 40 padding (symmetric 20px each side). Narrower and the chevron spills.
+    // Floor of the narrator row: accent (120) + gender (100) + name (100 min before
+    // its chevron clips) + 16 spacing + 40 padding (symmetric 20px each side), with
+    // the remainder as slack. Narrower and the chevron spills.
     min-width: 400px;
 
     // --- state (set from Rust) ---
@@ -226,9 +267,24 @@ export component AppWindow inherits Window {
     in-out property <float> chunk;
     in-out property <bool> kindle-kokoro;
     in-out property <bool> gpu-synth; // GPU (default) vs CPU engine; no auto-detect yet
-    in-out property <bool> reading;   // Kindle's Assistive reader is on (best-effort)
-    in property <bool> speaking;      // host is streaming audio right now (CMD_STATUS)
-    in-out property <bool> paused;    // playback stalled mid-page (controls.json `paused`)
+    // The three reading-state properties below are REPORTED BY THE HOST (CMD_KINDLE), not
+    // decided here: the panel sends Play/Stop/Pause/Resume as intent and draws what comes
+    // back. It never inspects Kindle itself.
+    in-out property <bool> reading;   // the host believes Kindle's Assistive reader is on
+    in property <bool> speaking;      // Kokoro is narrating Kindle now (or Preview is playing)
+    in-out property <bool> paused;    // playback stalled mid-page (host-owned live state)
+    // Is the tray host answering? Polled at ~1 Hz over the pipe; an unreachable pipe is
+    // what "offline" means. Everything that needs the host is dark while this is false —
+    // an offline host must never look like one that applied the command.
+    in property <bool> host-online;
+    // Set when the Read Aloud switch is flipped and cleared once the host's own report shows
+    // the flip landed (`Settling` in main.rs) — not on a timer, which could only guess at a
+    // duration the host actually knows. Stops a second flip stacking another multi-second
+    // Kindle command on top of the one still running.
+    in property <bool> read-aloud-locked;
+    // Is Kindle running at all? Also the host's answer (it's the process that looks). A
+    // Read Aloud switch with no reader behind it can only fail, so it says so instead.
+    in property <bool> kindle-running;
     in property <bool> model-ready;
     in property <string> model-size-label; // "~340 MB", computed from the manifest sum
     in property <bool> downloading;
@@ -255,14 +311,19 @@ export component AppWindow inherits Window {
     in property <bool> bench-cpu-wins;
     in property <string> bench-verdict;  // what was measured and what got selected
 
-    // Lower controls (narrator + sliders + transport) are live only when the engine
-    // card reads "Voice Engine Ready" (model present, not mid download/verify) AND
-    // Kindle narration is enabled. Mirrors the "Voice Engine Ready" card's condition
-    // so the controls light up exactly when it does.
-    property <bool> controls-active: root.model-ready && !root.downloading && !root.verifying && root.kindle-kokoro;
-    // The CPU-synth toggle doesn't need Kindle narration ticked (Preview benefits too) —
-    // just the engine itself being ready.
-    property <bool> engine-ready: root.model-ready && !root.downloading && !root.verifying;
+    // ONE gate for everything below the Kindle-narration checkbox — narrator, sliders,
+    // transport, engine picker, speed test. They light up together and go dark together.
+    //
+    // `host-online` is in here even for the settings. The narrator and sliders would
+    // technically still save to controls.json with the host down, but a live-looking
+    // slider whose value nothing can read is a control claiming an effect it can't have,
+    // and it invites fiddling instead of reading the one red line above that says what's
+    // actually wrong. `kindle-kokoro` likewise: with narration off there is nothing left
+    // down here for a setting to affect.
+    property <bool> controls-active: root.model-ready && !root.downloading && !root.verifying
+        && root.host-online && root.kindle-kokoro;
+    // Starting/stopping Kindle's reader needs a Kindle as well as a host.
+    property <bool> reading-active: root.controls-active && root.kindle-running;
     // The speed-test dialog's opening face: nothing has been run yet.
     property <bool> bench-ask: !root.bench-running && !root.bench-done;
 
@@ -326,14 +387,24 @@ export component AppWindow inherits Window {
                     }
                     Button { text: "Download"; primary: true; clicked => { root.download-clicked(); } }
                 }
-                if !root.downloading && !root.verifying && root.model-ready: HorizontalLayout {
+                // Host down. The model is there but nothing can speak, so say exactly that
+                // and name the thing to start — "offline" on its own tells the user nothing
+                // they can act on. Takes the ready row's place rather than sitting beside
+                // it: two status lines, one green, would be worse than none.
+                if !root.downloading && !root.verifying && root.model-ready && !root.host-online: Text {
+                    text: "Kokoro host offline - start Kokoro Kindle Reader.";
+                    color: #ff4a3d;
+                    font-weight: 600;
+                    wrap: word-wrap;
+                }
+                if !root.downloading && !root.verifying && root.model-ready && root.host-online: HorizontalLayout {
                     spacing: 10px;
                     alignment: start;
                     Waveform { }
                     Text {
-                        // Doubles as the live "Kokoro is speaking now" readout: the host's
-                        // CMD_STATUS (polled on the reading-state timer) flips `speaking`, and
-                        // the same green equalizer is already animating, so we just retitle it.
+                        // Doubles as the live "Kokoro is speaking now" readout: the host
+                        // reports it on the heartbeat (CMD_KINDLE), and the same green
+                        // equalizer is already animating, so we just retitle it.
                         text: root.speaking ? "Speaking" : "Voice Engine Ready";
                         color: #7cfc00; // Lawn Green
                         font-weight: 600;
@@ -357,17 +428,35 @@ export component AppWindow inherits Window {
             }
         }
 
-        // Start/stop Kindle's Read Aloud (its "Assistive reader" toggle) from the
-        // panel, as a switch that mirrors Kindle's own control. Flipping it drives
-        // the Kindle toggle via UI Automation; the handler writes back the real state
-        // (so it self-corrects if Read Aloud was toggled inside Kindle directly).
-        HorizontalLayout {
-            spacing: 8px;
-            alignment: start;
-            Text { text: "Read Aloud"; font-size: 15px; vertical-alignment: center; }
-            Switch {
-                checked <=> root.reading;
-                toggled => { root.read-aloud-clicked(self.checked); }
+        // Start/stop Kindle's Read Aloud (its "Assistive reader" toggle), as a switch that
+        // mirrors Kindle's own control. Flipping it sends the intent to the host, which is
+        // the only process that touches Kindle; the handler then writes back the state the
+        // host reports (so it self-corrects if the command failed, and if Read Aloud was
+        // toggled inside Kindle directly the heartbeat brings that back too).
+        VerticalLayout {
+            spacing: 2px;
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: start;
+                Text {
+                    text: "Read Aloud";
+                    font-size: 15px;
+                    vertical-alignment: center;
+                    opacity: root.reading-active ? 1.0 : 0.5;
+                }
+                Switch {
+                    checked <=> root.reading;
+                    enabled: root.reading-active && !root.read-aloud-locked;
+                    toggled => { root.read-aloud-clicked(self.checked); }
+                }
+            }
+            // Only when everything else is in place — otherwise the model card or the
+            // offline line above is already saying the more useful thing.
+            if root.controls-active && !root.kindle-running: Text {
+                text: "Kindle isn't open.";
+                font-size: 12px;
+                color: #a0a0a0;
+                wrap: word-wrap;
             }
         }
 
@@ -375,9 +464,9 @@ export component AppWindow inherits Window {
         //   Read Aloud OFF (not reading): Preview the narrator. Play to audition;
         //     while it plays, Stop replaces Play.
         //   Read Aloud ON  (reading):     Pause / Resume Kindle's reading mid-page
-        //     (drives controls.json `paused` via pause-toggled — the host stalls its
-        //     audio stream and Kindle keeps the page). Pause while playing; once
-        //     paused, Resume replaces Pause.
+        //     (pause-toggled sends the intent to the host, which owns the flag and
+        //     stalls its audio stream so Kindle keeps the page). Pause while playing;
+        //     once paused, Resume replaces Pause.
         HorizontalLayout {
             spacing: 8px;
             alignment: start;
@@ -437,7 +526,7 @@ export component AppWindow inherits Window {
                     current-index <=> root.name-index;
                     enabled: root.controls-active;
                     horizontal-stretch: 1;
-min-width: 100px;
+                    min-width: 100px;
                     selected => { root.name-changed(self.current-index); }
                 }
             }
@@ -477,37 +566,69 @@ min-width: 100px;
 
         // GPU (default, ticked) vs CPU engine: an integrated GPU can lose badly to
         // plain CPU (no auto-detection yet — see native_synth.rs's Engine).
-        // Independent of the Kindle-narration checkbox since Preview benefits too.
         // Which one wins isn't something a reader can be expected to know, and it can't
         // be inferred from the hardware name either — hence "Test speed", which measures
         // both here and ticks the winner.
-        VerticalLayout {
-            spacing: 2px;
-            HorizontalLayout {
-                spacing: 8px;
-                CheckBox {
-                    text: "Synthesize on GPU";
-                    checked <=> root.gpu-synth;
-                    enabled: root.engine-ready;
-                    toggled => { root.gpu-synth-changed(self.checked); }
-                }
-                Rectangle { horizontal-stretch: 1; }
-                SprintButton {
-                    enabled: root.engine-ready;
-                    clicked => { root.bench-open(); }
-                    Tooltip { text: @markdown("Test which is faster"); }
+        HorizontalLayout {
+            spacing: 8px;
+            CheckBox {
+                text: "Synthesize on GPU";
+                checked <=> root.gpu-synth;
+                enabled: root.controls-active;
+                toggled => { root.gpu-synth-changed(self.checked); }
+            }
+            // The explanation used to sit permanently under this row. It's on the "?" now:
+            // it answers a question asked once, and it was costing three lines of the
+            // panel's height on every launch after that.
+            //
+            // Wrapped in a centring VerticalLayout (the same nested-layout trick `ModalCard`
+            // uses) because the row is as tall as the 34px sprint button, and a fixed-size
+            // child of a HorizontalLayout sits at the TOP of that, not beside the checkbox
+            // it belongs to. Negotiate the position with a layout rather than hand-computing
+            // a `y` against a neighbour's height.
+            VerticalLayout {
+                alignment: center;
+                HelpIcon {
+                    // Custom content rather than `text:`, because Tooltip's text mode has
+                    // nothing to style with — it takes styled-text and renders it at the
+                    // default size and colour. Omitting `text` and giving it exactly one
+                    // root child switches it to custom mode, where this is an ordinary
+                    // Text. Same 13px/#a0a0a0 as the panel's footnote below, so an aside
+                    // reads as an aside wherever it turns up.
+                    Tooltip {
+                        VerticalLayout {
+                            padding: 4px;
+                            Text {
+                                text: "Untick to synthesize on the CPU instead — often faster on laptops with no discrete GPU. Not sure? The runner times both and picks.";
+                                font-size: 13px;
+                                color: #a0a0a0;
+                                wrap: word-wrap;
+                                // Load-bearing: nothing else constrains a tooltip's width,
+                                // so without it the whole sentence lays out on one line and
+                                // runs off the side of the window.
+                                max-width: 260px;
+                            }
+                        }
+                    }
                 }
             }
-            Text {
-                text: "Untick to synthesize on the CPU instead — often faster on laptops with no discrete GPU. Not sure? The runner times both and picks.";
-                font-size: 12px;
-                color: #a0a0a0;
-                wrap: word-wrap;
+            Rectangle { horizontal-stretch: 1; }
+            SprintButton {
+                // `controls-active` already includes the heartbeat — the test runs on the
+                // host's synth worker, so there'd be nothing to time without it.
+                enabled: root.controls-active;
+                clicked => { root.bench-open(); }
+                Tooltip { text: @markdown("Test which is faster"); }
             }
         }
 
-        Rectangle { vertical-stretch: 1; }
-
+        // No spacer here. There used to be a `Rectangle { vertical-stretch: 1; }` meaning to
+        // push these last two lines to the foot of the window, but the layout above is
+        // `alignment: start`, which hands every child its preferred size and distributes
+        // nothing — so it stretched to 0px and the slack ended up *below* the footnote
+        // instead. All it actually bought was a second 16px spacing slot, doubling the gap
+        // under the GPU row for no visible benefit. If the footer ever should be pinned to
+        // the bottom, the alignment is the thing to change, not a spacer under it.
         if root.status != "": Text {
             text: root.status;
             font-size: 14px;

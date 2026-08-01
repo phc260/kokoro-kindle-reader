@@ -14,6 +14,8 @@ use kokoro_protocol::{
     BENCH_BUSY, BENCH_ENGINE_CPU, BENCH_ENGINE_GPU, BENCH_FAILED, BENCH_OK, CMD_BENCH,
 };
 
+use crate::hostlink::{connect, ACTION_BUSY_WAIT};
+
 /// One engine's measured throughput.
 #[derive(Clone, Copy)]
 pub struct Speed {
@@ -26,7 +28,7 @@ pub struct Speed {
 /// isn't usable here (no working GPU adapter, model missing); `Err` means the test
 /// couldn't be run at all (host unreachable, pipe error) and says so in the user's words.
 pub fn measure(gpu: bool) -> Result<Option<Speed>, String> {
-    let mut pipe = crate::preview::connect()?;
+    let mut pipe = connect(ACTION_BUSY_WAIT)?;
     let selector = if gpu { BENCH_ENGINE_GPU } else { BENCH_ENGINE_CPU };
     pipe.write_all(&[CMD_BENCH, selector]).map_err(|e| format!("pipe write: {e}"))?;
     pipe.flush().map_err(|e| format!("pipe flush: {e}"))?;

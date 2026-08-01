@@ -51,7 +51,6 @@
 // stale volume into audio nobody has heard yet).
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -61,7 +60,7 @@ use tokio::net::{TcpListener, TcpStream};
 use crate::native_synth;
 // Shared with the pipe rather than reimplemented: both transports answer from the same voice
 // list and stamp the same "audio just went out" clock, so a second copy could only drift.
-use crate::pipe::{available_voices, now_ms, Ctx};
+use crate::pipe::{available_voices, Ctx};
 use kokoro_protocol::{MAX_TEXT_BYTES, SAMPLE_RATE};
 
 /// Fixed rather than random so a pairing string stays valid across restarts; the token is what
@@ -401,7 +400,9 @@ async fn serve_conn(stream: TcpStream, web: WebCtx) -> std::io::Result<()> {
                 Some(pcm) => {
                     // Stamp the shared "audio just went out" clock so the panel's CMD_STATUS
                     // sees browser narration too and will not start a bench underneath it.
-                    web.ctx.last_audio_ms.store(now_ms(), Ordering::Relaxed);
+                    // Not the *Kindle* clock: the browser is a third source, and conflating
+                    // it would have the panel report Kindle as reading a page it isn't on.
+                    web.ctx.state.stamp_audio(false);
                     let extra = format!(
                         "{cors}X-Sample-Rate: {SAMPLE_RATE}\r\nX-Samples: {}\r\n",
                         pcm.len() / 4

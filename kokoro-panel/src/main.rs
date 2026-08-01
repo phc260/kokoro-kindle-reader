@@ -4,21 +4,30 @@
 // chunk change lands on Kindle's next page. Model download/verify, the Kindle-voice
 // toggle, and Preview (synth via the host pipe = WYSIWYG) are all here.
 //
+// It does NOT touch Kindle. `kokoro-host` is the sole authority for Kindle reading and
+// health: Play/Stop/Pause/Resume go over the named pipe as intent (`hostlink`), and the
+// panel draws the state the host reports back — including a ~1 Hz heartbeat over the same
+// pipe, whose failure to connect is what "host offline" means. What the panel still owns is
+// its own persisted settings (controls.json) and its own audio (Preview).
+//
 // The UI is declared in ui/panel.slint (compiled by build.rs); this file wires its
-// properties/callbacks to the framework-agnostic logic in download.rs / preview.rs.
-// Background work (download, verify, preview) runs on threads and pushes results back
-// via `upgrade_in_event_loop`. The Kindle-voice toggle just persists a flag (no thread).
+// properties/callbacks to the framework-agnostic logic in download.rs / preview.rs /
+// hostlink.rs / benchmark.rs. Background work (download, verify, preview, every host
+// request) runs on threads and pushes results back via `upgrade_in_event_loop`; nothing
+// blocking runs on the Slint UI thread.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{mpsc, Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use kokoro_protocol::{KINDLE_CLOSE, KINDLE_PAUSE, KINDLE_PLAY, KINDLE_QUERY, KINDLE_RESUME, KINDLE_STOP};
 
 mod benchmark;
 mod download;
-mod kindle_reader;
+mod hostlink;
 mod preview;
 
 slint::include_modules!();
@@ -28,6 +37,24 @@ const APP_IDENTIFIER: &str = "com.phc260.kokoro-kindle-reader";
 // Embedded so the narrator list stays in sync with what actually downloads.
 const MANIFEST_JSON: &str = include_str!("../../model-manifest.json");
 const DEFAULT_VOICE: &str = "af_heart";
+/// Ceiling on the lock when turning Read Aloud **on**. Only reached when the flip never
+/// lands: Kindle with no book open, a Ctrl+A swallowed by something, a belief that was already
+/// wrong. Generous because what it waits on is synthesis, and the first chunk of a page can
+/// take double digits of seconds on a machine synthesizing slower than real time. Without a
+/// cap at all, a flip that cannot take effect would disable the switch for the rest of the
+/// session — worse than the race this replaced, because there would be no way to retry.
+const SETTLE_CAP_ON: Duration = Duration::from_secs(15);
+/// Ceiling on the lock when turning Read Aloud **off**. Much shorter, because the only thing
+/// outstanding is audio draining — stream lead plus debounce, ~2.5 s — and unlike the "on"
+/// direction the host's belief is already correct the moment the command returns, so a second
+/// flip from here is safe whether or not the tail has finished. The cap's real job is to stop
+/// Kindle *choosing to play out the rest of the page* from holding the switch for the length
+/// of that page.
+const SETTLE_CAP_OFF: Duration = Duration::from_secs(8);
+/// How often to ask the host while a flip is settling. Much faster than the idle heartbeat:
+/// this is the one stretch where the answer changes something the user is looking at, and
+/// `KINDLE_QUERY` is answered inline off atomics, so it costs the host nothing to ask.
+const SETTLE_POLL: Duration = Duration::from_millis(250);
 
 fn app_data_dir() -> PathBuf {
     std::env::var_os("APPDATA")
@@ -97,8 +124,7 @@ fn load_voices() -> Vec<Voice> {
     out
 }
 
-/// A short self-introduction spoken as the preview sample (mirrors voiceIntro in
-/// src/voices.ts).
+/// A short self-introduction spoken as the preview sample.
 fn intro_for(voice: &str, voices: &[Voice]) -> String {
     match voices.iter().find(|v| v.id == voice) {
         Some(v) => {
@@ -252,22 +278,26 @@ fn run_speed_test(
     cancel: Arc<AtomicBool>,
     controls: Arc<Mutex<Controls>>,
 ) {
-    // The test and Kindle share the one serialized synth worker, so starting mid-
-    // narration would stall the reading AND time the contention rather than the engine.
-    //
-    // Unlike the state poll, this deliberately does NOT discount the panel's own intro
-    // prefetch (which stamps the same clock). The two readings have opposite costs: a
-    // false "speaking" only asks the user to click again a moment later, while a false
-    // "idle" drops a ~40 s benchmark in front of a live Read Aloud. Best-effort either
-    // way — nothing reserves the worker, so Kindle can begin an utterance in the instant
-    // after this reads idle.
-    if preview::host_speaking().unwrap_or(false) {
-        bench_abort(
-            &weak,
-            "Kokoro is speaking right now — stop Read Aloud, then run the speed test."
+    // Gate on `any_speaking`, not `kindle_speaking` (see its doc): starting a measurement
+    // mid-narration would stall that narration AND time the contention rather than the
+    // engine. Only the *wording* below narrows to Kindle, because that's the one the user
+    // can act on from here. Best-effort either way — nothing reserves the worker, so a page
+    // can begin in the instant after this reads idle; the cost of guessing wrong is a click
+    // one way and a ~40 s benchmark in front of live narration the other.
+    match hostlink::send(KINDLE_QUERY, hostlink::ACTION_BUSY_WAIT) {
+        Err(e) => return bench_abort(&weak, format!("Speed test failed: {e}")),
+        Ok(st) if st.any_speaking => {
+            return bench_abort(
+                &weak,
+                if st.kindle_speaking {
+                    "Kokoro is reading in Kindle right now — stop Read Aloud, then run the speed test."
+                } else {
+                    "Kokoro is speaking right now — wait for it to finish, then run the speed test."
+                }
                 .to_string(),
-        );
-        return;
+            )
+        }
+        Ok(_) => {}
     }
 
     // GPU first (the phase label for it is set by the click handler, so the dialog never
@@ -368,20 +398,17 @@ fn run_speed_test(
 }
 
 /// The persisted settings (controls.json).
+///
+/// Settings only. Pause used to live here too, which made a *command* travel as a file the
+/// host polled; it is now host-owned live state reached over the pipe, so nothing in this
+/// struct is a live instruction to anybody.
 struct Controls {
     voice: String,
     speed: f32,
     gain: f32,
     chunk: u32,
     kindle_kokoro: bool,
-    // Live pause command, not a persisted setting: while true the host stalls the
-    // audio stream mid-page. Kept in the struct (and save()) so an unrelated save
-    // (e.g. a volume change) doesn't drop the key and silently un-pause the host.
-    paused: bool,
-    // Manual GPU/CPU escape hatch: an integrated GPU can badly lose to plain CPU
-    // (benchmarked 0.50x vs 1.07x realtime on an Intel UHD 620) with no auto-detection
-    // yet, so unticking "Synthesize on GPU" is a user-flipped fallback to CPU while
-    // real-world results come in. Default true = GPU, today's shipping behavior.
+    // Manual GPU/CPU escape hatch (see the speed test above). Default true = GPU.
     gpu_synth: bool,
 }
 
@@ -393,7 +420,6 @@ impl Default for Controls {
             gain: 1.0,
             chunk: 2,
             kindle_kokoro: true,
-            paused: false,
             gpu_synth: true,
         }
     }
@@ -419,9 +445,6 @@ impl Controls {
                 if let Some(x) = v.get("kindle_kokoro").and_then(|x| x.as_bool()) {
                     c.kindle_kokoro = x;
                 }
-                if let Some(x) = v.get("paused").and_then(|x| x.as_bool()) {
-                    c.paused = x;
-                }
                 if let Some(x) = v.get("gpu_synth").and_then(|x| x.as_bool()) {
                     c.gpu_synth = x;
                 }
@@ -439,7 +462,6 @@ impl Controls {
             "gain": self.gain,
             "chunk": self.chunk,
             "kindle_kokoro": self.kindle_kokoro,
-            "paused": self.paused,
             "gpu_synth": self.gpu_synth,
         });
         let txt = serde_json::to_string_pretty(&json).unwrap_or_default();
@@ -469,9 +491,12 @@ fn main() -> Result<(), slint::PlatformError> {
         ui.set_gain((c.gain / 0.05).round() * 0.05);
         ui.set_chunk(c.chunk as f32);
         ui.set_kindle_kokoro(c.kindle_kokoro);
-        ui.set_paused(c.paused);
         ui.set_gpu_synth(c.gpu_synth);
     }
+    // Reading/pause/host-health all arrive from the host's heartbeat. Start pessimistic:
+    // until one reply has landed the panel knows nothing, and claiming "ready" for the
+    // ~1 s before it does is exactly the false confidence the heartbeat exists to remove.
+    ui.set_host_online(false);
     ui.set_model_ready(download::model_complete(&app_data));
     // "~N MB" from the manifest sum, same decimal-MB (/1e6) convention as the live
     // download counter below — never hardcode the size, so it tracks the manifest.
@@ -489,49 +514,33 @@ fn main() -> Result<(), slint::PlatformError> {
     let preview_gen = Arc::new(AtomicU64::new(0));
 
     // --- controls callbacks (UI thread) ---
-    // Narrator: accent/gender re-filter the name list (reset to its first entry);
-    // any of the three commits the resulting voice to controls.json.
-    {
+    // Narrator: all three dropdowns commit the resulting voice to controls.json and re-warm
+    // the preview buffer for it. One body, three registrations — accent and gender differ
+    // only in re-filtering the name list first (reset to its first entry).
+    let on_narrator = {
         let weak = ui.as_weak();
         let voices = voices.clone();
         let controls = controls.clone();
         let cache = preview_cache.clone();
         let gen = preview_gen.clone();
-        ui.on_accent_changed(move |_| {
-            if let Some(ui) = weak.upgrade() {
+        move |relist: bool| {
+            let Some(ui) = weak.upgrade() else { return };
+            if relist {
                 refilter(&ui, &voices, None);
-                commit_voice(&ui, &voices, &controls);
-                prefetch_for_current(&ui, &voices, &cache, &gen);
             }
-        });
-    }
-    {
-        let weak = ui.as_weak();
-        let voices = voices.clone();
-        let controls = controls.clone();
-        let cache = preview_cache.clone();
-        let gen = preview_gen.clone();
-        ui.on_gender_changed(move |_| {
-            if let Some(ui) = weak.upgrade() {
-                refilter(&ui, &voices, None);
-                commit_voice(&ui, &voices, &controls);
-                prefetch_for_current(&ui, &voices, &cache, &gen);
-            }
-        });
-    }
-    {
-        let weak = ui.as_weak();
-        let voices = voices.clone();
-        let controls = controls.clone();
-        let cache = preview_cache.clone();
-        let gen = preview_gen.clone();
-        ui.on_name_changed(move |_| {
-            if let Some(ui) = weak.upgrade() {
-                commit_voice(&ui, &voices, &controls);
-                prefetch_for_current(&ui, &voices, &cache, &gen);
-            }
-        });
-    }
+            commit_voice(&ui, &voices, &controls);
+            prefetch_for_current(&ui, &voices, &cache, &gen);
+        }
+    };
+    ui.on_accent_changed({
+        let f = on_narrator.clone();
+        move |_| f(true)
+    });
+    ui.on_gender_changed({
+        let f = on_narrator.clone();
+        move |_| f(true)
+    });
+    ui.on_name_changed(move |_| on_narrator(false));
     {
         let controls = controls.clone();
         let cache = preview_cache.clone();
@@ -752,9 +761,14 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     }
 
-    // Set while the panel is driving Kindle (toggle flips, closing) and briefly after,
-    // so the state poll below doesn't read a stale value mid-flip and fight the switch.
-    let reader_busy = Arc::new(AtomicBool::new(false));
+    // Every command this panel sends the host goes through here, in click order. Its
+    // `busy()` is set while one is in flight: the heartbeat keeps running underneath (that's
+    // the point of a 1 Hz health check), but it must not repaint the switch from state that
+    // predates a command already on its way — the host reports its own `busy` for the window
+    // it knows about, and this covers the moment before it does.
+    let intents = Intents::spawn(ui.as_weak());
+    // Holds the Read Aloud switch from a flip until the host demonstrates it landed.
+    let settling = Settling::new();
 
     // --- Kindle-voice toggle (confirm, persist, close Kindle) ---
     // The `kindle_kokoro` flag only lands on Kindle's next launch (the host's watcher
@@ -775,7 +789,7 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let ui_weak = ui.as_weak();
         let controls = controls.clone();
-        let reader_busy = reader_busy.clone();
+        let intents = intents.clone();
         ui.on_confirm_kindle(move |accepted| {
             let Some(ui) = ui_weak.upgrade() else { return };
             ui.set_confirm_visible(false);
@@ -797,27 +811,25 @@ fn main() -> Result<(), slint::PlatformError> {
                 }
                 .into(),
             );
-            // Close Kindle on a background thread (blocking Win32). reader_busy keeps
-            // the state poll from racing a UIA lookup against Kindle disappearing.
-            reader_busy.store(true, Ordering::SeqCst);
-            let weak = ui_weak.clone();
-            let reader_busy = reader_busy.clone();
-            std::thread::spawn(move || {
-                let res = kindle_reader::close();
-                let _ = weak.upgrade_in_event_loop(move |ui| {
-                    ui.set_status(
-                        match res {
-                            Ok(()) => {
-                                "Kindle closed - reopen it to pick up the change.".to_string()
-                            }
-                            Err(e) => {
-                                format!("{e} The change applies the next time Kindle opens.")
-                            }
+            // Ask the HOST to close Kindle — it owns every interaction with Kindle, and it
+            // is also the thing that will (or won't) inject the hook on the next launch, so
+            // the process that acts on the flag is the one that acts on the window. Queued
+            // with the transport's commands rather than beside them: closing Kindle and
+            // driving its reader are the same host thread, so they must not overtake.
+            intents.send(KINDLE_CLOSE, |ui, res| {
+                ui.set_status(
+                    match res {
+                        Ok(st) if st.ok => st.message,
+                        // A host that answered but couldn't do it says why; a host that
+                        // didn't answer is offline. Either way the flag is saved, so the
+                        // change still lands on Kindle's next launch.
+                        Ok(st) => {
+                            format!("{} The change applies the next time Kindle opens.", st.message)
                         }
-                        .into(),
-                    );
-                });
-                reader_busy.store(false, Ordering::SeqCst);
+                        Err(e) => format!("{e} The change applies the next time Kindle opens."),
+                    }
+                    .into(),
+                );
             });
         });
     }
@@ -838,6 +850,10 @@ fn main() -> Result<(), slint::PlatformError> {
             }
             if let Some(ui) = ui_weak.upgrade() {
                 ui.set_previewing(true);
+                // Preview is the one sound the panel makes itself, so it's the one the
+                // host can't report; set the indicator here rather than leaving it up to
+                // a heartbeat that could be most of a second away.
+                ui.set_speaking(true);
                 ui.set_status(slint::SharedString::new());
             }
             let voice = controls.lock().unwrap().voice.clone();
@@ -857,6 +873,9 @@ fn main() -> Result<(), slint::PlatformError> {
                 };
                 let _ = weak.upgrade_in_event_loop(move |ui| {
                     ui.set_previewing(false);
+                    // Preview only runs while Read Aloud is off, so nothing else of ours is
+                    // sounding; the next heartbeat re-derives this either way.
+                    ui.set_speaking(false);
                     if let Err(e) = res {
                         ui.set_status(e.into());
                     }
@@ -873,13 +892,12 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     }
 
-    // --- Read Aloud (drive Kindle's Assistive reader via UI Automation) ---
+    // --- Read Aloud (ask the host to start/stop Kindle's Assistive reader) ---
     // The switch already flipped `reading` optimistically; `want` is that new value.
-    // Drive Kindle to match, then write back the real state (revert on failure).
     {
         let ui_weak = ui.as_weak();
-        let controls = controls.clone();
-        let reader_busy = reader_busy.clone();
+        let intents = intents.clone();
+        let settling = settling.clone();
         let active_sink = active_sink.clone();
         ui.on_read_aloud_clicked(move |want| {
             // Toggling the reader hands the transport over to Kindle, so silence any
@@ -887,120 +905,403 @@ fn main() -> Result<(), slint::PlatformError> {
             // preview started before Read Aloud would keep playing over Kindle's
             // narration with its Stop button hidden by the reading-state view.
             preview::stop(&active_sink);
-            // Starting or stopping reading always clears any pause, so a fresh
-            // Read Aloud never begins stalled and a stop leaves no lingering pause.
-            {
-                let mut c = controls.lock().unwrap();
-                c.paused = false;
-                c.save();
-            }
             if let Some(ui) = ui_weak.upgrade() {
+                // Starting or stopping clears a pause already in effect. The host does this
+                // itself (it owns the flag); this is only the switch catching up at once
+                // instead of a heartbeat later. A pause the user issues *after* this, while
+                // the Play is still driving Kindle, is honoured — see `apply_kindle`.
                 ui.set_paused(false);
                 ui.set_status(slint::SharedString::new());
+                // Hold the switch until the host shows this flip took effect, so it can't be
+                // flipped again while the first one is still working its way through Kindle.
+                // The heartbeat speeds up to `SETTLE_POLL` while this is pending and releases
+                // the lock the moment the host's report agrees.
+                settling.begin(want);
+                ui.set_read_aloud_locked(true);
             }
-            let weak = ui_weak.clone();
-            let reader_busy = reader_busy.clone();
-            reader_busy.store(true, Ordering::SeqCst);
-            std::thread::spawn(move || {
-                let res = kindle_reader::set_read_aloud(want);
-                let _ = weak.upgrade_in_event_loop(move |ui| match res {
-                    Ok(reading) => {
-                        ui.set_reading(reading);
-                        ui.set_status(
-                            if reading { "Reading started in Kindle." } else { "Reading stopped." }
-                                .into(),
-                        );
-                    }
-                    Err(e) => {
-                        ui.set_reading(!want); // revert the optimistic switch flip
-                        ui.set_status(e.into());
-                    }
-                });
-                // Kindle updates the toggle's UIA state asynchronously; hold the
-                // poll off a moment longer so it doesn't read the pre-flip value
-                // and bounce the switch back.
-                std::thread::sleep(Duration::from_millis(500));
-                reader_busy.store(false, Ordering::SeqCst);
-            });
+            let action = if want { KINDLE_PLAY } else { KINDLE_STOP };
+            intents.send(
+                action,
+                paint_transport(settling.clone(), move |ui| ui.set_reading(!want)),
+            );
         });
     }
 
-    // --- Pause / Resume (stall the host's audio stream via controls.json `paused`) ---
-    // Just persists `paused`; the host reads it live per sub-frame and stalls the
-    // stream mid-page (Kindle keeps the page). No UIA, no thread needed.
+    // --- Pause / Resume (ask the host to stall its audio stream mid-page) ---
+    // The host owns the flag and reads it per sub-frame, so the stream stalls where it is
+    // and Kindle keeps the page. Cheap on the host side (it flips an atomic and answers
+    // inline), but still off the UI thread because it's pipe I/O.
     {
-        let controls = controls.clone();
-        let weak = ui.as_weak();
+        let ui_weak = ui.as_weak();
+        let intents = intents.clone();
+        let settling = settling.clone();
         ui.on_pause_toggled(move |want| {
-            {
-                let mut c = controls.lock().unwrap();
-                c.paused = want;
-                c.save();
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_paused(want); // optimistic; the reply confirms or corrects it
             }
-            if let Some(ui) = weak.upgrade() {
-                ui.set_paused(want);
-                ui.set_status(if want { "Paused." } else { "Resumed." }.into());
-            }
+            let action = if want { KINDLE_PAUSE } else { KINDLE_RESUME };
+            intents.send(
+                action,
+                paint_transport(settling.clone(), move |ui| ui.set_paused(!want)),
+            );
         });
     }
 
-    // --- Sync the Read Aloud switch when Assistive reader is toggled in Kindle ---
-    // The panel only ever drives Kindle; nothing read Kindle's state back, so a
-    // toggle made inside Kindle left the switch stale. Poll the toggle's state on a
-    // timer and mirror it onto the switch. Best-effort: a `None` read (toolbar
-    // hidden / Kindle closed) keeps the last known state; we skip while the panel is
-    // itself driving the toggle (reader_busy) and never spawn overlapping polls.
-    let poll_timer = slint::Timer::default();
-    {
-        let weak = ui.as_weak();
-        let poll_busy = Arc::new(AtomicBool::new(false));
-        let reader_busy = reader_busy.clone();
-        poll_timer.start(slint::TimerMode::Repeated, Duration::from_millis(500), move || {
-            if reader_busy.load(Ordering::SeqCst) {
-                return;
-            }
-            if poll_busy.swap(true, Ordering::SeqCst) {
-                return; // a previous poll is still running
-            }
-            let weak = weak.clone();
-            let poll_busy = poll_busy.clone();
-            let reader_busy = reader_busy.clone();
-            std::thread::spawn(move || {
-                let state = kindle_reader::read_state();
-                // Is the host streaming audio right now? Drives the live "Speaking"
-                // indicator. None (host unreachable) reads as not speaking. But the panel's
-                // own intro prefetch also streams from the host (playing nothing), stamping
-                // the same clock — so discount a host reading we just caused ourselves.
-                let host_speaking = preview::host_speaking().unwrap_or(false);
-                let self_synth = preview::self_synth_recent();
-                let _ = weak.upgrade_in_event_loop(move |ui| {
-                    // Speaking = an audible Preview (tracked by `previewing`) OR the host
-                    // streaming for Kindle (host reading that wasn't our own prefetch).
-                    let speaking = ui.get_previewing() || (host_speaking && !self_synth);
-                    if ui.get_speaking() != speaking {
-                        ui.set_speaking(speaking);
-                    }
-                    // Re-check reader_busy: a user flip may have started while we
-                    // were reading. Only apply a definite state that differs.
-                    if !reader_busy.load(Ordering::SeqCst) {
-                        if let Some(on) = state {
-                            if ui.get_reading() != on {
-                                ui.set_reading(on);
-                            }
-                        } else if host_speaking && !self_synth && !ui.get_reading() {
-                            // No definite toggle state (Aa menu closed — the common case),
-                            // but the host is streaming for Kindle, which only happens
-                            // during Read Aloud: flip the switch on. Covers a panel opened
-                            // mid-narration, which would otherwise start (and stay) off.
-                            // One-way: quiet ≠ not reading (page gaps, pause, slow synth).
-                            ui.set_reading(true);
-                        }
-                    }
-                });
-                poll_busy.store(false, Ordering::SeqCst);
-            });
-        });
-    }
+    // --- Host heartbeat (1 Hz over the pipe) ---
+    start_heartbeat(ui.as_weak(), intents.clone(), settling.clone());
 
     ui.run()
+}
+
+/// One queued command for the host, with the painter for whatever comes back.
+struct Intent {
+    action: u8,
+    paint: Box<dyn FnOnce(&AppWindow, Result<hostlink::HostReport, String>) + Send>,
+}
+
+/// Sends every command this panel issues to the host, **in the order the user issued them**,
+/// one at a time, off the UI thread.
+///
+/// ONE long-lived thread — not a thread per click, and not a lane per kind of command. Both
+/// alternatives lose the ordering, and the ordering is the whole point: each command would
+/// get its own pipe connection, connections are served in whatever order they arrive, and the
+/// host's `KindleCtl` serializes by arrival rather than by when the user clicked. Every such
+/// inversion is a lasting wrong state, because these commands are not idempotent — a Stop
+/// that overtakes its own Play finds reading already off, no-ops, and leaves the delayed Play
+/// to start reading with the switch saying stopped; a Pause that arrives after the Stop it
+/// preceded parks a stream that the panel, believing reading is off, offers no Resume for.
+/// Against a blind Ctrl+A toggle these are unrecoverable until the user notices and clicks
+/// again. Splitting Pause/Resume onto a second lane fixes the latency below and reintroduces
+/// exactly these two races across the lanes, so: one queue, and the last click wins.
+///
+/// The cost is that a Pause can wait out a Play, Stop or Close ahead of it — seconds of UI
+/// Automation. That reads like a breach of "a pause must never queue behind Kindle work", and
+/// isn't: that invariant is about the *host's* control thread, and the case it protects is a
+/// pause landing mid-page while Kindle narrates. This queue is empty then. It is non-empty
+/// only while a Play, Stop or Close is in flight — and in that window there is either nothing
+/// being narrated yet (Play) or narration the queued command is about to end anyway (Stop,
+/// Close). The heartbeat's query never enters this queue at all: it has its own thread, so
+/// health stays prompt no matter what is sitting in here.
+#[derive(Clone)]
+struct Intents {
+    tx: mpsc::Sender<Intent>,
+    /// Commands queued but not yet *painted* — the count is released inside the UI closure,
+    /// not when the reply is merely posted.
+    pending: Arc<AtomicUsize>,
+    /// Bumped once per command queued, and never reset.
+    ///
+    /// `pending` answers "is one in flight right now"; this answers "did one happen at all
+    /// since I last looked", and only the second is safe against a badly-timed deschedule. A
+    /// command can be queued, complete, and drain `pending` back to zero entirely inside the
+    /// gap between the heartbeat receiving its reply and posting the closure that draws it —
+    /// leaving that tick to repaint the switch from a report older than the click, with
+    /// nothing in the counter left to say so. The heartbeat samples this before it queries
+    /// and again as it paints; any change means the report in hand predates a click.
+    epoch: Arc<AtomicU64>,
+}
+
+impl Intents {
+    fn spawn(weak: slint::Weak<AppWindow>) -> Intents {
+        let (tx, rx) = mpsc::channel::<Intent>();
+        let pending = Arc::new(AtomicUsize::new(0));
+        {
+            let pending = pending.clone();
+            std::thread::spawn(move || {
+                for Intent { action, paint } in rx {
+                    let res = hostlink::send(action, hostlink::ACTION_BUSY_WAIT);
+                    let done = pending.clone();
+                    let posted = weak.upgrade_in_event_loop(move |ui| {
+                        paint(&ui, res);
+                        done.fetch_sub(1, Ordering::SeqCst);
+                    });
+                    if posted.is_err() {
+                        // The closure will never run, so release the count here instead.
+                        pending.fetch_sub(1, Ordering::SeqCst);
+                    }
+                }
+            });
+        }
+        Intents { tx, pending, epoch: Arc::new(AtomicU64::new(0)) }
+    }
+
+    /// Queue one command. Returns at once; `paint` runs on the UI thread with the reply.
+    fn send(
+        &self,
+        action: u8,
+        paint: impl FnOnce(&AppWindow, Result<hostlink::HostReport, String>) + Send + 'static,
+    ) {
+        self.epoch.fetch_add(1, Ordering::SeqCst);
+        self.pending.fetch_add(1, Ordering::SeqCst);
+        if self.tx.send(Intent { action, paint: Box::new(paint) }).is_err() {
+            self.pending.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+
+    /// Is a command queued or mid-paint?
+    fn busy(&self) -> bool {
+        self.pending.load(Ordering::SeqCst) != 0
+    }
+
+    /// How many commands have been queued this session.
+    fn epoch(&self) -> u64 {
+        self.epoch.load(Ordering::SeqCst)
+    }
+}
+
+/// A Read Aloud flip the user has made and the host has not yet shown the effect of.
+struct Transition {
+    /// What was asked for: true = start reading.
+    want: bool,
+    /// When it was asked. The cap ([`SETTLE_CAP_ON`] / [`SETTLE_CAP_OFF`]) runs from here.
+    since: Instant,
+}
+
+/// Holds the Read Aloud switch locked from a flip until the host *demonstrates* the flip
+/// happened — replacing a fixed timer, which could only ever be a guess at a duration the
+/// host actually knows.
+///
+/// The evidence is the host's own report, and it is symmetric. Turning on settles when the
+/// host is visibly engaged with Kindle's audio: `kindle_synth` (a page in flight) or
+/// `kindle_speaking` (audio out). Turning off settles when it is visibly neither. Both also
+/// require the host's `busy` to have cleared, or a Stop would settle on the silence that its
+/// own Ctrl+A has not yet caused.
+///
+/// `kindle_synth` is what makes the "on" direction work at all. Flipping the switch on takes
+/// seconds of UI Automation, and then *more* seconds of synthesis before a single sample
+/// exists — a stretch in which every audio clock reads idle and the old fixed timer expired
+/// squarely in the middle. A clock cannot report work that has produced no audio yet; that
+/// bit can, which is why the host now sends it.
+#[derive(Clone)]
+struct Settling(Arc<Mutex<Option<Transition>>>);
+
+impl Settling {
+    fn new() -> Settling {
+        Settling(Arc::new(Mutex::new(None)))
+    }
+
+    /// Record a flip. The switch stays locked until [`Self::observe`] sees it land.
+    fn begin(&self, want: bool) {
+        *self.0.lock().unwrap() = Some(Transition { want, since: Instant::now() });
+    }
+
+    /// Give up waiting (the host went away; there is nothing left to settle against).
+    fn clear(&self) {
+        *self.0.lock().unwrap() = None;
+    }
+
+    /// Is a flip still waiting on the host? Drives the faster poll cadence.
+    fn pending(&self) -> bool {
+        self.0.lock().unwrap().is_some()
+    }
+
+    /// Feed one host report, with the instant it was *received*. Returns whether the switch
+    /// should still be locked.
+    ///
+    /// `captured` is load-bearing. A heartbeat's reply can be sampled before the user clicks
+    /// and painted after, and such a report describes the world before the flip — for a Stop
+    /// issued between streams it reads "not busy, not engaged", which is precisely the shape
+    /// of a Stop that has already landed. Acting on it releases the switch while the Ctrl+A
+    /// is still sitting in the queue.
+    fn observe(&self, st: &hostlink::HostReport, captured: Instant) -> bool {
+        let mut held = self.0.lock().unwrap();
+        let Some(t) = held.as_ref() else { return false };
+        // The cap is checked first, so a stale report can't keep the lock alive past it.
+        let cap = if t.want { SETTLE_CAP_ON } else { SETTLE_CAP_OFF };
+        if t.since.elapsed() >= cap {
+            *held = None;
+            return false;
+        }
+        if captured <= t.since {
+            return true; // predates the flip: it cannot describe the flip's effect
+        }
+        // Kindle went away: nothing can land, so stop waiting for it rather than holding the
+        // lock out to the cap. The switch is dark anyway while `kindle-running` is false —
+        // this is about the state it comes back in when Kindle reopens.
+        if !st.kindle_running {
+            *held = None;
+            return false;
+        }
+        let engaged = st.kindle_synth || st.kindle_speaking;
+        let landed = !st.busy && if t.want { engaged } else { !engaged };
+        if landed {
+            *held = None;
+            return false;
+        }
+        true
+    }
+}
+
+/// The transport's painter: adopt the host's report, which is authoritative either way — on
+/// success it's the state the host applied, on failure the state Kindle was left in.
+///
+/// Only an unreachable host needs `revert`: the host vanished mid-command, so the switch's
+/// optimistic flip has to be undone rather than left claiming a reader nothing is behind.
+fn paint_transport(
+    settling: Settling,
+    revert: impl FnOnce(&AppWindow) + Send + 'static,
+) -> impl FnOnce(&AppWindow, Result<hostlink::HostReport, String>) + Send + 'static {
+    move |ui, res| match res {
+        Ok(st) => {
+            apply_report(ui, &st);
+            // This reply is the flip's own command answering (or a later one), so it is by
+            // construction newer than the transition it is being judged against.
+            ui.set_read_aloud_locked(settling.observe(&st, Instant::now()));
+            ui.set_status(st.message.into());
+        }
+        Err(e) => {
+            // Nothing left to settle against, and the switch is about to be disabled by
+            // `reading-active` anyway — don't leave a lock behind for the host's return.
+            settling.clear();
+            revert(ui);
+            ui.set_host_online(false);
+            ui.set_read_aloud_locked(false);
+            ui.set_status(e.into());
+        }
+    }
+}
+
+/// Mirror one host report onto the panel. The host is the authority for all three of these,
+/// so there is nothing to merge — only `speaking` is OR'd with the panel's own Preview,
+/// which is the one sound the host doesn't produce for anybody but us.
+fn apply_report(ui: &AppWindow, st: &hostlink::HostReport) {
+    ui.set_host_online(true);
+    ui.set_kindle_running(st.kindle_running);
+    ui.set_reading(st.reading);
+    ui.set_paused(st.paused);
+    ui.set_speaking(ui.get_previewing() || st.kindle_speaking);
+}
+
+/// Paint "the host isn't there". Also the panel's opening state, before the first reply:
+/// not yet told and offline are the same picture, and the honest one to show for the
+/// fraction of a second between the two.
+///
+/// Setting these properties from Rust doesn't fire the widgets' `toggled` callbacks, so
+/// none of this loops back out as a command to a host that isn't listening.
+fn apply_offline(ui: &AppWindow) {
+    ui.set_host_online(false);
+    // Only the host looks for Kindle, so with the host gone this is unknown, not false.
+    // "Kindle isn't open" is suppressed while offline anyway; don't assert it.
+    ui.set_kindle_running(false);
+    // Nothing is narrating without a host, whatever the switch said a moment ago.
+    ui.set_reading(false);
+    ui.set_paused(false);
+    ui.set_speaking(ui.get_previewing());
+}
+
+/// How long a heartbeat waits for its reply before calling the host offline. Comfortably
+/// inside [`HEARTBEAT_PERIOD`], so a slow answer can't push the next check late.
+const HEARTBEAT_TIMEOUT: Duration = Duration::from_millis(800);
+/// Target heartbeat cadence: ~1 Hz while the panel is open.
+const HEARTBEAT_PERIOD: Duration = Duration::from_millis(1000);
+
+/// Poll the host's health for as long as the panel is open, and paint the result.
+///
+/// Health is proven by real I/O every time — a `CMD_KINDLE` query down the pipe. Nothing
+/// here infers it from a process name, the tray icon, a cached voice list, a `controls.json`
+/// timestamp, a Kindle window, or a request that succeeded a second ago; each of those
+/// would keep reporting "ready" after the host had gone.
+///
+/// Exactly one request is in flight at a time. The request runs on a short-lived thread so
+/// the wait can be bounded (a blocking pipe read has no timeout of its own); when that
+/// bound expires we paint offline and then *wait out* the orphan before starting another,
+/// so a wedged host leaves one stuck thread rather than a new one every second.
+fn start_heartbeat(weak: slint::Weak<AppWindow>, intents: Intents, settling: Settling) {
+    std::thread::spawn(move || loop {
+        let started = Instant::now();
+        // Sampled BEFORE the query goes out, so the comparison at paint time spans the whole
+        // life of this report — not just the part after it came back.
+        let epoch_at_query = intents.epoch();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(hostlink::send(KINDLE_QUERY, hostlink::QUICK_BUSY_WAIT));
+        });
+
+        // Stamped the moment the reply lands, not when it is painted — the closure below can
+        // run seconds later, and `Settling` needs to know when this report was *true*.
+        let mut captured = Instant::now();
+        let report = match rx.recv_timeout(HEARTBEAT_TIMEOUT) {
+            Ok(Ok(st)) => {
+                captured = Instant::now();
+                Some(st)
+            }
+            Ok(Err(_)) => None, // couldn't reach the host: offline
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                // Answer the user now, then block until the stuck request settles so the
+                // next tick starts from a clean single-request state.
+                if panel_gone(weak.upgrade_in_event_loop(|ui| apply_offline(&ui))) {
+                    return;
+                }
+                let _ = rx.recv();
+                None
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => None,
+        };
+
+        // Two checks, both read INSIDE the closure, on the UI thread, at the instant of
+        // painting — not out here. There are seconds between a report arriving and its
+        // closure running, and a Play started inside that gap would be repainted away by a
+        // reading captured before it existed: the switch visibly flips back, which is the
+        // exact bounce this check exists to stop.
+        //
+        // `busy()` alone is not enough, because it can be true, then false again, entirely
+        // within that gap: this thread can be descheduled between receiving its reply above
+        // and posting the closure below, and a whole Play can queue, run and drain in there.
+        // The closure would then wake to `pending == 0` and faithfully paint a report from
+        // before the click. Comparing the epoch against the value sampled *before the query
+        // went out* closes it: any command at all, still running or long finished, makes this
+        // report too old to draw the transport from.
+        let intents = intents.clone();
+        let settle = settling.clone();
+        let posted = weak.upgrade_in_event_loop(move |ui| {
+            let busy = intents.busy() || intents.epoch() != epoch_at_query;
+            match report {
+                // A command of ours is in flight (or the host says it's mid-command): take
+                // the health, leave the transport alone. The settling check still runs — a
+                // flip cannot have landed while the host is mid-command, so this holds the
+                // lock rather than releasing it early.
+                Some(st) if busy || st.busy => {
+                    ui.set_host_online(true);
+                    ui.set_kindle_running(st.kindle_running);
+                    ui.set_speaking(ui.get_previewing() || st.kindle_speaking);
+                    ui.set_read_aloud_locked(settle.observe(&st, captured));
+                }
+                Some(st) => {
+                    apply_report(&ui, &st);
+                    ui.set_read_aloud_locked(settle.observe(&st, captured));
+                }
+                None if busy => ui.set_host_online(false),
+                None => {
+                    settle.clear();
+                    apply_offline(&ui);
+                    ui.set_read_aloud_locked(false);
+                }
+            }
+        });
+        if panel_gone(posted) {
+            return;
+        }
+
+        // Pace from the start of the tick, so a slow reply shortens the wait rather than
+        // adding to it. A tick that overran simply starts the next at once. While a flip is
+        // settling the cadence tightens to `SETTLE_POLL`: the switch is locked until a report
+        // says otherwise, so at 1 Hz the user would wait up to a second past the moment it
+        // could have been released.
+        let period = if settling.pending() { SETTLE_POLL } else { HEARTBEAT_PERIOD };
+        let elapsed = started.elapsed();
+        if elapsed < period {
+            std::thread::sleep(period - elapsed);
+        }
+    });
+}
+
+/// Whether a failed `upgrade_in_event_loop` means the panel is really gone.
+///
+/// Only `EventLoopTerminated` does. `NoEventLoopProvider` means the loop *hasn't started
+/// yet* — and the heartbeat is deliberately started before `ui.run()`, so its first tick can
+/// legitimately land in that window. Treating the two alike would end the loop on its first
+/// post and leave the panel reading "offline" for the rest of the session, with no recovery
+/// short of reopening it: precisely the stuck-forever health display this all exists to
+/// prevent. Anything else is transient by assumption — keep beating and try again next tick.
+fn panel_gone(posted: Result<(), slint::EventLoopError>) -> bool {
+    matches!(posted, Err(slint::EventLoopError::EventLoopTerminated))
 }

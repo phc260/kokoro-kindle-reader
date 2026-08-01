@@ -53,9 +53,28 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
   standing local-EoP concern; flag any path that reintroduces it.
 - **Bitness is fixed.** `kokoro-sapi`, `kokoro-hook`, `kokoro-inject` must stay x86 (Kindle
   is 32-bit); the host is x64 and spawns the injector rather than injecting itself.
-- **`controls.json` is the contract.** Every key `kokoro-panel` writes must be read by a
-  host reader — `native_synth::read_controls` for synth fields, `kindle_watch::enabled` for
-  `kindle_kokoro`. A key written but never read is a bug.
+- **`kokoro-host` is the sole authority for Kindle reading and health.** `kokoro-panel` has
+  no UI Automation, no Win32 dependency, and no Kindle poll: Play/Stop/Pause/Resume/Close go
+  over the pipe as `CMD_KINDLE` intent and it renders what the host reports back, health
+  included (an unopenable pipe is what "offline" means). Flag any panel code that inspects
+  or drives Kindle directly, any second native control transport, and any health check that
+  infers liveness from a process name, cached state, or a request that already succeeded.
+  All Kindle UI work belongs on `kindle_ctl`'s dedicated thread — off the tokio runtime and
+  off the synth worker. Commands there are serialized against each other deliberately (a
+  Stop waits for an in-flight Play; two overlapping keystroke sequences aimed at one blind
+  toggle would land in an unknowable order). What must never queue behind them is a query or
+  a pause, and neither touches that thread — flag anything that puts them there.
+- **The reading belief is never sampled from Kindle's assistive-reader toggle.** That UIA
+  element is only in the tree while the Aa menu is open, which is when the user is changing
+  it — so a read lands mid-change, gets stored as *definite*, and makes `set_reading` skip
+  its Ctrl+A, inverting Play and Stop against a blind toggle. `refresh` uses the process list
+  and the Kindle audio clock and touches no UIA. Flag any code that reads that toggle's
+  state; reading its *presence* to dismiss the flyout before Ctrl+A is the allowed use.
+- **`controls.json` is the contract, and it is SETTINGS only.** Every key `kokoro-panel`
+  writes must be read by a host reader — `native_synth::read_controls` for synth fields,
+  `kindle_watch::enabled` for `kindle_kokoro`. A key written but never read is a bug, and so
+  is a live command put in the file: `paused` was one, and it is host-owned state reached
+  over the pipe now.
 - **Synthesis is serialized.** espeak has global state and isn't thread-safe, and the `ort`
   session is owned by one worker thread. Any code calling espeak or running the session off
   that thread is a bug.
@@ -64,8 +83,13 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
 - **`CMD_SYNTH` is for real-time sinks only.** That stream is paced to ~real time, which is
   right for Kindle (the SAPI engine plays what it's handed) and wrong for everyone else.
   Timing it measures the pacing — every engine faster than realtime reads ~1.0x — so the
-  panel's speed test uses `CMD_BENCH`, and the browser path bypasses the pipe entirely.
-  Flag any new consumer that reaches for the paced path instead.
+  panel's speed test uses `CMD_BENCH`, its Preview uses `CMD_PREVIEW`, its transport and
+  health check use `CMD_KINDLE` (no audio at all), and the browser path bypasses the pipe
+  entirely. Flag any new consumer that reaches for the paced path instead — and don't let a
+  doc claim the pipe only serves real-time sinks; three of its four commands don't.
+  `CMD_PREVIEW` also keeps the panel's own synthesis off the host's *Kindle*-audio clock, so
+  "is Kokoro narrating?" is a fact the host states rather than a guess a client makes from
+  timing. Any new source of host audio that isn't Kindle needs the same separation.
 - **The browser has exactly ONE transport: loopback HTTP** (`webserve.rs`, port 8787). An
   extension cannot open a named pipe. A native-messaging bridge was prototyped first and
   rejected. **Flag any change that adds one as a fallback**: two

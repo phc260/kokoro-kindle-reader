@@ -21,11 +21,15 @@ use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
 };
 
-const TARGET: &str = "Kindle.exe";
+use crate::state::HostState;
+
+/// Kindle's process image name. Matched on the image name, not a window title, so it's
+/// locale-independent. `kindle_ctl` reuses both this and [`find_pid`].
+pub const TARGET: &str = "Kindle.exe";
 
 /// PID of the first process named `name`, if running. x64 enumeration sees WOW64 (x86)
 /// processes by name/PID fine — only x86 *module* enumeration from x64 fails.
-fn find_pid(name: &str) -> Option<u32> {
+pub fn find_pid(name: &str) -> Option<u32> {
     unsafe {
         let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0).ok()?;
         let mut pe = PROCESSENTRY32W {
@@ -125,8 +129,16 @@ pub struct Watch {
 
 /// One watcher tick. Injects into a newly-seen Kindle when enabled, and confirms the injector
 /// actually succeeded before considering the instance handled. Never panics.
-pub fn tick(app_data: &Path, w: &mut Watch) {
+///
+/// It also publishes the Kindle pid into [`HostState`]. That's free — the tick already has
+/// to look — and it keeps what the settings panel reads fresh from the moment the host
+/// starts, rather than only from the first panel query onwards. The **pid**, not a boolean:
+/// a Kindle replaced by another Kindle between two ticks has to void the reading belief
+/// exactly as Kindle disappearing does (see `HostState::set_kindle_pid`), and this is the
+/// one place that observes the change often enough to notice.
+pub fn tick(app_data: &Path, w: &mut Watch, state: &HostState) {
     let pid = find_pid(TARGET);
+    state.set_kindle_pid(pid);
     if pid != w.pid {
         // New Kindle instance (or Kindle gone): drop the old attempt/hook state so a restart
         // re-injects. An orphaned in-flight child exits on its own once its target is gone.

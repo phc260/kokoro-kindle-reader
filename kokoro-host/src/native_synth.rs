@@ -58,20 +58,22 @@ pub enum Engine {
 
 /// The per-utterance settings the pipe host reads from controls.json (replacing the
 /// webview's localStorage). `speed`/`gain` default to 1, `chunk` to 4 sentences.
-/// `paused` is a live command (not really a setting): while true the pipe stalls the
-/// audio stream mid-page so playback pauses without Kindle turning the page.
+///
+/// Settings only. Pause is *not* here: it's a live command, it is owned by the host
+/// (`state::HostState`), and it arrives over the pipe as `CMD_KINDLE` — a file the panel
+/// wrote to was the wrong home for it, and persisting it meant a host could come back up
+/// already stalled.
 #[derive(Clone, Copy)]
 pub struct Controls {
     pub speed: f32,
     pub gain: f32,
     pub chunk: u32,
-    pub paused: bool,
     pub engine: Engine,
 }
 
 impl Default for Controls {
     fn default() -> Self {
-        Controls { speed: 1.0, gain: 1.0, chunk: 4, paused: false, engine: Engine::Gpu }
+        Controls { speed: 1.0, gain: 1.0, chunk: 4, engine: Engine::Gpu }
     }
 }
 
@@ -94,9 +96,6 @@ pub fn read_controls(app_data: &Path) -> (String, Controls) {
             }
             if let Some(x) = v.get("chunk").and_then(|x| x.as_u64()) {
                 c.chunk = x as u32;
-            }
-            if let Some(x) = v.get("paused").and_then(|x| x.as_bool()) {
-                c.paused = x;
             }
             if let Some(x) = v.get("gpu_synth").and_then(|x| x.as_bool()) {
                 c.engine = if x { Engine::Gpu } else { Engine::Cpu };

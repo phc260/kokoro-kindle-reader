@@ -32,16 +32,20 @@ flowchart TB
     direction LR
     PIPE["pipe.rs<br/>named-pipe server · owns chunking"]
     SYNTH["native_synth.rs · Rust<br/>★ text + espeak + ort on Dawn WebGPU EP"]
+    CTL["kindle_ctl.rs<br/>the only code that touches Kindle"]
     PIPE -->|"synth each chunk"| SYNTH
     SYNTH -->|"raw f32 PCM"| PIPE
+    PIPE -->|"Play / Stop / Close"| CTL
   end
 
-  PANEL["kokoro-panel.exe · Slint (spawned on demand)<br/>narrator/speed/gain/chunk → controls.json<br/>model download/verify · Kindle-voice toggle · Preview"]
+  PANEL["kokoro-panel.exe · Slint (spawned on demand)<br/>narrator/speed/gain/chunk → controls.json<br/>model download/verify · Kindle-voice toggle · Preview<br/>Read Aloud transport (asks the host, not Kindle)"]
   CFG[("controls.json<br/>%APPDATA%\\…")]
   PANEL -->|writes| CFG
   CFG -->|"read live per utterance / sub-frame"| PIPE
 
   DLL <==>|"named pipe · KokoroSapiSynth<br/>'S' utterance → PCM frames"| PIPE
+  PANEL <==>|"same pipe · 'P' preview · 'B' bench<br/>'K' reading control + 1 Hz heartbeat"| PIPE
+  CTL -.->|"Ctrl+A · UIA readback · WM_CLOSE"| RA
 
   classDef engine fill:#ff4fa3,stroke:#b30059,color:#ffffff;
   classDef shim fill:#1f6feb,stroke:#0b3d91,color:#ffffff;
@@ -53,6 +57,11 @@ flowchart TB
 tray, hosts the named pipe that bridges Kindle's SAPI engine to the native synth, and
 reads its settings live from `controls.json`. **The host must be running for Kindle to
 speak.**
+
+It is also the only place Kindle is *driven*. The settings panel's Read Aloud switch,
+Pause/Resume, and "close Kindle" all travel over that same pipe as intent (`'K'`), and the
+panel draws the state the host reports back — including whether the host is answering at
+all, polled once a second. One process decides what Kindle is doing; the other displays it.
 
 ## How Kindle reads with Kokoro (the engine chain)
 
@@ -162,15 +171,15 @@ the engine the user actually has installed.
 
 | Path | What |
 |---|---|
-| `kokoro-host/` | The windowless tray host (x64): `main.rs` (tao event loop + tray + `auto-launch` + Kindle-watcher tick), `pipe.rs` (named-pipe server; owns chunking + prefetch + pacing), `native_synth.rs` (serialized Rust synth, GPU or CPU EP + `controls.json` reader) + `text.rs`/`espeak.rs` (kokoro-js text normalizer + espeak-ng FFI), `split_text.rs` (the sentence-chunk splitter), `kindle_watch.rs` (polls for Kindle, spawns the injector). `build.rs` links the espeak-ng import lib and stages the runtime DLLs + `espeak-ng-data`. |
-| `kokoro-panel/` | The native settings panel (Slint/Fluent): `ui/panel.slint` + `src/main.rs`, the framework-agnostic `download.rs` / `preview.rs` / `benchmark.rs` (the GPU-vs-CPU speed test's `CMD_BENCH` client), and `kindle_reader.rs` (hands-free Ctrl+A toggle of Kindle's Read Aloud + closing Kindle after the narration-voice checkbox, both via raw Win32/Toolhelp32 — UI Automation is only for best-effort state readback). Writes `controls.json`. |
+| `kokoro-host/` | The windowless tray host (x64): `main.rs` (tao event loop + tray + `auto-launch` + Kindle-watcher tick), `pipe.rs` (named-pipe server; owns chunking + prefetch + pacing), `native_synth.rs` (serialized Rust synth, GPU or CPU EP + `controls.json` reader) + `text.rs`/`espeak.rs` (kokoro-js text normalizer + espeak-ng FFI), `split_text.rs` (the sentence-chunk splitter), `state.rs` (`HostState` — the shared lock-free cell: audio clocks, live pause, Kindle belief), `kindle_ctl.rs` (the Kindle-control thread: hands-free Ctrl+A toggle of Read Aloud + `WM_CLOSE`, via raw Win32/Toolhelp32 — UI Automation only to find Kindle's window and dismiss an open flyout, never to read the reader's state back), `kindle_watch.rs` (polls for Kindle, spawns the injector). `build.rs` links the espeak-ng import lib and stages the runtime DLLs + `espeak-ng-data`. |
+| `kokoro-panel/` | The native settings panel (Slint/Fluent): `ui/panel.slint` + `src/main.rs` (incl. the 1 Hz host heartbeat), and the framework-agnostic `download.rs` / `preview.rs` (`CMD_PREVIEW`) / `benchmark.rs` (the GPU-vs-CPU speed test's `CMD_BENCH` client) / `hostlink.rs` (the `CMD_KINDLE` client — the panel's entire relationship with Kindle). Writes `controls.json`. Has no Win32 or UI Automation dependency, and must not grow one: the host owns Kindle. |
 | `kokoro-bench/` | Standalone GPU-vs-CPU synth timing tool, not part of the shipping app: reuses `kokoro-host/src/{text,espeak}.rs` via `#[path]` includes (`kokoro-host` is bin-only, no lib target). |
 | `kokoro-hook/` | x86 `cdylib` injected into Kindle 18632+: `DllMain` patches the shared `ISpVoice::SetVoice` vtable slot (index 18) → Kokoro token. `selftest` bin proves it Kindle-free. |
 | `kokoro-inject/` | x86 exe the host spawns: `LoadLibrary`-injects `kokoro_hook.dll` into `Kindle.exe`. |
 | `native-deps/` | Synth **dependency provisioning** only (no source): `fetch-deps.ps1` populates the gitignored dep folders alongside itself (`native-deps/runtime/` + `espeak-ng-src/`) — the Dawn/WebGPU runtime DLLs (from the `onnxruntime-webgpu` wheel) + espeak-ng (x64 build + import lib + `espeak-ng-data`). |
 | `kokoro-sapi/` | The x86 SAPI engine — a Rust `cdylib` (thin COM shim + pipe client, no deps): `lib.rs` (COM exports + registration), `engine.rs` (`ISpTTSEngine`), `worker.rs` (pipe client), `sapi.rs` (hand-declared `sapiddk.h` interfaces). Plus the `voice-setup.ps1` / `kindle-voice-guard.ps1` (Kindle hive patch) / `test-speak.ps1` scripts. |
 | `kokoro-sapi-smoke/` | No-Kindle COM + Speak smoke test for the engine (`run-speak-test.ps1`). |
-| `kokoro-protocol/` | The named-pipe wire constants (pipe name, the `'S'`/`'I'`/`'T'`/`'B'` commands, `STREAM_END`/`SYNTH_ERROR`/`CHUNK_INFO`, sample rate) as a small crate shared by `kokoro-host`, `kokoro-sapi` and `kokoro-panel` — the single source of truth for the format. |
+| `kokoro-protocol/` | The named-pipe wire constants (pipe name, the `'S'`/`'P'`/`'T'`/`'B'`/`'K'` commands, `STREAM_END`/`SYNTH_ERROR`/`CHUNK_INFO`, sample rate, the speaking debounce) as a small crate shared by `kokoro-host`, `kokoro-sapi` and `kokoro-panel` — the single source of truth for the format. |
 | `model-manifest.json` | Files the model downloads from HF (paths + sizes + SHA-256); embedded in `kokoro-panel` (the narrator list is derived from it). |
 | `icons/` | Shared app icons (LFS); embedded in the exes' version resource and the installer. |
 | `packaging/` | `installer.nsi` + `build-installer.ps1` (standalone NSIS build) — per-user install with self-elevating voice registration. See [`packaging/README.md`](packaging/README.md). |

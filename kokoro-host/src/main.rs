@@ -16,9 +16,11 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 mod espeak;
+mod kindle_ctl;
 mod kindle_watch;
 mod native_synth;
 mod split_text;
+mod state;
 mod text;
 
 mod pipe;
@@ -67,7 +69,11 @@ fn espeak_data_dir() -> PathBuf {
 /// owned by that one worker.
 ///
 /// HTTP is the browser's ONLY transport; see webserve.rs for why, and why not two.
-fn start_pipe_server() {
+///
+/// Returns the shared [`state::HostState`] so the tray's Kindle-watcher can publish into it
+/// too — it already looks for Kindle every tick, so the panel-facing "is Kindle running?"
+/// flag costs nothing to keep fresh.
+fn start_pipe_server() -> std::sync::Arc<state::HostState> {
     let app_data = app_data_dir();
     let base = app_data.join(MODEL_ID);
     let espeak = espeak_data_dir();
@@ -79,15 +85,20 @@ fn start_pipe_server() {
     }
 
     let native = native_synth::NativeSynth::spawn(base.clone(), espeak);
+    // One cell for everything a peer can ask about: the audio clocks CMD_STATUS/CMD_KINDLE
+    // answer from, the live pause, and what the host believes Kindle is doing.
+    let host_state = std::sync::Arc::new(state::HostState::default());
+    // The Kindle-control thread — the only place in the project that touches Kindle's UI.
+    // Blocking UI Automation lives on its own OS thread, off this tokio runtime and off the
+    // serialized synth worker, so a heartbeat or a Stop can't queue behind a Play.
+    let kindle = kindle_ctl::KindleCtl::spawn(host_state.clone());
     let ctx = pipe::Ctx {
         app_data: app_data.clone(),
         // Where the voices/*.bin live, for the HTTP endpoint's /status voice list.
         model_base: base,
         native,
-        // Shared "last audio written" clock the pipe answers CMD_STATUS from.
-        last_audio_ms: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
-        // Shared across every client connection, so CMD_BENCH stays one-at-a-time.
-        bench_busy: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        state: host_state.clone(),
+        kindle,
     };
 
     // The web endpoint is best-effort: a failure to create or bind it must not take the pipe
@@ -123,6 +134,8 @@ fn start_pipe_server() {
             });
         })
         .expect("spawn pipe thread");
+
+    host_state
 }
 
 /// Register the host to launch hidden at login (release only, so a dev run doesn't
@@ -181,7 +194,7 @@ fn load_tray_icon() -> tray_icon::Icon {
 }
 
 fn main() {
-    start_pipe_server();
+    let host_state = start_pipe_server();
     #[cfg(not(debug_assertions))]
     enable_autostart();
 
@@ -195,15 +208,25 @@ fn main() {
     }));
 
     let menu = Menu::new();
-    let settings_i = MenuItem::new("Settings…", true, None);
+    let settings_i = MenuItem::new("Settings", true, None);
     // The browser extension needs a port + token pasted into its options page once per browser.
     // A release host is a windows-subsystem exe with no console to print them to, so the only
-    // way out is the file — this opens it. Not optional plumbing: without this menu item the
-    // transport is unusable, because there is nowhere else the token is visible.
-    let pairing_i = MenuItem::new("Web pairing code…", true, None);
+    // way out is the file — this opens it. That makes the item load-bearing whenever the
+    // browser path ships: without it the transport is unusable, because there is nowhere else
+    // the token is visible.
+    //
+    // Which is exactly why it's off in 0.3.3. Kindle Cloud Reader is v0.4.x work; offering a
+    // pairing code for a transport this release doesn't ship would hand the user a dead end
+    // whose only honest explanation is "ignore this". The item is *built and wired* (the
+    // handler below still matches its id) and simply not appended, so turning the browser
+    // path back on is this one flag — not a re-derivation of why the menu needs it at all.
+    const SHOW_WEB_PAIRING: bool = false;
+    let pairing_i = MenuItem::new("Web pairing code", true, None);
     let quit_i = MenuItem::new("Quit", true, None);
     menu.append(&settings_i).expect("append settings");
-    menu.append(&pairing_i).expect("append pairing");
+    if SHOW_WEB_PAIRING {
+        menu.append(&pairing_i).expect("append pairing");
+    }
     menu.append(&tray_icon::menu::PredefinedMenuItem::separator())
         .expect("append separator");
     menu.append(&quit_i).expect("append quit");
@@ -238,7 +261,7 @@ fn main() {
         match event {
             // Timer wake (or first run): poll for Kindle and inject the hook if needed.
             Event::NewEvents(StartCause::ResumeTimeReached { .. } | StartCause::Init) => {
-                kindle_watch::tick(&app_data, &mut kindle);
+                kindle_watch::tick(&app_data, &mut kindle, &host_state);
             }
             Event::UserEvent(menu_event) => {
                 if menu_event.id == settings_id {

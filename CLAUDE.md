@@ -9,10 +9,12 @@ the WebGPU EP, and espeak-ng is reached over a thin FFI. Two x64 exes, plus thre
 artifacts Kindle loads in-process:
 
 1. **`kokoro-host.exe`** (x64) — windowless system-tray daemon. Owns the named pipe,
-   synthesizes, reads `controls.json` live, runs the Kindle-watcher. The only thing that
-   produces audio. Auto-starts hidden at login.
+   synthesizes, reads `controls.json` live, runs the Kindle-watcher, and is the **only**
+   process that touches Kindle at all. The only thing that produces audio. Auto-starts
+   hidden at login.
 2. **`kokoro-panel.exe`** — native Slint settings panel, spawned on demand from the tray.
-   Narrator/speed/volume, Preview, model download/verify, Kindle-narration toggle.
+   Narrator/speed/volume, Preview, model download/verify, Kindle-narration toggle, and the
+   Read Aloud transport — which it drives by *asking the host*, never Kindle.
 3. **`KokoroSapi.dll`** (x86) — thin connect-only COM shim Kindle loads in-process; forwards
    each `Speak` over the pipe to the host.
 4. **`kokoro_hook.dll` + `kokoro-inject.exe`** (x86) — make Kindle for PC 1.0.18632.0+ narrate
@@ -20,21 +22,26 @@ artifacts Kindle loads in-process:
 
 ```
 Kindle.exe (x86) ──in-proc COM (LoadLibrary + vtable)──▶ KokoroSapi.dll (x86 shim)
-                                                            │ named pipe \\.\pipe\KokoroSapiSynth
-Chrome/Edge (Firefox: see below)                            │
-  └─ kokoro-browser-extension (read.amazon.com)             │
-       └── loopback HTTP 127.0.0.1:8787 ──▶ webserve.rs ────┤
-                                                            ▼
+   ▲                                                        │ named pipe \\.\pipe\KokoroSapiSynth
+   │ Ctrl+A / UIA / WM_CLOSE                                 │  'S' synth · 'B' bench
+   │ (kindle_ctl.rs — the ONLY code that touches Kindle)     │  'P' preview · 'K' Kindle control
+   │                                                         │
+Chrome/Edge (Firefox: see below)                             │
+  └─ kokoro-browser-extension (read.amazon.com)              │
+       └── loopback HTTP 127.0.0.1:8787 ──▶ webserve.rs ─────┤
+                                                             ▼
       kokoro-host.exe (x64, tray): pipe.rs ──▶ native_synth.rs (Rust synth:
                                        ▲          text.rs + espeak.rs + ort/Dawn WebGPU EP)
         reads live ── controls.json ──┘        ▲ spawns "Settings"
                           ▲                     │
       kokoro-panel.exe (Slint) writes ─────────┘
+        └── 'K' over the same pipe: Play/Stop/Pause/Resume as intent, + a 1 Hz heartbeat
 ```
 
 All audio comes from the native synth in `kokoro-host`; the SAPI engine synthesizes
 nothing. **Consequence: `kokoro-host` must be running for Kindle to speak** — and it also
-injects the hook, so one running host both hooks Kindle and serves its audio.
+injects the hook and owns the reading controls, so one running host hooks Kindle, drives its
+Read Aloud, and serves its audio. The panel is a view onto the host, not a second driver.
 
 ## Where the details live
 
@@ -137,23 +144,106 @@ the panel and Read Aloud in Kindle (or `test-speak.ps1`).
   `native_synth::bench` instead: same worker, same session builder, unpaced, on a fixed
   sentence the **host** owns (comparable numbers; a client can't hand the worker an
   arbitrary text). It shares the serialized worker with real synthesis, so the panel
-  refuses to start one while Kokoro is speaking.
+  refuses to start one while Kokoro is narrating Kindle.
+- **The panel's Preview is `CMD_PREVIEW` (`'P'`), not `CMD_SYNTH`.** Same request and
+  response bytes; the host just doesn't pace it (the panel buffers the whole clip before
+  playing any of it, so pacing only makes the intro take as long to arrive as to speak) and
+  doesn't stamp the Kindle-audio clock with it. The second half is the load-bearing one:
+  without a command of its own, the host cannot tell its own panel's silent narrator
+  prefetch from Kindle narrating a page, and every consumer of "is Kokoro speaking?" has to
+  guess from timing. One did, and the speed test had to distrust its own reading because of
+  it. Anything that plays host audio without being Kindle needs the same treatment.
+
+### `kokoro-host` is the sole authority for Kindle reading and health
+- **The panel does not touch Kindle** — no UI Automation, no window enumeration, no
+  keystrokes, no process lookups; `kokoro-panel` has no `windows`/`uiautomation` dependency
+  and adding one back is the first step to two processes disagreeing about what Kindle is
+  doing (which is what this replaced). Play/Stop/Pause/Resume/Close travel as intent over
+  `CMD_KINDLE` (`'K'`) on the existing pipe, and the panel renders the state the host
+  reports back — including a failure, which reverts the switch rather than leaving it
+  claiming a reader that never started. **Do not add a second native transport** for this: no
+  loopback control port, window message, registry signal, or file heartbeat.
+- **All Kindle UI work runs on `kindle_ctl`'s own OS thread** — blocking, COM-heavy, and
+  `dismiss_open_flyout` waits out a matcher timeout on every command, since the flyout it
+  looks for is absent in the normal case. Off the tokio pipe runtime *and* off the synth
+  worker, so it can't be stuck behind
+  a page of narration and can't stall the pipe while it works. Commands on that thread are
+  **serialized against each other on purpose**: a Stop *does* wait for an in-flight Play,
+  because two overlapping foreground-plus-keystroke sequences aimed at one blind toggle
+  would land in an unknowable order. What must never queue behind Kindle work is a *query*
+  or a *pause* — and neither touches that thread.
+- **`CMD_KINDLE`'s query, pause and resume are answered inline off atomics** (`state.rs`),
+  never on that thread. A query also *kicks* a refresh (coalesced, rate-limited) and answers
+  from cache, so no heartbeat ever waits on UIA. That refresh can learn a Read Aloud **started**
+  inside Kindle (a synth stream appears); it cannot learn one was **stopped** there, because the
+  only evidence is one-way and the UIA read that could have seen it is gone by design. A manual
+  stop therefore leaves the belief reading `true` until the next command corrects it.
+- **Health is reachability, not a reply value.** A pipe that won't open is an offline host;
+  no field can express that, which is why the old `CMD_STATUS` + `unwrap_or(false)` made a
+  stopped host indistinguishable from an idle one. The panel proves it with real I/O at
+  ~1 Hz and never infers it from a process name, the tray icon, a cached voice list, a
+  `controls.json` timestamp, a Kindle window, or a request that worked a second ago.
+- **Read Aloud is a blind toggle (Ctrl+A), so a command is only as good as the belief behind
+  it.** `set_reading` refreshes that belief from evidence first and toggles only if it still
+  disagrees — otherwise a second Play turns reading *off*. Evidence, in order: Kindle gone or
+  restarted (definite, via the pid), then Kindle audio flowing ⇒ reading. That last one is
+  **one-way**: quiet is not proof of stopped (page gaps, a pause, and slow synthesis are all
+  quiet).
+- **The evidence for "reading" is a synth STREAM that opened after the last command**
+  (`stream_proves_reading`), not audio, and not a latch. A stream open for Kindle means its
+  narrator asked for a page — stronger than audio and available seconds earlier, before the
+  first sample exists. The start-time comparison against `commanded_ms` is what stops it
+  arguing with a command: the stream a Stop interrupted opened *before* that Stop, so it says
+  nothing about the present however long Kindle takes to abandon it. Two earlier shapes were
+  wrong and both are worth remembering:
+  - **The audio clock alone** undid the Stop the user had just watched succeed — audio doesn't
+    cease when Read Aloud does (stream lead, the 1.5 s debounce, and Kindle possibly playing
+    out the page), so a refresh in that tail concluded "reading" and **bounced the switch back
+    ON**. A time-boxed grace is the same mistake wearing a number: it must guess the tail, and
+    the case that most needs covering is the one that outlasts any guess.
+  - **A latch cleared by observed silence** fixed the bounce and broke detection, because it
+    needed something to *watch* the silence and refreshes only happen while a client is
+    querying. Close the panel after a Stop, start Read Aloud inside Kindle, reopen the panel:
+    the silence between was never observed, the latch was still set, and the belief stayed
+    `false` while Kindle read aloud — so Stop took its early return and sent no Ctrl+A at all.
+    **Compare timestamps, don't accumulate observations**: the answer must not depend on who
+    was watching.
+- **A new Kindle pid voids the audio clock, not just the belief.** `set_kindle_pid` zeroes
+  `last_kindle_audio_ms` alongside `reading`/`paused`, because that clock measures audio
+  written for a Kindle that no longer exists — and the inference would otherwise read the
+  dead reader's tail as proof the *replacement* is already narrating, handing the fresh Kindle
+  the identical wrong belief the reset exists to clear.
+- **Never read the belief back off Kindle's own toggle.** `refresh` used to sample
+  "ToggleButton-Assistive reader toggle" through UIA and adopt it as definite. That element
+  is only in the tree while the **Aa menu is open** — which is exactly when the user is
+  working that toggle by hand, so the only moment it could be read was the only moment it was
+  changing. A sample taken between the tap and Kindle's repaint stored the stale value as
+  *definite*, `set_reading` skips its Ctrl+A on a definite belief, and against a blind toggle
+  that inverts Play and Stop for as long as the belief survives. Reading it is the race.
+  `refresh` now touches no UIA at all: process list plus the Kindle audio clock, neither of
+  which anything else is mutating. The toggle's AutomationId is still used to notice the
+  flyout is **open** (it traps Ctrl+A and must be dismissed) — never to ask what it says.
 - **`fetch-deps.ps1` must run before building `kokoro-host`.** `build.rs` panics if the
   provisioned dep folders under `native-deps/` (ORT + Dawn DLLs + espeak) are missing.
   It also stages the 5 runtime DLLs next to the exe.
 
-### `controls.json` — single source of truth, read live
+### `controls.json` — single source of truth for SETTINGS, read live
 - Lives at `%APPDATA%\com.phc260.kokoro-kindle-reader\controls.json`. The panel writes
-  `voice`/`speed`/`gain`/`chunk`/`kindle_kokoro`/`paused`/`gpu_synth`; the host re-reads
-  `voice`/`speed`/`chunk`/`gpu_synth` per utterance and `gain`/`paused` per sub-frame (via
+  `voice`/`speed`/`gain`/`chunk`/`kindle_kokoro`/`gpu_synth`; the host re-reads
+  `voice`/`speed`/`chunk`/`gpu_synth` per utterance and `gain` per sub-frame (via
   `native_synth::read_controls`), so a slider move lands on the next chunk/page — not
-  frozen into prefetched samples (`paused` stalls the stream live with the pipe held open;
-  `gpu_synth` triggers a session rebuild on the next chunk, since the EP is fixed at
-  session-build time). `kindle_kokoro` is read separately, per watcher tick, by
-  `kindle_watch::enabled` (default `true`).
+  frozen into prefetched samples (`gpu_synth` triggers a session rebuild on the next chunk,
+  since the EP is fixed at session-build time). `kindle_kokoro` is read separately, per
+  watcher tick, by `kindle_watch::enabled` (default `true`).
 - **Invariant: every key the panel writes must be read by whichever host reader consumes it**
-  — `read_controls` for the synth fields (`paused` among them, consumed in `pipe.rs`),
-  `kindle_watch` for `kindle_kokoro`. Keep them in sync.
+  — `read_controls` for the synth fields, `kindle_watch` for `kindle_kokoro`. Keep them in
+  sync.
+- **Settings only — a live command does not belong in this file.** `paused` used to live
+  here, which made a command travel as a file the host polled, gave two processes write
+  access to one document, and let a restart come back up already stalled. It is
+  `HostState::paused` now: set over `CMD_KINDLE`, held in memory, read by `pipe.rs` per
+  sub-frame (same mid-page stall, same held pipe). A setting is something the user chose and
+  the host reads when it next needs it; a command has to *arrive*.
 - The pacing lead (500 ms) / sub-frame size (250 ms) are **not** user-tunable; fixed
   constants in `pipe.rs` (`DEFAULT_LEAD_MS` / `DEFAULT_SUBFRAME_MS`).
 
@@ -178,6 +268,11 @@ the panel and Read Aloud in Kindle (or `test-speak.ps1`).
   - It is reproducible outside the browser: `curl` with the bearer token *is* the transport.
   - Cost of the choice: a **pairing step**, once per browser (tray → "Web pairing code"). That's
     the price of not having the browser vouch for the client, and it's a paste.
+  - **That tray item is hidden in 0.3.3** (`SHOW_WEB_PAIRING` in `main.rs`). The browser path is
+    v0.4.x, and the tray is the only place the token is visible, so hiding it is what makes the
+    endpoint unreachable in practice for this release rather than half-offered. `webserve.rs`
+    still runs and still writes `web-endpoint.json`; nothing about the transport changed. Flip
+    the flag when the browser path ships — don't rebuild the menu item, it's still wired.
 - **The HTTP endpoint's four checks are not optional**: 127.0.0.1 bind, origin allowlist,
   constant-time bearer token, `Host` check (DNS-rebinding guard). No TLS — 127.0.0.1 is already
   a trustworthy origin and a self-signed cert defends against nobody. The security delta versus
@@ -350,11 +445,16 @@ the panel and Read Aloud in Kindle (or `test-speak.ps1`).
   still speaking the text captured when the page started, and only the boxes moved. No match
   (the reflow pushed the word onto the next page) and an ambiguous match both draw nothing: a
   mark in the wrong place costs more than a missing one.
-- **Every client of the *pipe* is a real-time sink**, and that's what keeps its command set
-  small (`'S'`/`'T'`/`'B'`). The browser isn't one and doesn't use the pipe. `CMD_SYNTH_RAW`
-  (`'R'`, unpaced) and `CMD_INFO` (`'I'`) existed only for the bridge and were removed with it —
-  if a non-real-time pipe client ever appears, the three differences it needs (unpaced, no gain,
-  voice on the wire) are in that commit.
+- **Only `CMD_SYNTH` (`'S'`) is for a real-time sink**, and only Kindle's SAPI engine sends it.
+  The pipe's other commands exist because the callers are *not* sinks: `CMD_BENCH` (`'B'`) times
+  the model unpaced, `CMD_PREVIEW` (`'P'`) buffers a whole clip before playing a note of it, and
+  `CMD_KINDLE` (`'K'`) carries no audio at all — it's the panel's transport and its ~1 Hz health
+  check. The browser doesn't use the pipe (loopback HTTP, above). **The pacing is the thing to
+  ask about, not the socket:** a caller that isn't consuming in real time must not be handed the
+  paced stream, which is the whole reason `'B'` and `'P'` are separate commands rather than flags
+  on `'S'`. `CMD_SYNTH_RAW` (`'R'`, unpaced) and `CMD_INFO` (`'I'`) were built for the deleted
+  native-messaging bridge and went with it; if a client ever needs *that* shape (unpaced, no
+  gain, voice on the wire), it's in that commit.
 
 ### Bitness, registration, file placement
 - **The engine must stay x86** — Kindle is a 32-bit process and loads the COM DLL
