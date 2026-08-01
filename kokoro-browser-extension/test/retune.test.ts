@@ -196,6 +196,49 @@ test('a speed change is not consumed by a Stop racing it', async () => {
   expect(fake.sent.map((s) => s.index)).toEqual([0, 1]);
 });
 
+/** Poll until `cond` holds. Timing out here means a wait was never interrupted. */
+async function waitFor(cond: () => boolean, what: string): Promise<void> {
+  for (let i = 0; i < 200; i++) {
+    if (cond()) return;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  throw new Error(`timed out waiting for ${what}`);
+}
+
+test('a speed change during the wait for the next column is acted on, and costs no text', async () => {
+  // A two-column page feeds ONE utterance, so the send loop waits on the iterator while the second
+  // column is being recognized - a wait with no upper bound and, until it was raced, the one place
+  // in the loop a slider move could sit unnoticed. Racing it must not consume the pull: an
+  // iterator's value is gone once `next()` has produced it.
+  const opts = { rate: 1 };
+  let recognized!: () => void;
+  const secondColumn = new Promise<void>((r) => (recognized = r));
+
+  async function* columns(): AsyncGenerator<string> {
+    yield TEXTS[0]!;
+    yield TEXTS[1]!;
+    await secondColumn;
+    yield TEXTS[2]!;
+    fake.tick = 1000;
+  }
+
+  const done = narrator().speakAll(columns(), opts);
+
+  await waitFor(() => fake.sent.length === 2, 'the first column to be sent');
+  opts.rate = 1.5;
+  await waitFor(() => fake.sent.some((s) => s.speed === 1.5), 'the flush to happen during the wait');
+
+  recognized();
+  await done;
+
+  const speeds = finalSpeeds();
+  expect([...speeds.keys()].sort((a, b) => a - b)).toEqual([0, 1, 2]);
+  expect(speeds.get(0)).toBe(1); // being heard
+  expect(speeds.get(1)).toBe(1.5);
+  // The column that arrived after the flush - the pull was held, not dropped, so it is still spoken.
+  expect(speeds.get(2)).toBe(1.5);
+});
+
 // --- the gap the flush would otherwise leave --------------------------------------------------
 //
 // A flush hands back the lead, so synthesis is where it is at the start of a page: nothing

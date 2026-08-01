@@ -137,7 +137,11 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
   a second change mid-ramp repeats a sentence); `playbackRate` used to retune scheduled audio (it
   shifts the pitch); cutting the chunk currently playing; a retune driven by the slider's `input`
   rather than `change` (a drag then costs dozens of re-syntheses on the worker Kindle shares); or a
-  flush that bumps the epoch (that is a Stop, and it ends the page).
+  flush that bumps the epoch (that is a Stop, and it ends the page). Also flag any wait between the
+  slider and the flush that cannot see the change: the throttle's nap is sliced and the pull for more
+  text is raced (`raceInterrupt`, holding the pull rather than re-issuing it - an iterator's value is
+  consumed by the `next()` that produced it, so a dropped pull is a lost chunk), and the worker's
+  `live` options are published before `narratorFor()` is awaited, which on a first Play is seconds.
 - **Kindle 18632's narrator is event-driven.** The SAPI engine must emit word/sentence/
   bookmark events at true audio offsets, or Kindle speaks one sentence per page and stops.
 - **The bundle is GPLv3 even though the source is MIT.** The app links espeak-ng

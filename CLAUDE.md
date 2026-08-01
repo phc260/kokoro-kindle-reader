@@ -232,6 +232,13 @@ the panel and Read Aloud in Kindle (or `test-speak.ps1`).
   to the end of the chunk being HEARD, drop that audio's marks, and re-send from there — **at the
   same chunk indices**, or every later boundary remaps onto the wrong word. The playing chunk
   finishes at the old speed; cutting it is a click for the sake of a second.
+- **A change is only as prompt as the longest wait that can't see it**, so every wait between the
+  slider and the flush is interruptible: the throttle's nap is sliced, and the pull for more text is
+  *raced* (`raceInterrupt`) — that one has no upper bound, since a two-column page waits there while
+  the second column is recognized. The pull is **held, never re-issued**: an iterator's value is
+  consumed by the `next()` that produced it, so dropping one loses a chunk of the book. The worker's
+  `live` options are likewise published *before* `narratorFor()` is awaited — that await is seconds
+  wide on a first Play, and a slider moved inside it would otherwise find nothing to write to.
 - **A flush leaves NO lead, so the chunk it resumes on must re-enter `PLAYBACK_RAMP`.** This is the
   same cold start as the top of a page and it has the same fix. Re-sending that chunk whole put a
   silence *one to two sentences long* right after the change — ~5.8 s to render a settled chunk with

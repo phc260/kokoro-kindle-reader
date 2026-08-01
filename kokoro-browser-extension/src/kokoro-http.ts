@@ -21,6 +21,7 @@ import { planChunks, PLAYBACK_RAMP, type Narrator, type SpeakOptions, type Voice
 import { langOf } from './voices';
 import {
   onWordMarks,
+  raceInterrupt,
   retuneStream,
   sendToOffscreen,
   sleep,
@@ -182,6 +183,15 @@ export class KokoroHttpNarrator implements Narrator {
     let next = 0;
     let drained = false;
     const feed = chunks[Symbol.asyncIterator]();
+    /**
+     * The pull in flight, when a wait for more text was cut short by a speed change.
+     *
+     * Held rather than re-issued: `next()` consumes the value, so a dropped pull is a chunk of the
+     * book nobody ever hears. Waiting for text is a real wait on a streaming page - the second
+     * column of a two-column page is still being recognized - and it is the one wait that would
+     * otherwise not notice the slider.
+     */
+    let pull: Promise<IteratorResult<string>> | null = null;
 
     /** The speed everything scheduled so far was rendered at. */
     let speed = opts.rate ?? 1;
@@ -232,7 +242,10 @@ export class KokoroHttpNarrator implements Narrator {
         if (pending.length || next < sent.length || !drained) {
           if (!pending.length) {
             if (next === sent.length) {
-              const it = await feed.next();
+              pull ??= feed.next();
+              const it = await raceInterrupt(pull, changed);
+              if (!it) continue; // retune first; the pull is still held and still owed a chunk
+              pull = null;
               if (it.done) {
                 drained = true;
                 continue;
@@ -276,6 +289,9 @@ export class KokoroHttpNarrator implements Narrator {
       // However this ended - drained, stopped, or thrown - the listener has to go, or a page's
       // worth of them accumulates on the worker and every later mark is delivered many times.
       unsubscribe?.();
+      // A pull abandoned by Stop is nobody's to await now, so it must not report a rejection into
+      // the void - an unhandled one is a console error on a path that worked.
+      void pull?.catch(() => {});
       // The feed is driven by hand rather than by `for await`, so closing it is by hand too.
       await feed.return?.();
     }

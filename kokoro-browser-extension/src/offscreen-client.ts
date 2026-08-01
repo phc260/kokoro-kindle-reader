@@ -107,6 +107,26 @@ export async function retuneStream(epoch: number): Promise<Resume | 'stopped' | 
   return r.stale ? 'stopped' : r.resume;
 }
 
+/** Marks a race won by the clock rather than by the promise. Local, so it can never be a `T`. */
+const TICK = Symbol('tick');
+
+/**
+ * Await `p`, giving up on the wait - not on `p` - as soon as `interrupt` turns true. Undefined
+ * means it did.
+ *
+ * The promise is deliberately NOT abandoned: the caller holds it and awaits it again. An async
+ * iterator's value is consumed by the `next()` that produced it, so a pull dropped mid-flight is a
+ * chunk of the book that is never spoken. This exists because waiting for more text is the one
+ * place a speed change could otherwise sit unnoticed for as long as the page takes to recognize.
+ */
+export async function raceInterrupt<T>(p: Promise<T>, interrupt: () => boolean): Promise<T | undefined> {
+  for (;;) {
+    if (interrupt()) return undefined;
+    const r = await Promise.race([p, sleep(POLL_MS).then(() => TICK)]);
+    if (r !== TICK) return r as T;
+  }
+}
+
 /**
  * Block while the buffer is full. Returns why it stopped blocking.
  *

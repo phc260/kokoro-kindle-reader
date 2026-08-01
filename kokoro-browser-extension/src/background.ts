@@ -229,9 +229,13 @@ chrome.runtime.onConnect.addListener((port) => {
           if (msg.streaming) feeds.set(id, feed);
           else feed.close();
 
-          const n = await narratorFor();
+          // Published BEFORE the engine is chosen, because that await is seconds wide on a first
+          // Play (see below) and a slider moved inside it would otherwise find nothing to write
+          // to - the page would then read to its end at the speed Play was pressed at.
           const options = { ...msg.options };
           live = options;
+
+          const n = await narratorFor();
           try {
             // Cancelled while the engine was being chosen? Then say nothing. That await is not
             // instant - on a first Play it connects to the daemon and loads the model, so it is

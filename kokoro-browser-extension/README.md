@@ -151,6 +151,15 @@ piece after the one being heard rather than at the top of a part-heard chunk.
 The chunk playing when you let go of the slider finishes at the old speed — cutting it mid-word
 would be an audible click in exchange for a second or two.
 
+For "when you let go" to be true, every wait between the slider and the flush has to be able to
+notice it. The send loop spends its time in two: the throttle, once the lead is full, and the pull
+for more text — which on a two-column page is the whole time the second column is being recognized,
+and has no upper bound at all. The throttle's nap is sliced and the pull is raced, and the raced
+pull is **held** rather than asked for again, because an iterator's value is consumed by the call
+that produced it. The service worker publishes the live options *before* it picks an engine for the
+same reason: on a first Play that step connects to the daemon and loads the model, and a slider
+moved inside those seconds would find nothing to write to.
+
 The retune fires on the slider's `change`, not `input`: a drag emits dozens of `input` events and
 each committed value costs a real re-synthesis on the one synth worker Kindle also queues behind.
 The readout follows the drag; the audio changes when you let go.
@@ -204,7 +213,7 @@ header) live in [`kokoro-host/src/webserve.rs`](../kokoro-host/src/webserve.rs).
 | `src/background.ts` | Service worker. Picks the engine (Kokoro if paired, else `chrome.tts`), owns the port to the page, and feeds a page's parts into one utterance |
 | `src/speak.ts` | The narration seam: chunk schedule, the part stream and its offset mapping, where a part may be cut |
 | `src/offscreen.ts` | Offscreen document: the Tesseract worker **and** the AudioContext — a service worker has neither. Fires the word marks off the audio clock, and gives back the lead on a speed change |
-| `src/offscreen-client.ts` | The pacing rules: lead cap, throttle loop, epoch handling, word-mark subscription |
+| `src/offscreen-client.ts` | The pacing rules: lead cap, throttle loop, epoch handling, word-mark subscription, and the waits a speed change has to be able to cut short |
 | `src/word-timing.ts` | Splits a chunk's known duration across its words. Kokoro's only source of boundaries |
 | `src/kokoro-http.ts` | The narrator, pairing storage, and the daemon probe |
 | `scripts/make-key.ts` | Regenerates the pinned extension identity. Read its header before running it |
