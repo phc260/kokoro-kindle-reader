@@ -397,7 +397,12 @@ async fn serve_conn(stream: TcpStream, web: WebCtx) -> std::io::Result<()> {
             }
 
             match web.ctx.native.synth(text, speed, voice, controls.engine).await {
-                Some(pcm) => {
+                // `.pcm` only: the browser highlights on its own estimated boundaries
+                // (`word-timing.ts`), and handing it real marks means a response shape that
+                // carries both — a change on the extension side too. The marks exist and are
+                // the better source; wiring them across is the browser path's own increment.
+                Some(out) => {
+                    let pcm = out.pcm;
                     // Stamp the shared "audio just went out" clock so the panel's CMD_STATUS
                     // sees browser narration too and will not start a bench underneath it.
                     // Not the *Kindle* clock: the browser is a third source, and conflating

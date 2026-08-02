@@ -17,8 +17,14 @@
 // voice af_heart, so a normal install needs no flags. Needs the runtime DLLs +
 // espeak-ng-data staged next to the exe (build.rs does this).
 
+// Both files carry the word-timing half of the host's pipeline (source spans, phoneme
+// attribution, duration aggregation), which a timing tool has no use for. `allow` here
+// rather than in the shared files: there the same items are live, and annotating them
+// would suppress a warning that should still fire if the host stops using one.
+#[allow(dead_code)]
 #[path = "../../kokoro-host/src/text.rs"]
 mod text;
+#[allow(dead_code)]
 #[path = "../../kokoro-host/src/espeak.rs"]
 mod espeak;
 

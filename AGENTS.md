@@ -80,7 +80,7 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
   that thread is a bug.
 - **The wire format lives in `kokoro-protocol`**, a path dep of every consumer. Neither
   `kokoro-host`, `kokoro-sapi` nor `kokoro-panel` may hardcode the constants inline.
-- **`CMD_SYNTH` is for real-time sinks only.** That stream is paced to ~real time, which is
+- **`CMD_SYNTH` and `CMD_SYNTH_ALIGNED` are for real-time sinks only.** That stream is paced to ~real time, which is
   right for Kindle (the SAPI engine plays what it's handed) and wrong for everyone else.
   Timing it measures the pacing — every engine faster than realtime reads ~1.0x — so the
   panel's speed test uses `CMD_BENCH`, its Preview uses `CMD_PREVIEW`, its transport and
@@ -90,6 +90,41 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
   `CMD_PREVIEW` also keeps the panel's own synthesis off the host's *Kindle*-audio clock, so
   "is Kokoro narrating?" is a fact the host states rather than a guess a client makes from
   timing. Any new source of host audio that isn't Kindle needs the same separation.
+- **Kindle's word highlight is model-derived; the browser's is not, and the two must not be
+  described alike.** With `onnx/kokoro-claude-variant.onnx` installed (a sidecar - see below), the
+  graph returns per-token frame counts, and `CMD_SYNTH_ALIGNED` carries them to the engine as marks
+  in a `CHUNK_ALIGNED` header. Things to flag:
+  - **A mark list that is empty means "no timing for this chunk", never "no words".** Any consumer
+    reading it the other way fires no events, which is the bug that strands Kindle on sentence one.
+  - **`marks` must never be approximate.** Every failure in the duration path degrades to empty and
+    lets interpolation take over; nothing there may fail the *audio*.
+  - **`sum(frames) * 600 == waveform length` is asserted per run.** Don't let it be relaxed to a
+    tolerance, and don't rescale frames by `speed` (it is applied upstream of the rounding).
+  - **The variant is a sidecar.** Anything that writes it over `model.onnx` is wrong: the panel's
+    verify deletes manifest files whose SHA-256 doesn't match, so it would be silently reverted.
+  - **`CHUNK_ALIGNED`'s absolute chunk start is load-bearing.** Chunks are trimmed and do not abut;
+    accumulating `CHUNK_INFO` lengths drifts about a character per chunk. Flag any client that
+    reintroduces the running total.
+  - **The old-host drop has TWO shapes and both must trigger the fallback**: a failed
+    `begin_synth` (the host closed while the request was still being written) and a failed first
+    read (it closed after). Which one happens is a race on the pipe buffer. Handling only the
+    read shape makes the fallback unreachable and every page returns `E_FAIL` - silence.
+  - **The fallback re-checks `SPVES_ABORT` before re-sending.** The probe read blocks for a whole
+    chunk's synthesis, so a Stop pressed inside it is already pending by the time the fallback
+    runs - and re-sending puts the host to work on the one serialized synth worker behind a Stop
+    the user watched succeed, stamping the Kindle-audio clock as it goes.
+  - **A malformed aligned stream costs the MARKS, not the page** - but an unusable *header*
+    (count over the cap or over the chunk's own length, or `charStart + charLen` overflowing)
+    fails closed and drops the connection, because its announced length cannot be trusted to
+    drain. Flag any collapse of those two cases into one.
+  - **The `'S'` fallback is scoped to ONE utterance and is never cached** - `Worker` holds no
+    capability state at all. Zero frames is necessary evidence of an old host but NOT
+    sufficient (a current host quit mid-request looks identical), and the evidence destroys the
+    connection it is about, so any cache lands on the *replacement* connection - which may be a
+    restarted capable host. Flag any reintroduction of a cached/sticky downgrade, per-process or
+    per-connection.
+  - **Interpolation is the fallback and must stay.** A chunk without marks still has to fire its
+    events somewhere.
 - **The browser has exactly ONE transport: loopback HTTP** (`webserve.rs`, port 8787). An
   extension cannot open a named pipe. A native-messaging bridge was prototyped first and
   rejected. **Flag any change that adds one as a fallback**: two
@@ -138,7 +173,9 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
   can detect the mistake. A constant that only degrades quality (`PLAYBACK_RAMP`, `PAD`, the
   word-timing weights) is not covered by this.
 - **The browser's word highlight runs on ESTIMATED boundaries.** `/synth` returns PCM and the
-  stock model exposes no alignment, so `word-timing.ts` splits each chunk's exact duration
+  browser path does not use the aligned pipe command (it doesn't use the pipe at all) - the
+  durations exist, `/synth` just doesn't carry them - so `word-timing.ts` splits each chunk's
+  exact duration
   across its words by syllable count. Flag anything that presents these as true offsets, adds
   a second estimator, or times them off `setTimeout` rather than `AudioContext.currentTime` —
   the audio clock is what makes Pause freeze the highlight instead of running it to the end of

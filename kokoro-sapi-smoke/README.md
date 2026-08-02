@@ -26,6 +26,22 @@ fake `ISpTTSEngineSite` that captures the PCM the engine writes through the real
 then tears down what it started. The Speak path self-**skips** if no host is available
 (that's why CI still passes with no host on the runner).
 
+The site captures each SPEVENT's **`ullAudioStreamOffset`**, not just its id, and the test
+prints every word boundary with the moment it fires. Counting ids cannot distinguish a
+correct event stream from one whose events all land at the wrong time — and the wrong time
+is precisely what Kindle turns into a highlight on the wrong word. It also checks the
+offsets are non-decreasing (SAPI requires it) and inside the audio.
+
+The first word's offset is the quickest read on which timing path is live:
+
+```
+  'This'    350 ms      <- kokoro-claude-variant installed: the model's own onset
+  'This'      0 ms      <- stock model.onnx: character-linear, and a word at character
+                           zero is always 0 whatever the leading silence
+```
+
+Both are correct outcomes, so this is reported as a NOTE rather than checked.
+
 ```powershell
 .\run-speak-test.ps1
 .\run-speak-test.ps1 -Wav engine.wav   # -> a 24 kHz mono WAV for an audio check

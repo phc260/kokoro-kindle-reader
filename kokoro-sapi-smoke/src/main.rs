@@ -60,20 +60,39 @@ unsafe trait ISpTTSEngineSite: IUnknown {
 const SPEI_TTS_BOOKMARK: u16 = 4;
 const SPEI_WORD_BOUNDARY: u16 = 5;
 
+/// One reported SPEVENT, unpacked. The **offset** is the part worth capturing: an event
+/// with the right id at the wrong moment is what a narrator turns into a highlight sitting
+/// on the wrong word, and counting ids alone cannot see it.
+#[derive(Clone, Copy)]
+struct Ev {
+    id: u16,
+    /// `ullAudioStreamOffset` — bytes into the audio stream (int16 mono, so /2/24 = ms).
+    offset: u64,
+    /// `wParam` / `lParam`. For a word boundary those are its length and position in the
+    /// text SAPI handed the engine.
+    wparam: u32,
+    lparam: u32,
+}
+
 #[implement(ISpTTSEngineSite)]
 struct TestSite {
-    pcm: Arc<Mutex<Vec<u8>>>,       // bytes the engine writes (int16 mono @ 24 kHz)
-    events: Arc<Mutex<Vec<u16>>>,   // eEventIds the engine reports via AddEvents
+    pcm: Arc<Mutex<Vec<u8>>>,     // bytes the engine writes (int16 mono @ 24 kHz)
+    events: Arc<Mutex<Vec<Ev>>>,  // what the engine reports via AddEvents
 }
 
 impl ISpTTSEngineSite_Impl for TestSite_Impl {
     unsafe fn AddEvents(&self, e: *const c_void, c: u32) -> HRESULT {
-        // Each SPEVENT is 24 bytes on x86; the first field is the eEventId|elParamType
-        // bitfield, so the low 16 bits are the event id.
+        // SPEVENT on x86 is 24 bytes: [0] eEventId|elParamType bitfield, [4] ulStreamNum,
+        // [8] ullAudioStreamOffset, [16] wParam, [20] lParam.
         if !e.is_null() {
             for k in 0..c as usize {
-                let id = *(e as *const u8).add(k * 24).cast::<u16>();
-                self.events.lock().unwrap().push(id);
+                let p = (e as *const u8).add(k * 24);
+                self.events.lock().unwrap().push(Ev {
+                    id: *p.cast::<u16>(),
+                    offset: p.add(8).cast::<u64>().read_unaligned(),
+                    wparam: p.add(16).cast::<u32>().read_unaligned(),
+                    lparam: p.add(20).cast::<u32>().read_unaligned(),
+                });
             }
         }
         S_OK
@@ -149,7 +168,7 @@ fn write_wav(path: &str, pcm: &[u8]) -> std::io::Result<()> {
 /// pipe (Speak returns E_FAIL with no audio).
 unsafe fn speak_test(engine: &ISpTTSEngine, wav: Option<&str>) {
     let pcm = Arc::new(Mutex::new(Vec::<u8>::new()));
-    let events = Arc::new(Mutex::new(Vec::<u16>::new()));
+    let events = Arc::new(Mutex::new(Vec::<Ev>::new()));
     let site: ISpTTSEngineSite = TestSite { pcm: pcm.clone(), events: events.clone() }.into();
 
     // A multi-word utterance followed by a bookmark fragment — exactly the shape Kindle
@@ -198,8 +217,9 @@ unsafe fn speak_test(engine: &ISpTTSEngine, wav: Option<&str>) {
 
     // The fix: the engine reports SAPI events so Kindle's narrator can advance/highlight.
     let ev = events.lock().unwrap();
-    let words = ev.iter().filter(|&&e| e == SPEI_WORD_BOUNDARY).count();
-    let bookmarks = ev.iter().filter(|&&e| e == SPEI_TTS_BOOKMARK).count();
+    let word_evs: Vec<Ev> = ev.iter().copied().filter(|e| e.id == SPEI_WORD_BOUNDARY).collect();
+    let words = word_evs.len();
+    let bookmarks = ev.iter().filter(|e| e.id == SPEI_TTS_BOOKMARK).count();
     check(
         &format!("reported word-boundary events ({words} words)"),
         words >= 5, // "This is a Kokoro speech test." = 6 words
@@ -208,6 +228,43 @@ unsafe fn speak_test(engine: &ISpTTSEngine, wav: Option<&str>) {
         &format!("reported the bookmark event ({bookmarks})"),
         bookmarks == 1,
     );
+
+    // WHERE the events landed, not just that they exist. Kindle places its highlight at
+    // these offsets, so an event stream with the right ids at the wrong moments is the same
+    // bug to a reader as no events at all — and it is invisible to a count.
+    let word_of = |pos: u32, len: u32| -> String {
+        let (a, b) = (pos as usize, (pos + len) as usize);
+        if b <= text.len() { String::from_utf16_lossy(&text[a..b]) } else { "?".into() }
+    };
+    println!("  word boundaries (audio-stream offset):");
+    for e in &word_evs {
+        println!(
+            "    {:>10}  {:>7} ms",
+            format!("'{}'", word_of(e.lparam, e.wparam)),
+            e.offset / 2 * 1000 / 24000
+        );
+    }
+    check(
+        "word-boundary offsets are non-decreasing",
+        word_evs.windows(2).all(|w| w[0].offset <= w[1].offset),
+    );
+    check(
+        "every word boundary lands inside the audio",
+        word_evs.iter().all(|e| e.offset <= bytes as u64),
+    );
+    // Character-linear placement puts the FIRST word at exactly offset 0, because its
+    // character fraction of the chunk is zero. A model-derived mark puts it after the
+    // leading silence the model itself generated. So a nonzero first offset is the one
+    // externally visible sign that the aligned path is live — informational, not a check,
+    // since a stock model.onnx legitimately produces 0 here.
+    match word_evs.first() {
+        Some(e) if e.offset > 0 => println!(
+            "  NOTE  first word at {} ms - model-derived marks are in use",
+            e.offset / 2 * 1000 / 24000
+        ),
+        Some(_) => println!("  NOTE  first word at 0 ms - character-linear fallback"),
+        None => {}
+    }
 
     if let (Some(path), true) = (wav, bytes > 0) {
         match write_wav(path, &pcm.lock().unwrap()) {

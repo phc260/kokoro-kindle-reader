@@ -17,3 +17,9 @@ kokoro-protocol/Cargo.lock
 
 # Scratch audio dumps from the SAPI smoke test
 *.wav
+
+# kokoro-timing-probe: the model artifacts and saved runs, not the scripts.
+# ~640 MB of .onnx and .npz that must never be staged - the scripts regenerate all of it
+# from the model the app already downloaded, which is the point of keeping them.
+kokoro-timing-probe/*.onnx
+kokoro-timing-probe/out/

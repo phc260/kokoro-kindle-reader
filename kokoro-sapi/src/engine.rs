@@ -27,7 +27,7 @@ use crate::sapi::{
     ISpObjectWithToken, ISpObjectWithToken_Impl, ISpTTSEngine, ISpTTSEngineSite, ISpTTSEngine_Impl,
     SPDFID_WAVEFORMATEX,
 };
-use crate::worker::Frame;
+use crate::worker::{Frame, Mark};
 use crate::{SYNTH_LOCK, WORKER};
 
 const SAMPLE_RATE: u32 = 24000;
@@ -37,10 +37,12 @@ const SAMPLE_RATE: u32 = 24000;
 /// sentence advancement and karaoke highlighting from these — its
 /// `WordBoundaryListHandler` collects word boundaries and it matches each `<bookmark>`
 /// to a word position. Without them it speaks the first unit and never advances (the
-/// "only the first sentence of each page is synthesized" bug). We don't have per-word
-/// timing from Kokoro, so each event is placed by its character position in the
-/// concatenated speak text, mapped to an audio-stream byte offset once the utterance's
-/// total audio length is known. `concat` is that character position.
+/// "only the first sentence of each page is synthesized" bug).
+///
+/// `concat` is the event's character position in the concatenated speak text, and it is
+/// what an event is placed by — see [`ChunkMap::offset_of`] for the two ways that position
+/// becomes an audio offset. It is a UTF-16 index into the exact string sent to the host, so
+/// it is the same coordinate space a mark's `charStart` is in.
 enum SpeakEvent {
     /// SPEI_WORD_BOUNDARY: `src_pos`/`src_len` are the word's position + length in the
     /// original text SAPI handed us (so the host can map it back to its SSML).
@@ -111,36 +113,83 @@ unsafe fn add_sapi_event(
     let _ = site.AddEvents(&e as *const SPEVENT as *const c_void, 1);
 }
 
+/// The current chunk, as the event mapper needs to see it.
+struct ChunkMap {
+    /// UTF-16 index of the chunk's first character in the request text.
+    start: usize,
+    /// The chunk's length in UTF-16 code units.
+    u16_len: usize,
+    /// The chunk's total sample count.
+    samples: u64,
+    /// Audio-stream bytes written before this chunk began.
+    base: u64,
+    /// Model-derived word marks, ordered and non-overlapping. Empty = interpolate.
+    marks: Vec<Mark>,
+}
+
+impl ChunkMap {
+    /// Audio-stream byte offset for a UTF-16 position `c` inside this chunk.
+    ///
+    /// Uses a mark when one covers `c`, and interpolates only where none does. The two are
+    /// not the same kind of answer and the difference is the whole point of the aligned
+    /// stream: a mark is *when the model scheduled that word*, while interpolation is the
+    /// word's character fraction of the chunk — an estimate delivered at an exact offset,
+    /// which measures a median 261 ms and up to 1.2 s away from the audio on ordinary book
+    /// prose. Interpolation stays as the fallback because it is right about the *shape* of a
+    /// chunk even when it is wrong about a word, and a chunk with no marks still has to fire
+    /// its events somewhere.
+    fn offset_of(&self, c: usize) -> u64 {
+        let samples = match self.marks.last() {
+            // No marks: the character's fraction of the chunk. `saturating_sub` clamps a
+            // straggler from a chunk whose start had to be accumulated.
+            None if self.u16_len == 0 => 0,
+            None => c.saturating_sub(self.start) as u64 * self.samples / self.u16_len as u64,
+            // Marks are ordered and disjoint, so the last one starting at or before `c` is
+            // the only candidate. A position past its text — the space or punctuation
+            // between two words — resolves to that word's END rather than the next word's
+            // start: they are usually the same instant, and where they are not it is
+            // because a pause sits between them, which belongs to the word just finished
+            // and not to the one not yet begun.
+            Some(_) => match self.marks.iter().rev().find(|m| (m.char_start as usize) <= c) {
+                Some(m) if c < m.char_start.saturating_add(m.char_len) as usize => {
+                    m.sample_start as u64
+                }
+                Some(m) => m.sample_end as u64,
+                // Before the first mark: the chunk's leading silence. The first mark's start
+                // is when sound actually begins, and firing earlier would highlight a word
+                // during the gap before it is spoken.
+                None => self.marks[0].sample_start as u64,
+            },
+        };
+        (self.base + samples * 2) & !1
+    }
+}
+
 /// Fire every pending event that belongs to the current chunk and whose mapped audio
-/// offset has been reached (`<= limit` bytes written). Each event's `concat` (a UTF-16
-/// index into the request text) maps linearly onto the chunk's audio: offset =
-/// `chunk_base + (concat - chunk_start) / chunk_u16 * chunk_samples * 2`. Events for a
-/// later chunk (concat past this chunk) wait for their own `Frame::Chunk`. Offsets are
-/// clamped non-decreasing (`last_off`) as SAPI expects.
-#[allow(clippy::too_many_arguments)]
+/// offset has been reached (`<= limit` bytes written). Events for a later chunk (concat
+/// past this chunk) wait for their own `Frame::Chunk`. Offsets are clamped non-decreasing
+/// (`last_off`) as SAPI expects.
 unsafe fn emit_ready_events(
     site: &ISpTTSEngineSite,
     interest: u64,
     events: &[SpeakEvent],
     ev: &mut usize,
     last_off: &mut u64,
-    chunk_start: usize,
-    chunk_u16: usize,
-    chunk_samples: u64,
-    chunk_base: u64,
+    chunk: &ChunkMap,
     limit: u64,
 ) {
     while *ev < events.len() {
         let c = events[*ev].concat();
-        if c >= chunk_start + chunk_u16 {
+        // `saturating_add`, not `+`: `usize` is 32 bits here and both `start` and `u16_len`
+        // trace back to pipe-supplied u32s. `read_aligned_chunk` rejects an overflowing
+        // aligned header outright, but the `CHUNK_INFO` path accumulates `start` from lengths
+        // and has no such check - and an overflow there wraps the chunk end to a small number
+        // in release, so every event looks like it belongs to a later chunk and none fires
+        // until the final flush.
+        if c >= chunk.start.saturating_add(chunk.u16_len) {
             break; // belongs to a later chunk; wait for its Frame::Chunk
         }
-        let local = c.saturating_sub(chunk_start) as u64; // clamp any drift straggler
-        let mapped = if chunk_u16 > 0 {
-            chunk_base + local * chunk_samples * 2 / chunk_u16 as u64
-        } else {
-            chunk_base
-        } & !1;
+        let mapped = chunk.offset_of(c);
         if mapped > limit {
             break; // not reached in the audio written so far
         }
@@ -335,13 +384,72 @@ impl ISpTTSEngine_Impl for KokoroEngine_Impl {
         let _ = site.GetRate(&mut rate);
         let speed = 3.0f32.powf(rate as f32 / 10.0);
 
-        // Open the stream (one 'S' request), with a single reconnect retry.
-        {
+        // Open the stream, with a single reconnect retry. `aligned` picks the chunk-header
+        // form; everything else about the request is identical.
+        let open = |aligned: bool| {
             let _lk = SYNTH_LOCK.lock().unwrap();
-            if !WORKER.begin_synth(text.as_bytes(), speed)
-                && !(WORKER.ensure_connected() && WORKER.begin_synth(text.as_bytes(), speed))
-            {
-                return E_FAIL;
+            WORKER.begin_synth(text.as_bytes(), speed, aligned)
+                || (WORKER.ensure_connected()
+                    && WORKER.begin_synth(text.as_bytes(), speed, aligned))
+        };
+
+        // The abort check mirrors the one at the top of the streaming loop: this read blocks
+        // for as long as the first chunk takes to render, so skipping it would leave a Stop
+        // pressed at the very start of a page unnoticed until that chunk arrived. `None` =
+        // aborted, and needs no special case: the loop's own check has already broken out by
+        // the time it looks at this.
+        let read_first = || {
+            if site.GetActions() & SPVES_ABORT.0 as u32 != 0 {
+                return None;
+            }
+            let _lk = SYNTH_LOCK.lock().unwrap();
+            Some(WORKER.read_frame())
+        };
+
+        // Capability negotiation, and the only form it can take: a host that predates
+        // `CMD_SYNTH_ALIGNED` treats the byte as unknown and DROPS the client, so "the
+        // connection closed before a single frame arrived" is the entire answer. There is no
+        // reply that means "not supported" — an offline host and an old one look the same
+        // until one of them answers.
+        //
+        // Only `Frame::Error` qualifies. `Frame::Failed` is the host reporting SYNTH_ERROR,
+        // which PROVES it understood the command — and it is legitimately the first frame
+        // whenever chunk 0 fails to synthesize. Treating that as an old host would cost the
+        // marks *and* re-send the whole utterance for a second synthesis.
+        //
+        // **The fallback is scoped to THIS utterance and nothing is cached.** The evidence
+        // destroys the connection it is evidence about, so the only place left to record it is
+        // the *replacement* connection — which may be a restarted, capable host, since a
+        // current host quit between accepting the request and writing its first frame produces
+        // this exact observation, and that window is as wide as a chunk's synthesis. Recording
+        // it there buys one saved probe per page at the price of losing marks for as long as
+        // that connection lives. A probe is a `CreateFile`, a write and a failed read, all
+        // before any audio exists.
+        // **The drop can land on the WRITE as easily as on the read**, so both count as the
+        // same evidence. An old host reads one command byte and returns, closing the pipe
+        // while the client is still writing `rate`/`textBytes`/`text` — whether those bytes
+        // were already buffered is a race, so the failure surfaces as a failed `begin_synth`
+        // about as often as a failed first read. Handling only the read shape meant the
+        // fallback never ran against a real old host and every page returned `E_FAIL`, i.e.
+        // silence. (Verified against a stand-in host that drops on any byte but `'S'`.)
+        //
+        // A host that is simply absent takes the same path and ends at the same `E_FAIL`, one
+        // extra `CreateFile` later — there is no way to tell the two apart without trying.
+        let mut first = if open(true) { read_first() } else { Some(Frame::Error) };
+        if matches!(first, Some(Frame::Error)) {
+            // Re-check the abort before re-sending. The probe's read blocks for as long as
+            // the first chunk takes, so a Stop pressed inside it is *already* pending by the
+            // time we get here — and `open` writes a whole utterance the host will start
+            // synthesizing on its one serialized worker before its first write to us fails.
+            // That is wasted work behind a Stop the user has watched succeed, and it stamps
+            // the Kindle-audio clock, which is what "Kokoro is narrating" is read from.
+            if site.GetActions() & SPVES_ABORT.0 as u32 != 0 {
+                first = None;
+            } else {
+                if !open(false) {
+                    return E_FAIL;
+                }
+                first = read_first();
             }
         }
 
@@ -358,22 +466,29 @@ impl ISpTTSEngine_Impl for KokoroEngine_Impl {
         let mut ev = 0usize;
         let mut last_off = 0u64;
         let mut bytes_written = 0u64;
-        let mut chunk_start = 0usize; // UTF-16 index at the current chunk's start
-        let mut chunk_u16 = 0usize; // current chunk's UTF-16 length
-        let mut chunk_samples = 0u64; // current chunk's total samples
-        let mut chunk_base = 0u64; // bytes written before the current chunk
+        let mut chunk =
+            ChunkMap { start: 0, u16_len: 0, samples: 0, base: 0, marks: Vec::new() };
         'stream: loop {
             if site.GetActions() & SPVES_ABORT.0 as u32 != 0 {
                 aborted = true;
                 break;
             }
-            let frame = {
-                let _lk = SYNTH_LOCK.lock().unwrap();
-                WORKER.read_frame()
+            // The negotiation above already read the first frame; everything after it comes
+            // off the pipe as usual. `None` also covers "negotiation saw the abort and read
+            // nothing" — which needs no special case, because the check at the top of this
+            // iteration has already broken out by the time we get here. One place decides
+            // what an abort means.
+            let frame = match first.take() {
+                Some(f) => f,
+                None => {
+                    let _lk = SYNTH_LOCK.lock().unwrap();
+                    WORKER.read_frame()
+                }
             };
             match frame {
                 Frame::End => break,
-                Frame::Error => {
+                // Both mean "no more audio". They differ only to negotiation, above.
+                Frame::Failed | Frame::Error => {
                     // The host failed a chunk (e.g. a transient GPU error it couldn't
                     // retry past). If we've already streamed audio, end gracefully so
                     // Kindle plays it and advances to the next page rather than purging
@@ -383,11 +498,24 @@ impl ISpTTSEngine_Impl for KokoroEngine_Impl {
                     }
                     break;
                 }
-                Frame::Chunk { u16_len, samples } => {
-                    chunk_start += chunk_u16; // advance past the previous chunk
-                    chunk_u16 = u16_len as usize;
-                    chunk_samples = samples as u64;
-                    chunk_base = bytes_written;
+                Frame::Chunk { start_u16, u16_len, samples, marks } => {
+                    // The host's absolute start when it sent one. Accumulating lengths is
+                    // only the fallback: chunks do not abut (the host trims whitespace at
+                    // every boundary), so the running total drifts about a character per
+                    // chunk — a word wide by the foot of a page.
+                    chunk = ChunkMap {
+                        // `saturating_add` here as well as at the comparison: this is the
+                        // accumulation itself, and it is the one a squatted pipe reaches by
+                        // sending successive `CHUNK_INFO` lengths that sum past `usize`.
+                        // On i686 that wraps in release and aborts Kindle in a debug build.
+                        start: start_u16
+                            .map(|s| s as usize)
+                            .unwrap_or(chunk.start.saturating_add(chunk.u16_len)),
+                        u16_len: u16_len as usize,
+                        samples: samples as u64,
+                        base: bytes_written,
+                        marks,
+                    };
                 }
                 Frame::Data { samples: pcm, gain } => {
                     // f32 [-1,1] -> i16 with the frame's gain x the host volume.
@@ -406,8 +534,7 @@ impl ISpTTSEngine_Impl for KokoroEngine_Impl {
                         }
                         let block_end = bytes_written + (block.len() * 2) as u64;
                         emit_ready_events(
-                            site, interest, &events, &mut ev, &mut last_off, chunk_start,
-                            chunk_u16, chunk_samples, chunk_base, block_end,
+                            site, interest, &events, &mut ev, &mut last_off, &chunk, block_end,
                         );
                         let mut wrote = 0u32;
                         let hr = site.Write(

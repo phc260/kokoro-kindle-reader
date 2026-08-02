@@ -1,6 +1,20 @@
 // Utterance → sentence-chunk splitter for the headless host's pipe path. The
 // correctness-critical chunking. Pure (no external deps).
 
+/// One chunk of the utterance and where it began in it, in UTF-16 code units.
+///
+/// The offset is carried out of the splitter rather than accumulated by the caller because
+/// **chunks do not abut**: `flush` trims whitespace off both ends, so the gaps between them
+/// are real and a running total of chunk lengths drifts by about a character per paragraph
+/// break. That total is what an aligned word mark would be added to, and by the foot of a
+/// page it is a word wide — which is precisely where a highlight is most obviously wrong.
+pub struct Chunk {
+    pub text: String,
+    /// UTF-16 code units before this chunk's first character. UTF-16 because that is what
+    /// SAPI positions and Kindle's own text offsets are counted in.
+    pub start_utf16: u32,
+}
+
 /// Split an utterance into sentence chunks for streaming. We ramp up: the FIRST
 /// chunk is a single sentence (so audio starts quickly), then each chunk's target
 /// sentence count doubles (1, 2, 4, ...) up to `sentences_per_chunk` (fewer
@@ -12,7 +26,7 @@
 /// it fall back to a word break past `HARD_CAP`. The frontend (kokoro-js)
 /// sub-splits anything past its token limit anyway. Ported from the old
 /// KokoroTTSEngine.cpp `SplitText`; operates on chars (Unicode scalars).
-pub fn split_text(text: &str, sentences_per_chunk: usize) -> Vec<String> {
+pub fn split_text(text: &str, sentences_per_chunk: usize) -> Vec<Chunk> {
     const FIRST_SENTENCES: usize = 1; // small first chunk -> each page starts fast
     let k_sentences = sentences_per_chunk.max(1); // 0 would never flush
     const SOFT_CAP: usize = 400; // over-long sentence: break at a clause (, ; :)
@@ -20,7 +34,17 @@ pub fn split_text(text: &str, sentences_per_chunk: usize) -> Vec<String> {
 
     let c: Vec<char> = text.chars().collect();
     let n = c.len();
-    let mut chunks: Vec<String> = Vec::new();
+    // UTF-16 units before each char index (one longer than `c`). The splitter reasons in
+    // chars and the wire counts UTF-16, and the two differ at every non-BMP scalar — an
+    // emoji in a page's text would otherwise put every later chunk one unit early.
+    let mut u16_before: Vec<u32> = Vec::with_capacity(n + 1);
+    let mut units = 0u32;
+    for ch in &c {
+        u16_before.push(units);
+        units += ch.len_utf16() as u32;
+    }
+    u16_before.push(units);
+    let mut chunks: Vec<Chunk> = Vec::new();
 
     let is_space =
         |ch: char| matches!(ch, ' ' | '\t' | '\r' | '\n' | '\u{0C}' | '\u{0B}');
@@ -39,7 +63,7 @@ pub fn split_text(text: &str, sentences_per_chunk: usize) -> Vec<String> {
     let mut last_clause = 0usize;
 
     // flush takes the mutable state by ref to dodge closure/borrow conflicts.
-    let flush = |chunks: &mut Vec<String>,
+    let flush = |chunks: &mut Vec<Chunk>,
                  start: &mut usize,
                  sentences: &mut usize,
                  sentence_start: &mut usize,
@@ -54,7 +78,9 @@ pub fn split_text(text: &str, sentences_per_chunk: usize) -> Vec<String> {
             b -= 1;
         }
         if b > a {
-            chunks.push(c[a..b].iter().collect());
+            // `a`, not `*start`: the offset must point at the first character of the text
+            // that was actually kept, since that is what the marks are measured from.
+            chunks.push(Chunk { text: c[a..b].iter().collect(), start_utf16: u16_before[a] });
         }
         *start = end;
         *sentences = 0;

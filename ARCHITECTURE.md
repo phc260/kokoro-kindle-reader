@@ -43,7 +43,7 @@ flowchart TB
   PANEL -->|writes| CFG
   CFG -->|"read live per utterance / sub-frame"| PIPE
 
-  DLL <==>|"named pipe · KokoroSapiSynth<br/>'S' utterance → PCM frames"| PIPE
+  DLL <==>|"named pipe · KokoroSapiSynth<br/>'S'/'A' utterance → PCM frames"| PIPE
   PANEL <==>|"same pipe · 'P' preview · 'B' bench<br/>'K' reading control + 1 Hz heartbeat"| PIPE
   CTL -.->|"Ctrl+A · UIA readback · WM_CLOSE"| RA
 
@@ -79,8 +79,8 @@ DLL straight into Kindle and calls its functions:
    **must be x86** (matching Kindle) and a native COM DLL — and why it stays a separate
    file from the x64 host.
 3. **The DLL is a thin shim → the host.** `Speak` sends the *whole* utterance over the
-   pipe `\\.\pipe\KokoroSapiSynth` (wire format: the `kokoro-protocol` crate) in one `'S'` request
-   (`[rate][textBytes][text]`) and gets back a **stream** of PCM frames
+   pipe `\\.\pipe\KokoroSapiSynth` (wire format: the `kokoro-protocol` crate) in one `'S'` /
+   `'A'` request (`[rate][textBytes][text]` — identical bodies) and gets back a **stream** of PCM frames
    (`[nSamples][gain][f32…]`, ended by a `STREAM_END` / `SYNTH_ERROR` marker — the u32
    sentinels `0xFFFF_FFFE` / `0xFFFF_FFFF`). `kokoro-host`'s `pipe.rs` owns the
    chunking: it splits the text, renders each chunk on the native Dawn WebGPU synth,
@@ -126,6 +126,17 @@ node past ~510 tokens**, so each chunk's tokens are sub-split into `MAX_CONTENT_
 also retries a couple of times — rebuilding the session on the last try — to ride out a
 transient Dawn device error.
 
+**Which graph runs.** The worker prefers `onnx/kokoro-claude-variant.onnx` if it is present
+beside `onnx/model.onnx`, and logs which one it picked. The variant is the stock graph with
+two tensors it was *already computing* appended to its outputs — `durations_frames` and
+`duration_cumsum`, the length regulator's per-token frame counts — which is what turns word
+highlighting from an interpolation into the model's own schedule. It adds **270 bytes** and no
+computation; measured on this machine, stock and variant produce **bit-identical** f32 output on
+both the WebGPU and CPU EPs. It is a *sidecar*, never a replacement: the panel's startup verify
+deletes any manifest file whose SHA-256 doesn't match, so overwriting `model.onnx` would silently
+undo it. Derivation, verification and the conversion rules are in
+[`kokoro-timing-probe/README.md`](kokoro-timing-probe/README.md).
+
 **Streaming.** `pipe.rs` synthesizes **sentence by sentence**, with chunk sizes that
 **ramp 1, 2, 4, … up to the `chunk` setting**: a tiny first chunk gets audio started fast,
 then doubling builds a play buffer so the synth pipeline never starves. A **depth-1
@@ -135,10 +146,19 @@ gap at chunk boundaries and `SPVES_ABORT` stops playback promptly (it closes the
 which cancels the rest of the stream). (Gaps *between Kindle pages* are Kindle's own
 page-turn time — each page is a fresh `Speak`.)
 
-**SAPI events.** Each chunk is prefixed on the wire with a `CHUNK_INFO` frame
-(`0xFFFF_FFFD` + the chunk's UTF-16 span + its sample count), which lets the engine map a
-character position linearly onto that chunk's audio and so report `SPEI_WORD_BOUNDARY` /
-`SPEI_SENTENCE_BOUNDARY` / `SPEI_TTS_BOOKMARK` at their **true audio-stream offsets**.
+**SAPI events.** Each chunk is prefixed on the wire with a chunk header, which is what lets
+the engine report `SPEI_WORD_BOUNDARY` / `SPEI_SENTENCE_BOUNDARY` / `SPEI_TTS_BOOKMARK` at
+**audio-stream offsets** rather than all at once. Two forms:
+
+* `CHUNK_INFO` (`0xFFFF_FFFD` + the chunk's UTF-16 span + its sample count) — the engine maps
+  a character position *linearly* onto the chunk's audio. That is an estimate delivered at an
+  exact offset; measured against the model's own schedule on a page of book prose it is out by
+  a median of 261 ms and up to 1.2 s.
+* `CHUNK_ALIGNED` (`0xFFFF_FFFC`, answering `CMD_SYNTH_ALIGNED`) — adds the chunk's **absolute**
+  UTF-16 start and the model's per-word marks, so a word's offset is one the model predicted.
+  This needs `kokoro-claude-variant.onnx` installed beside `model.onnx`; with the stock graph the
+  header still arrives, carries no marks, and the engine interpolates exactly as before.
+
 This is not cosmetic: **Kindle 18632's narrator is event-driven**
 (`WordBoundaryListHandler` + bookmark matching in `xrm120.dll`), and without these events
 it speaks the first sentence of a page and never advances. Relatedly, if the host reports
@@ -179,7 +199,7 @@ the engine the user actually has installed.
 | `native-deps/` | Synth **dependency provisioning** only (no source): `fetch-deps.ps1` populates the gitignored dep folders alongside itself (`native-deps/runtime/` + `espeak-ng-src/`) — the Dawn/WebGPU runtime DLLs (from the `onnxruntime-webgpu` wheel) + espeak-ng (x64 build + import lib + `espeak-ng-data`). |
 | `kokoro-sapi/` | The x86 SAPI engine — a Rust `cdylib` (thin COM shim + pipe client, no deps): `lib.rs` (COM exports + registration), `engine.rs` (`ISpTTSEngine`), `worker.rs` (pipe client), `sapi.rs` (hand-declared `sapiddk.h` interfaces). Plus the `voice-setup.ps1` / `kindle-voice-guard.ps1` (Kindle hive patch) / `test-speak.ps1` scripts. |
 | `kokoro-sapi-smoke/` | No-Kindle COM + Speak smoke test for the engine (`run-speak-test.ps1`). |
-| `kokoro-protocol/` | The named-pipe wire constants (pipe name, the `'S'`/`'P'`/`'T'`/`'B'`/`'K'` commands, `STREAM_END`/`SYNTH_ERROR`/`CHUNK_INFO`, sample rate, the speaking debounce) as a small crate shared by `kokoro-host`, `kokoro-sapi` and `kokoro-panel` — the single source of truth for the format. |
+| `kokoro-protocol/` | The named-pipe wire constants (pipe name, the `'S'`/`'A'`/`'P'`/`'T'`/`'B'`/`'K'` commands, `STREAM_END`/`SYNTH_ERROR`/`CHUNK_INFO`/`CHUNK_ALIGNED` + the shared `mark_is_valid` rule, sample rate, the speaking debounce) as a small crate shared by `kokoro-host`, `kokoro-sapi` and `kokoro-panel` — the single source of truth for the format. |
 | `model-manifest.json` | Files the model downloads from HF (paths + sizes + SHA-256); embedded in `kokoro-panel` (the narrator list is derived from it). |
 | `icons/` | Shared app icons (LFS); embedded in the exes' version resource and the installer. |
 | `packaging/` | `installer.nsi` + `build-installer.ps1` (standalone NSIS build) — per-user install with self-elevating voice registration. See [`packaging/README.md`](packaging/README.md). |

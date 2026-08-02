@@ -39,7 +39,8 @@ use crate::split_text::split_text;
 use crate::state::HostState;
 // The named-pipe wire format is shared with the SAPI engine (one source of truth).
 use kokoro_protocol::{
-    BENCH_BUSY, BENCH_ENGINE_CPU, BENCH_ENGINE_GPU, BENCH_FAILED, BENCH_OK, CHUNK_INFO, CMD_BENCH,
+    BENCH_BUSY, BENCH_ENGINE_CPU, BENCH_ENGINE_GPU, BENCH_FAILED, BENCH_OK, CHUNK_ALIGNED,
+    CHUNK_INFO, CMD_BENCH, CMD_SYNTH_ALIGNED,
     CMD_KINDLE, CMD_PREVIEW, CMD_STATUS, CMD_SYNTH, KINDLE_CLOSE, KINDLE_ERR, KINDLE_OK,
     KINDLE_PAUSE, KINDLE_PLAY, KINDLE_QUERY, KINDLE_RESUME, KINDLE_STOP, MAX_MSG_BYTES,
     MAX_TEXT_BYTES, PIPE_NAME, STREAM_END, SYNTH_ERROR,
@@ -131,7 +132,7 @@ fn gain(ctx: &Ctx) -> f32 {
 struct Prefetch {
     voice: String,
     speed: f32,
-    handle: tokio::task::JoinHandle<Option<Vec<u8>>>,
+    handle: tokio::task::JoinHandle<Option<native_synth::Synthesized>>,
 }
 
 /// Synthesize one already-cut chunk on the serialized native worker, as a detached
@@ -235,7 +236,7 @@ async fn serve_client(mut pipe: NamedPipeServer, ctx: Ctx) -> std::io::Result<()
             }
             // Same request layout and the same frame stream; `for_kindle` is what differs.
             // See `stream_synth`.
-            which @ (CMD_SYNTH | CMD_PREVIEW) => {
+            which @ (CMD_SYNTH | CMD_PREVIEW | CMD_SYNTH_ALIGNED) => {
                 let mut b4 = [0u8; 4];
                 pipe.read_exact(&mut b4).await?;
                 let rate = f32::from_le_bytes(b4);
@@ -252,9 +253,10 @@ async fn serve_client(mut pipe: NamedPipeServer, ctx: Ctx) -> std::io::Result<()
                 // Every audio clock still reads idle in there, because no audio exists yet.
                 // Guard-scoped: this stream ends at any `?` below, and Kindle disconnecting
                 // mid-page is the ordinary way it ends.
-                let _synthing =
-                    (which == CMD_SYNTH).then(|| ctx.state.enter_kindle_synth());
-                stream_synth(&mut pipe, &ctx, rate, &text, which == CMD_SYNTH).await?;
+                let for_kindle = which == CMD_SYNTH || which == CMD_SYNTH_ALIGNED;
+                let _synthing = for_kindle.then(|| ctx.state.enter_kindle_synth());
+                stream_synth(&mut pipe, &ctx, rate, &text, for_kindle, which == CMD_SYNTH_ALIGNED)
+                    .await?;
             }
             _ => return Ok(()), // unknown command: drop the client
         }
@@ -330,20 +332,28 @@ async fn apply_kindle(ctx: &Ctx, action: u8) -> (u8, String) {
 
 /// Synthesize a whole utterance and stream it back as the kokoro-protocol frame sequence.
 ///
-/// `for_kindle` distinguishes the two callers, and it is the only difference:
-///   * `CMD_SYNTH` (true) — the SAPI engine inside Kindle. A real-time sink, so the stream
-///     is paced to ~real time, honours the live pause, and stamps the Kindle-audio clock
-///     that "Kokoro is narrating" is read from.
+/// `for_kindle` distinguishes the two callers, and it is the only difference to the pacing:
+///   * `CMD_SYNTH` / `CMD_SYNTH_ALIGNED` (true) — the SAPI engine inside Kindle. A real-time
+///     sink, so the stream is paced to ~real time, honours the live pause, and stamps the
+///     Kindle-audio clock that "Kokoro is narrating" is read from.
 ///   * `CMD_PREVIEW` (false) — the settings panel. It buffers the whole clip before playing
 ///     a note of it, so pacing would only make the intro take as long to arrive as it does
 ///     to speak; and it must not register as Kindle narrating, or the panel's own silent
 ///     prefetch lights up every "speaking" readout in the app.
+///
+/// `aligned` selects the chunk header form ([`CHUNK_ALIGNED`] vs [`CHUNK_INFO`]) and nothing
+/// else — same audio, same pacing, same sub-frames. It is a property of what the CLIENT
+/// asked for, never of what the host happens to be able to supply: an aligned response with
+/// zero marks is a perfectly good answer (a stock model is installed, or this chunk's timing
+/// didn't validate), and a client that asked for `CMD_SYNTH` must not receive headers it has
+/// no parser for just because the marks existed.
 async fn stream_synth(
     pipe: &mut NamedPipeServer,
     ctx: &Ctx,
     rate: f32,
     text: &str,
     for_kindle: bool,
+    aligned: bool,
 ) -> std::io::Result<()> {
     // We own the chunking: split the whole utterance, synthesize each chunk, then stream
     // its PCM back as ~250 ms sub-frames ([nSamples][gain][samples...]).
@@ -357,7 +367,7 @@ async fn stream_synth(
     // Depth-1 prefetch: synth chunk k+1 (detached) while we stream k. An abort shows up
     // here as a broken-pipe write error (`?`), unwinding the loop; the in-flight task is
     // dropped.
-    let mut pending = Some(spawn_synth(ctx, chunks[0].clone(), rate));
+    let mut pending = Some(spawn_synth(ctx, chunks[0].text.clone(), rate));
     let mut failed = false;
     // Send-pacing clock (whole utterance): keep at most `pacing_lead` seconds of audio
     // ahead of real time. Starts on the first sub-frame.
@@ -371,30 +381,52 @@ async fn stream_synth(
         let (cur_voice, cur_ctrls) = native_synth::read_controls(&ctx.app_data);
         if pf.speed != rate * cur_ctrls.speed || pf.voice != cur_voice {
             pf.handle.abort();
-            pf = spawn_synth(ctx, chunks[k].clone(), rate);
+            pf = spawn_synth(ctx, chunks[k].text.clone(), rate);
         }
-        let pcm = pf.handle.await.ok().flatten();
+        let out = pf.handle.await.ok().flatten();
         if k + 1 < chunks.len() {
-            pending = Some(spawn_synth(ctx, chunks[k + 1].clone(), rate));
+            pending = Some(spawn_synth(ctx, chunks[k + 1].text.clone(), rate));
         }
-        let pcm = match pcm {
-            Some(pcm) => pcm,
+        let out = match out {
+            Some(out) => out,
             None => {
                 failed = true;
                 break;
             }
         };
+        let pcm = out.pcm;
 
         // Stream this chunk as sub-frames, each carrying a fresh gain (re-read ≈ when the
         // engine plays it, so a slider move isn't frozen into prefetched PCM).
         let total = pcm.len() / 4; // bytes -> f32 sample count
 
-        // Chunk header: its UTF-16 length + sample count, so the engine can map
-        // word/bookmark events to true audio offsets while streaming.
-        let chunk_u16 = chunks[k].encode_utf16().count() as u32;
-        pipe.write_all(&CHUNK_INFO.to_le_bytes()).await?;
-        pipe.write_all(&chunk_u16.to_le_bytes()).await?;
-        pipe.write_all(&(total as u32).to_le_bytes()).await?;
+        // Chunk header. Both forms carry the chunk's UTF-16 length + sample count, so the
+        // engine can map word/bookmark events to true audio offsets while streaming; the
+        // aligned form adds the chunk's ABSOLUTE start and the model's word marks, which is
+        // what lets the engine stop deriving either one.
+        let chunk_u16 = chunks[k].text.encode_utf16().count() as u32;
+        if aligned {
+            let base = chunks[k].start_utf16;
+            pipe.write_all(&CHUNK_ALIGNED.to_le_bytes()).await?;
+            pipe.write_all(&base.to_le_bytes()).await?;
+            pipe.write_all(&chunk_u16.to_le_bytes()).await?;
+            pipe.write_all(&(total as u32).to_le_bytes()).await?;
+            pipe.write_all(&(out.marks.len() as u32).to_le_bytes()).await?;
+            for m in &out.marks {
+                // Marks leave the synth layer chunk-relative; this is the ONE place they are
+                // rebased onto the request text, because this is the only layer that knows
+                // where the chunk sat in it.
+                let (cs, cl, ss, se) = m.as_wire();
+                pipe.write_all(&cs.saturating_add(base).to_le_bytes()).await?;
+                pipe.write_all(&cl.to_le_bytes()).await?;
+                pipe.write_all(&ss.to_le_bytes()).await?;
+                pipe.write_all(&se.to_le_bytes()).await?;
+            }
+        } else {
+            pipe.write_all(&CHUNK_INFO.to_le_bytes()).await?;
+            pipe.write_all(&chunk_u16.to_le_bytes()).await?;
+            pipe.write_all(&(total as u32).to_le_bytes()).await?;
+        }
 
         let mut off = 0usize; // sample offset within the chunk
         while off < total {

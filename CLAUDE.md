@@ -303,9 +303,10 @@ the panel and Read Aloud in Kindle (or `test-speak.ps1`).
   each part is chunked separately — and each carries its own `base`, since the sentence cut means
   the bases are *not* a running total of part lengths.
 - **The browser's word highlight runs on ESTIMATED boundaries, and must keep saying so.** Kindle
-  gets true audio-stream offsets (`CHUNK_INFO`); the browser cannot, because `/synth` returns PCM
-  and the stock `model.onnx` exposes only the waveform output — the per-phoneme durations the
-  model predicts are not an output you can ask for. So `word-timing.ts` splits each chunk's
+  gets model-derived ones over `CMD_SYNTH_ALIGNED` (see the word-timing section below); the browser
+  does not, because `/synth` returns PCM and nothing else — not because the durations are
+  unavailable. They are: `kokoro-claude-variant` exposes them, and carrying them across is a change
+  to the response shape *and* the extension. So `word-timing.ts` splits each chunk's
   *exact* duration (the sample count) across its words by syllable count plus a punctuation beat.
   What makes that good enough is the error resetting at every chunk (one to four sentences), so
   nothing accumulates down a page. Don't add a second estimator elsewhere, and don't describe
@@ -445,7 +446,9 @@ the panel and Read Aloud in Kindle (or `test-speak.ps1`).
   still speaking the text captured when the page started, and only the boxes moved. No match
   (the reflow pushed the word onto the next page) and an ambiguous match both draw nothing: a
   mark in the wrong place costs more than a missing one.
-- **Only `CMD_SYNTH` (`'S'`) is for a real-time sink**, and only Kindle's SAPI engine sends it.
+- **Only `CMD_SYNTH` (`'S'`) and `CMD_SYNTH_ALIGNED` (`'A'`) are for a real-time sink**, and only
+  Kindle's SAPI engine sends either. They are the same paced stream with different chunk headers
+  (see the word-timing section below).
   The pipe's other commands exist because the callers are *not* sinks: `CMD_BENCH` (`'B'`) times
   the model unpaced, `CMD_PREVIEW` (`'P'`) buffers a whole clip before playing a note of it, and
   `CMD_KINDLE` (`'K'`) carries no audio at all — it's the panel's transport and its ~1 Hz health
@@ -455,6 +458,86 @@ the panel and Read Aloud in Kindle (or `test-speak.ps1`).
   on `'S'`. `CMD_SYNTH_RAW` (`'R'`, unpaced) and `CMD_INFO` (`'I'`) were built for the deleted
   native-messaging bridge and went with it; if a client ever needs *that* shape (unpaced, no
   gain, voice on the wire), it's in that commit.
+
+### Word timing on the Kindle path (`kokoro-claude-variant` + `CMD_SYNTH_ALIGNED`)
+- **The stock graph already computes per-token durations and throws them away.** Kokoro is
+  StyleTTS2-derived, so a length regulator drives the decoder:
+  `duration_proj → Sigmoid → ReduceSum → Div(speed) → Round → Clip → CumSum → MatMul`.
+  `kokoro-claude-variant.onnx` appends `/encoder/Clip_output_0` (as `durations_frames`, float32)
+  and `/encoder/CumSum_output_0` (as `duration_cumsum`, **int64** — the dtypes differ, and
+  declaring both float loads in `onnx.checker` then fails at ORT session creation). **+270 bytes,
+  weights untouched, no computation added.** The host fetches only `durations_frames`;
+  `duration_cumsum` is its `cumsum` and carries nothing new — it is an offline audit witness, and
+  an output ORT is never asked for costs nothing. Derivation and repro:
+  `kokoro-timing-probe/README.md`.
+- **It is a SIDECAR in `onnx/`, never a replacement for `model.onnx`.** The panel's startup verify
+  hashes every manifest file and *deletes* mismatches, so a variant written over `model.onnx` is
+  removed and re-downloaded the next time the panel opens — silently, with the highlighting
+  quietly back on estimates. Under its own name the manifest can't see it, and deleting the file
+  is a complete uninstall. `model_path()` picks it once at worker start and logs which graph is
+  live; it is **not** re-checked per utterance, so a mid-session swap can't change the timing
+  source between pages with nothing in the log to say so.
+- **`SAMPLES_PER_FRAME` is 600 and is asserted every run**, not trusted from the offline
+  measurement: `sum(frames) * 600` must equal the waveform length. That assertion is the only
+  thing that would notice the graph, the EP or the frame size moving, and the cost of missing it
+  is a highlight that drifts further from the voice with every word. **Do not rescale by `speed`**
+  — it is applied at `/encoder/Div`, upstream of the rounding, so the frames already describe the
+  audio at the requested speed. **Do not copy the public demo's hard-coded divisor or `-3`**; they
+  exist to paper over pre-rounding floats and are wrong here.
+- **Verified on this machine, through the real host, both EPs**: stock vs variant × WebGPU vs CPU
+  produced **four bit-identical f32 streams**. The voice is unchanged and adding the outputs did
+  not disturb Dawn. (`onnx-community/Kokoro-82M-v1.0-ONNX-timestamped` is equivalent — `round()` on
+  its floats recovers these frames exactly — but its output is the PRE-rounding tensor, and using
+  those floats raw costs median 19 ms / p95 71 ms / max 106 ms as the residuals random-walk along
+  the cumsum. The variant's edge is only that the rounding cannot be forgotten.)
+- **Timing and audio fail independently, and marks are never approximate.** `Synthesized.marks`
+  empty means "no timing for this chunk" — stock model, durations that didn't validate,
+  aggregation that produced nothing — and every consumer must fall back rather than read it as "no
+  words". A chunk that can't be marked is still a chunk that must be spoken, so nothing in the
+  duration path may fail the audio.
+- **`CMD_SYNTH_ALIGNED` is chosen by the CLIENT, never by what the host can supply.** Same audio,
+  same pacing, same sub-frames as `'S'`; only the chunk header differs. An aligned response with
+  zero marks is a good answer, and a client that asked for `'S'` must not get headers it has no
+  parser for just because marks happened to exist.
+- **`CHUNK_ALIGNED` carries the chunk's ABSOLUTE start; `CHUNK_INFO` cannot.** Chunks do not abut —
+  `split_text` trims whitespace at every boundary — so accumulating lengths (what `engine.rs` did,
+  `chunk_start += chunk_u16`) drifts about a character per chunk: invisible at the top of a page,
+  about a word wide at the foot of it, which is exactly where a highlight is most obviously wrong.
+  `split_text` returns `Chunk { text, start_utf16 }` so the offset comes from where the kept text
+  actually began.
+- **Capability negotiation has exactly one signal: the connection dropping with zero frames.** An
+  old host treats `'A'` as an unknown command byte and drops the client; there is no reply that
+  means "unsupported", and an offline host looks identical until one of them answers. So the engine
+  probes with an aligned request and falls back on the first sign of a drop — which comes in **two
+  shapes, and only handling one leaves the fallback unreachable**: an old host reads one command
+  byte and closes, so the rest of the request either lands in the pipe buffer (the first *read*
+  fails) or does not (the *write* fails mid-request). It is a race, so both count as the same
+  evidence. So does every other way of failing to get a request out — no host, a dead host, an
+  over-long text — because none of them can be told apart without trying, and none produces a
+  wrong audible answer; they all end at the same `E_FAIL` one `CreateFile` later. **Re-check the
+  abort before re-sending**: the probe's read blocks for a whole chunk's synthesis, so a Stop
+  pressed inside it is already pending, and the retry would set the host synthesizing behind it. The fallback is **scoped to that one utterance — nothing is cached anywhere**, which is why `Worker` holds no capability state and `begin_synth` takes
+  `aligned` as an argument. Two reasons, and both had to be learned: zero frames is *necessary* for
+  an old host but not *sufficient* (a current host quit between accepting the request and writing
+  its first frame looks identical, over a window as wide as a chunk's synthesis); and the evidence
+  **destroys the connection it is evidence about**, so the only place left to cache it is the
+  *replacement* connection, which may be a restarted capable host. Per-connection caching is
+  therefore the same bug with a shorter fuse. Re-probing is affordable because a probe is a
+  connect, a write and a failed read, all before any audio exists.
+- **A malformed mark stream costs the marks, not the page.** `read_aligned_chunk` drains the bytes
+  it announced and returns the chunk with `marks` empty; only a short read is fatal. Dropping the
+  connection over a highlight would silence a page — see the fast-scrolling note above.
+- **What this actually bought, measured through the host on a page of book prose:** character-linear
+  placement is out by a **median 261 ms, p90 734 ms, max 1.2 s** against the model's own schedule,
+  40 of 76 words over 250 ms. The remaining error is phoneme-to-word attribution, not timing — the
+  frames *are* the schedule the audio was generated from.
+- **Interpolation stays as the fallback and must not be deleted.** It is right about the shape of a
+  chunk even when it is wrong about a word, and a chunk with no marks still has to fire its events
+  somewhere. `ChunkMap::offset_of` is the one place the two meet.
+- **The browser path still uses its own estimator** (`word-timing.ts`) — `/synth` returns PCM and
+  nothing else. The marks exist and are better; carrying them across is a change to the response
+  shape *and* the extension, and it is the browser path's own increment. Until then, keep saying
+  the browser's marks are estimates.
 
 ### Bitness, registration, file placement
 - **The engine must stay x86** — Kindle is a 32-bit process and loads the COM DLL

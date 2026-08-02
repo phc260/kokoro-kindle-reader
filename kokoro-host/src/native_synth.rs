@@ -27,6 +27,39 @@ const VOICE_ROWS: usize = 510;
 /// BERT `Expand` node past ~510 tokens, so longer chunks are sub-split to this window.
 const MAX_CONTENT_TOKENS: usize = 500;
 
+/// The graph the synth prefers: stock Kokoro plus two outputs it was already computing
+/// internally, which is what makes true word marks possible. Derived locally from the stock
+/// model — see `kokoro-timing-probe/README.md`.
+///
+/// The host reads only [`DURATIONS_OUTPUT`]. The variant also exposes `duration_cumsum`,
+/// which is `cumsum` of the same tensor and so carries nothing new — it exists as a second
+/// witness when auditing the graph offline, and is never fetched here. ORT is asked for
+/// outputs by name, so an unfetched one costs nothing at run time; it was measured not to
+/// disturb either EP.
+///
+/// **A SIDECAR, never a replacement for `model.onnx`.** The panel's startup verify hashes
+/// every manifest file and *deletes* any whose SHA-256 doesn't match, so a variant written
+/// over `model.onnx` would be removed and re-downloaded the next time the panel opened —
+/// silently, and the highlighting would go back to estimates with nothing to show why.
+/// Under its own name it is invisible to the manifest, and deleting it is a complete
+/// uninstall of the feature.
+const VARIANT_MODEL: &str = "kokoro-claude-variant.onnx";
+
+/// Output name carrying integer frames per token on [`VARIANT_MODEL`]. Selected by name,
+/// never by index: the stock graph has one output and the variant has three, and an index
+/// that silently addressed the wrong tensor would still typecheck.
+const DURATIONS_OUTPUT: &str = "durations_frames";
+/// The waveform output's name on both graphs. Falls back to output 0 if absent.
+const WAVEFORM_OUTPUT: &str = "waveform";
+
+/// Audio samples the length regulator emits per duration frame — 25.0 ms at 24 kHz.
+///
+/// Derived rather than assumed, and asserted at runtime on every run: `sum(frames) *
+/// SAMPLES_PER_FRAME` must equal the waveform length exactly, which it did in every case
+/// measured. If it ever doesn't, the frames are describing different audio than the one
+/// being played and the marks are dropped rather than shipped.
+const SAMPLES_PER_FRAME: usize = 600;
+
 /// The sentence [`NativeSynth::bench`] times. Fixed and owned by the host (not sent by
 /// the client) for two reasons: the number stays comparable between runs and machines,
 /// and a client can't make the worker chew on an arbitrarily long text. One sentence, so
@@ -110,7 +143,24 @@ struct Req {
     speed: f32,
     voice: String,
     engine: Engine,
-    reply: oneshot::Sender<Option<Vec<u8>>>,
+    reply: oneshot::Sender<Option<Synthesized>>,
+}
+
+/// One synthesized chunk: its audio, and where in that audio each of its words is spoken.
+///
+/// `marks` is **empty whenever the timing could not be established** — the stock graph is
+/// installed, the durations didn't validate, the aggregation produced nothing — and never
+/// approximate. A caller reading it must treat empty as "no timing for this chunk" and fall
+/// back to whatever it did before, not as "this chunk has no words". Audio and timing fail
+/// independently on purpose: a chunk that can't be marked is still a chunk that must be
+/// spoken.
+///
+/// `marks` is chunk-relative in both axes: this layer is handed one chunk and knows nothing
+/// about where it sat in the request, so the transport — which does — rebases the characters
+/// as it writes the header.
+pub struct Synthesized {
+    pub pcm: Vec<u8>,
+    pub marks: Vec<WordMark>,
 }
 
 struct BenchReq {
@@ -134,6 +184,105 @@ enum Job {
 pub struct Bench {
     pub audio_secs: f32,
     pub elapsed_secs: f32,
+}
+
+/// One source word's stretch of audio: the synth layer's transport-neutral timing unit.
+///
+/// Transport-neutral on purpose. Kindle reaches the host over the pipe and the browser
+/// over loopback HTTP, and both need the same answer to "when is this word spoken"; a mark
+/// shaped for either one would have to be re-derived for the other, which is how two
+/// estimators end up disagreeing about the same page.
+///
+/// **A mark addresses the plain UTF-16 utterance the host was sent** — not the normalized
+/// text, not UTF-8 byte positions, not indices into the phoneme string, not SAPI SSML
+/// positions, and not the browser's OCR boxes. Every one of those is a coordinate space
+/// something in this pipeline actually uses, and a mark that quietly meant one of them
+/// would still look plausible while highlighting the wrong word.
+///
+/// Both axes are relative to **the chunk** as this layer produces them, and `pipe.rs` makes
+/// `char_start_utf16` absolute as it writes the chunk header. The samples stay
+/// chunk-relative on the wire too (see [`kokoro_protocol::CHUNK_ALIGNED`]) — the client
+/// already tracks where the chunk's audio began.
+///
+/// An expansion keeps ONE mark. `1997` is spoken as several words, but it is one token on
+/// the page, so its mark spans the whole of it and the highlight sits there while all of it
+/// is read — which is what [`crate::text::Span`]'s collapsing rule is for.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct WordMark {
+    pub char_start_utf16: u32,
+    pub char_len_utf16: u32,
+    pub sample_start: u32,
+    pub sample_end: u32,
+}
+
+impl WordMark {
+    /// Convert the synth layer's aggregated spans into wire-ready marks.
+    ///
+    /// `offsets` is [`crate::text::utf16_offsets`] over the chunk this layer was handed, so
+    /// the result is **chunk-relative** in both axes. Rebasing onto the request text happens
+    /// in exactly one place — `pipe.rs`, as it writes the chunk header — because that is the
+    /// only layer that knows where the chunk sat. A second rebase here would be a second
+    /// place for the two to disagree.
+    ///
+    /// Marks whose character span resolves empty are dropped rather than emitted: the wire
+    /// format rejects a zero-length span, and a mark that addresses no character cannot
+    /// highlight anything anyway.
+    pub fn from_timed(timed: &[crate::text::TimedSpan], offsets: &[u32]) -> Vec<WordMark> {
+        let mut out = Vec::with_capacity(timed.len());
+        for t in timed {
+            let (a, b) = crate::text::span_to_utf16(t.span, offsets);
+            if b <= a {
+                continue;
+            }
+            out.push(WordMark {
+                char_start_utf16: a,
+                char_len_utf16: b - a,
+                sample_start: t.sample_start,
+                sample_end: t.sample_end,
+            });
+        }
+        out
+    }
+
+    /// This mark as the four wire words of a [`kokoro_protocol::CHUNK_ALIGNED`] entry.
+    pub fn as_wire(&self) -> (u32, u32, u32, u32) {
+        (self.char_start_utf16, self.char_len_utf16, self.sample_start, self.sample_end)
+    }
+
+    /// Whether `marks` is a mark stream this host may put on the wire for a chunk of
+    /// `chunk_samples` samples covering `[chunk_char_start, +chunk_char_len)`.
+    ///
+    /// Checked on the *producing* side as well as the consuming one, against the shared
+    /// rule in `kokoro-protocol` so the two ends cannot drift. A mark list that fails its
+    /// own invariants is a synthesis error to report, not something to ship and let the
+    /// engine reject inside Kindle — by then the page is already silent and the reason for
+    /// it is in the wrong process's log.
+    pub fn stream_is_valid(
+        marks: &[WordMark],
+        chunk_char_start: u32,
+        chunk_char_len: u32,
+        chunk_samples: u32,
+    ) -> bool {
+        if marks.len() as u64 > kokoro_protocol::MAX_MARKS_PER_CHUNK as u64
+            || marks.len() as u64 > chunk_char_len as u64
+        {
+            return false;
+        }
+        let mut prev = (0u32, 0u32);
+        for m in marks {
+            if !kokoro_protocol::mark_is_valid(
+                m.as_wire(),
+                prev,
+                chunk_char_start,
+                chunk_char_len,
+                chunk_samples,
+            ) {
+                return false;
+            }
+            prev = (m.char_start_utf16.saturating_add(m.char_len_utf16), m.sample_end);
+        }
+        true
+    }
 }
 
 /// Permissive bounds on the model's `speed` input. Wider than any UI offers (the panel's slider
@@ -180,8 +329,15 @@ impl NativeSynth {
 
     /// Synthesize one already-cut chunk. Returns raw little-endian f32 PCM bytes
     /// (24 kHz mono) — same shape the webview `synth_result` used, so pipe_server's
-    /// framing is unchanged. None on init/synth failure (pipe host emits SYNTH_ERROR).
-    pub async fn synth(&self, text: String, speed: f32, voice: String, engine: Engine) -> Option<Vec<u8>> {
+    /// framing is unchanged — plus this chunk's word marks when the model can supply them
+    /// (see [`Synthesized`]). None on init/synth failure (pipe host emits SYNTH_ERROR).
+    pub async fn synth(
+        &self,
+        text: String,
+        speed: f32,
+        voice: String,
+        engine: Engine,
+    ) -> Option<Synthesized> {
         let speed = sanitize_speed(speed);
         let (reply, rx) = oneshot::channel();
         if self.tx.send(Job::Synth(Req { text, speed, voice, engine, reply })).is_err() {
@@ -208,8 +364,107 @@ impl NativeSynth {
     }
 }
 
+#[cfg(test)]
+mod mark_tests {
+    use super::*;
+
+    fn mark(cs: u32, cl: u32, ss: u32, se: u32) -> WordMark {
+        WordMark { char_start_utf16: cs, char_len_utf16: cl, sample_start: ss, sample_end: se }
+    }
+
+    // A chunk of 20 characters starting at 100, 1000 samples long.
+    fn ok(marks: &[WordMark]) -> bool {
+        WordMark::stream_is_valid(marks, 100, 20, 1000)
+    }
+
+    #[test]
+    fn accepts_ordered_touching_marks() {
+        assert!(ok(&[mark(100, 5, 0, 400), mark(105, 6, 400, 900)]));
+        assert!(ok(&[])); // a chunk with nothing to mark is not an error
+        assert!(ok(&[mark(119, 1, 999, 1000)])); // flush against both ends
+    }
+
+    #[test]
+    fn rejects_spans_outside_the_chunk() {
+        assert!(!ok(&[mark(99, 5, 0, 100)])); // starts before the chunk
+        assert!(!ok(&[mark(118, 5, 0, 100)])); // runs past its end
+        assert!(!ok(&[mark(100, 5, 0, 1001)])); // past the chunk's audio
+        assert!(!ok(&[mark(100, 0, 0, 100)])); // empty character span
+    }
+
+    #[test]
+    fn rejects_reversed_and_overlapping() {
+        assert!(!ok(&[mark(100, 5, 400, 100)])); // sample span reversed
+        assert!(!ok(&[mark(105, 5, 0, 400), mark(100, 5, 400, 500)])); // characters go back
+        assert!(!ok(&[mark(100, 6, 0, 400), mark(105, 5, 400, 500)])); // characters overlap
+        assert!(!ok(&[mark(100, 5, 0, 400), mark(105, 5, 300, 500)])); // samples overlap
+    }
+
+    #[test]
+    fn from_timed_produces_a_stream_the_wire_accepts() {
+        use crate::text::{aggregate_spans, utf16_offsets, Span};
+        // A multi-byte character before the words, so a byte-counting conversion would
+        // place every later mark one unit early.
+        let src = "\u{00A3}5 costs 1,250 pounds".as_bytes();
+        let spans = vec![
+            None,
+            Some(Span { start: 0, end: 3 }),   // "£5"
+            Some(Span { start: 4, end: 9 }),   // "costs"
+            Some(Span { start: 10, end: 11 }), // "1"     — split report
+            Some(Span { start: 12, end: 15 }), // "250"   — of one word
+            Some(Span { start: 16, end: 22 }), // "pounds"
+            None,
+        ];
+        let samples = vec![100, 400, 300, 200, 300, 500, 100];
+        let timed = aggregate_spans(&spans, &samples, src);
+        let offsets = utf16_offsets(src);
+        let marks = WordMark::from_timed(&timed, &offsets);
+
+        assert_eq!(marks.len(), 4, "1,250 must be one mark");
+        // "£5" is 3 bytes but 2 UTF-16 units, so a byte count would start it at 0 and give
+        // it length 3. Chunk-relative, so the first word begins the chunk.
+        assert_eq!(marks[0].char_start_utf16, 0);
+        assert_eq!(marks[0].char_len_utf16, 2);
+        // "costs" then starts one unit earlier than its byte offset would suggest.
+        assert_eq!(marks[1].char_start_utf16, 3);
+        // The merged mark spans the whole page word, including the comma.
+        assert_eq!(marks[2].char_len_utf16, 5);
+
+        // And the whole stream passes the shared wire rule for its chunk.
+        let total: u32 = samples.iter().sum();
+        assert!(WordMark::stream_is_valid(&marks, 0, 21, total));
+    }
+
+    #[test]
+    fn rejects_overflow_and_unbounded_counts() {
+        assert!(!ok(&[mark(u32::MAX, 2, 0, 100)])); // char_start + char_len overflows
+        // More marks than the chunk has characters: a mark needs a character, so this
+        // cannot be a real stream — and it is the bound that keeps the x86 engine's
+        // allocation tied to what it actually asked for.
+        let many: Vec<WordMark> = (0..21).map(|i| mark(100 + i, 1, i * 10, i * 10 + 10)).collect();
+        assert!(!WordMark::stream_is_valid(&many, 100, 20, 1000));
+    }
+}
+
 fn voice_path(base: &Path, voice: &str) -> PathBuf {
     base.join("voices").join(format!("{voice}.bin"))
+}
+
+/// The graph to load: [`VARIANT_MODEL`] when it is installed beside the stock model,
+/// otherwise stock `model.onnx`.
+///
+/// Chosen once, at worker start, and not re-checked. Dropping the variant in mid-session
+/// would otherwise change the timing source between one page and the next with nothing in
+/// the log to say so; a host restart is the honest way to switch, and it is what installing
+/// the file already implies.
+fn model_path(base: &Path) -> PathBuf {
+    let onnx = base.join("onnx");
+    let variant = onnx.join(VARIANT_MODEL);
+    if variant.is_file() {
+        variant
+    } else {
+        onnx.join("model.onnx")
+    }
 }
 
 /// tokenizer.json `model.vocab`: char-string -> id.
@@ -246,22 +501,94 @@ fn load_voice(path: &Path) -> Option<Vec<f32>> {
 /// Normalize -> segment -> espeak-phonemize each non-punct segment -> post-process
 /// (the kokoro-js phonemize path).
 fn phonemize(text: &str) -> Vec<u8> {
-    let norm = crate::text::normalize(text.as_bytes());
-    let segs = crate::text::split_segments(&norm);
+    phonemize_spans(text).0
+}
+
+/// [`phonemize`] plus, for every phoneme byte, the range of the ORIGINAL utterance bytes
+/// that produced it.
+///
+/// The chain is normalization spans (source token -> normalized text) composed with
+/// espeak's phoneme attribution (normalized text -> phonemes) composed with the
+/// post-processing spans. Each link already exists and is tested on its own; this is where
+/// they meet, and it is what a word mark's character half will be aggregated from.
+///
+/// The phoneme string is identical to what [`phonemize`] has always returned — every stage
+/// carries its mapping alongside the bytes rather than in place of them.
+fn phonemize_spans(text: &str) -> (Vec<u8>, Vec<crate::text::Span>) {
+    use crate::text::Span;
+
+    let norm = crate::text::normalize_spans(text.as_bytes());
+    let segs = crate::text::split_segments(&norm.text);
     let mut joined: Vec<u8> = Vec::new();
+    let mut spans: Vec<Span> = Vec::new();
     for seg in segs {
         if seg.is_punct {
-            joined.extend_from_slice(&seg.text);
+            // Punctuation passes through as itself, so each byte keeps its own span.
+            for k in 0..seg.text.len() {
+                joined.push(seg.text[k]);
+                spans.push(norm.spans[seg.start + k]);
+            }
         } else {
-            joined.extend_from_slice(&crate::espeak::phonemize_segment(&seg.text));
+            let ph = crate::espeak::phonemize_segment_spans(&seg.text);
+            // espeak reports in the SEGMENT's own bytes; lift those through the segment's
+            // offset into normalized text, then through normalization back to the source.
+            // A span that doesn't resolve means espeak pointed outside the text it was
+            // given: fall back to the whole segment rather than drop the phoneme — the
+            // mapping goes coarse, the audio is untouched.
+            let whole = crate::text::lift(
+                &norm.spans,
+                seg.start,
+                Span { start: 0, end: seg.text.len() as u32 },
+            );
+            for (k, sp) in ph.spans.iter().enumerate() {
+                let src = crate::text::lift(&norm.spans, seg.start, *sp)
+                    .or(whole)
+                    .unwrap_or(Span { start: 0, end: 0 });
+                spans.push(src);
+                joined.push(ph.text[k]);
+            }
         }
     }
-    crate::text::post_process(&joined)
+    let (phon, mut out) = crate::text::post_process_spans(&joined, &spans);
+    // Snap to whole characters of the original. Punctuation passes through byte by byte,
+    // so a multi-byte character would otherwise leave one span per byte — two of an
+    // em-dash's three covering no character at all.
+    for sp in out.iter_mut() {
+        *sp = crate::text::snap_to_chars(*sp, text.as_bytes());
+    }
+    (phon, out)
 }
 
 /// BOS + per-UTF-8-char vocab lookup + EOS.
+///
+/// Delegates so there is one tokenizer, not two that can drift over which phoneme
+/// characters the vocabulary covers. The discarded span vector costs one allocation on a
+/// path (`bench`) that then runs the model several times.
 fn tokenize(phon: &[u8], vocab: &HashMap<Vec<u8>, i64>) -> Vec<i64> {
+    tokenize_spans(phon, &[], vocab).0
+}
+
+/// [`tokenize`] plus, for each token, the source it came from — the last link in the chain
+/// the model's durations are laid against.
+///
+/// `spans` is [`phonemize_spans`]'s per-phoneme-byte mapping; pass an empty slice to opt out
+/// (the returned spans are then all `None` and the ids are unchanged). The two returned
+/// vectors are the same length **and are indexed the same way as the model's duration
+/// output**, which is why BOS and EOS are present as `None` rather than omitted: the graph
+/// emits a frame count for them too, and dropping them here would shift every later token's
+/// audio one position earlier.
+///
+/// A phoneme character not in the vocabulary produces no token, so this is not a
+/// position-preserving map — which is exactly why the spans have to be carried through the
+/// same loop that does the lookup rather than zipped on afterwards.
+fn tokenize_spans(
+    phon: &[u8],
+    spans: &[crate::text::Span],
+    vocab: &HashMap<Vec<u8>, i64>,
+) -> (Vec<i64>, Vec<Option<crate::text::Span>>) {
+    use crate::text::Span;
     let mut ids = vec![0i64]; // BOS
+    let mut out: Vec<Option<Span>> = vec![None]; // BOS speaks no source
     let mut i = 0;
     while i < phon.len() {
         let c = phon[i];
@@ -269,18 +596,49 @@ fn tokenize(phon: &[u8], vocab: &HashMap<Vec<u8>, i64>) -> Vec<i64> {
         let end = (i + n).min(phon.len());
         if let Some(&id) = vocab.get(&phon[i..end]) {
             ids.push(id);
+            // Union over the character's bytes. A multi-byte phoneme is one token, and its
+            // bytes can carry different spans where post-processing spliced around them.
+            out.push(spans[i.min(spans.len())..end.min(spans.len())].iter().fold(
+                None,
+                |acc: Option<Span>, s| {
+                    Some(match acc {
+                        None => *s,
+                        Some(a) => Span { start: a.start.min(s.start), end: a.end.max(s.end) },
+                    })
+                },
+            ));
         }
         i += n;
     }
     ids.push(0); // EOS
-    ids
+    out.push(None);
+    (ids, out)
+}
+
+/// One model run's outputs: the audio, and the per-token frame counts when the graph
+/// exposes them ([`VARIANT_MODEL`] does, stock `model.onnx` does not).
+struct Run {
+    pcm: Vec<f32>,
+    /// One entry per token of `ids`, BOS and EOS included — they hold the leading and
+    /// trailing silence. `None` on the stock graph.
+    frames: Option<Vec<u32>>,
 }
 
 /// Run the Kokoro model for one token sequence. Stock fp32 model.onnx: int64
-/// input_ids, f32 style[1,256], f32 speed[1] -> f32 waveform.
-fn run_model(session: &mut Session, ids: &[i64], style: &[f32], speed: f32) -> Result<Vec<f32>, String> {
+/// input_ids, f32 style[1,256], f32 speed[1] -> f32 waveform. [`VARIANT_MODEL`] adds
+/// [`DURATIONS_OUTPUT`], which is asked for only when the loaded graph declares it.
+fn run_model(session: &mut Session, ids: &[i64], style: &[f32], speed: f32) -> Result<Run, String> {
     let input_names: Vec<String> = session.inputs().iter().map(|i| i.name().to_string()).collect();
-    let output_name = session.outputs()[0].name().to_string();
+    let out_names: Vec<String> = session.outputs().iter().map(|o| o.name().to_string()).collect();
+    // By name where the name exists; index 0 only as the fallback for a graph that doesn't
+    // label its waveform. Blind indexing is what would make a variant that reordered its
+    // outputs play the duration tensor as audio.
+    let output_name = out_names
+        .iter()
+        .find(|n| n.as_str() == WAVEFORM_OUTPUT)
+        .cloned()
+        .unwrap_or_else(|| out_names.first().cloned().unwrap_or_default());
+    let want_durations = out_names.iter().any(|n| n.as_str() == DURATIONS_OUTPUT);
 
     let speed_arr = [speed];
     let mut feeds: Vec<(Cow<str>, SessionInputValue)> = Vec::new();
@@ -301,7 +659,52 @@ fn run_model(session: &mut Session, ids: &[i64], style: &[f32], speed: f32) -> R
 
     let outputs = session.run(feeds).map_err(|e| e.to_string())?;
     let (_shape, data) = outputs[output_name.as_str()].try_extract_tensor::<f32>().map_err(|e| e.to_string())?;
-    Ok(data.to_vec())
+    let pcm = data.to_vec();
+
+    // The durations are float32 holding integral values (Round and Clip preserve the
+    // element type upstream of them), so they are read as f32 and rounded — not extracted
+    // as an integer tensor, which would fail. `max(1)` mirrors the graph's own clamp.
+    //
+    // A failure here is NOT a synthesis failure: the audio above is already correct and
+    // must be returned. Losing the durations costs the highlight its precision, nothing
+    // more, so every problem below degrades to `None`.
+    let frames = if !want_durations {
+        None
+    } else {
+        match outputs[DURATIONS_OUTPUT].try_extract_tensor::<f32>() {
+            Ok((_s, d)) if d.len() == ids.len() => {
+                Some(d.iter().map(|&f| (f.round().max(1.0)) as u32).collect::<Vec<u32>>())
+            }
+            Ok((_s, d)) => {
+                eprintln!(
+                    "[native-synth] {DURATIONS_OUTPUT}: {} frames for {} tokens — no marks",
+                    d.len(),
+                    ids.len()
+                );
+                None
+            }
+            Err(e) => {
+                eprintln!("[native-synth] {DURATIONS_OUTPUT} extract failed: {e} — no marks");
+                None
+            }
+        }
+    }
+    // The arithmetic that ties frames to the audio actually produced. Asserted per run
+    // rather than trusted from the offline measurement: this is the one check that would
+    // notice the graph, the EP or the frame size changing under us, and the cost of missing
+    // it is a highlight that drifts further from the voice with every word.
+    .filter(|f: &Vec<u32>| {
+        let want = f.iter().map(|&x| x as usize).sum::<usize>() * SAMPLES_PER_FRAME;
+        if want != pcm.len() {
+            eprintln!(
+                "[native-synth] frames*{SAMPLES_PER_FRAME}={want} but {} samples — no marks",
+                pcm.len()
+            );
+        }
+        want == pcm.len()
+    });
+
+    Ok(Run { pcm, frames })
 }
 
 fn build_session(model: &Path, engine: Engine) -> Result<Session, String> {
@@ -322,7 +725,13 @@ fn build_session(model: &Path, engine: Engine) -> Result<Session, String> {
 }
 
 fn worker_loop(rx: mpsc::Receiver<Job>, base: PathBuf, espeak_data: PathBuf) {
-    let model = base.join("onnx").join("model.onnx");
+    let model = model_path(&base);
+    let aligned = model.file_name().map(|f| f == VARIANT_MODEL).unwrap_or(false);
+    eprintln!(
+        "[native-synth] model: {} ({})",
+        model.display(),
+        if aligned { "model-derived word timing" } else { "stock — estimated word timing" }
+    );
     let tokenizer = base.join("tokenizer.json");
     let exe_dir = std::env::current_exe()
         .ok()
@@ -419,7 +828,7 @@ fn worker_loop(rx: mpsc::Receiver<Job>, base: PathBuf, espeak_data: PathBuf) {
                     let mut samples = 0usize;
                     for _ in 0..BENCH_TIMED_RUNS {
                         match run_model(&mut s, &wids, style, 1.0) {
-                            Ok(pcm) => samples += pcm.len(),
+                            Ok(r) => samples += r.pcm.len(),
                             Err(e) => {
                                 eprintln!(
                                     "[native-synth] bench run failed ({:?}): {e}",
@@ -531,11 +940,13 @@ fn worker_loop(rx: mpsc::Receiver<Job>, base: PathBuf, espeak_data: PathBuf) {
 
         let vocab_ref = vocab.as_ref().unwrap();
 
-        // Phonemize -> tokens.
-        let phon = phonemize(&req.text);
-        let ids = tokenize(&phon, vocab_ref);
+        // Phonemize -> tokens, carrying each phoneme's source span through so the model's
+        // durations have something to be laid against.
+        let (phon, phon_spans) = phonemize_spans(&req.text);
+        let (ids, id_spans) = tokenize_spans(&phon, &phon_spans, vocab_ref);
         if ids.len() <= 2 {
-            let _ = req.reply.send(Some(Vec::new())); // empty/punctuation-only chunk
+            // Empty/punctuation-only chunk: no audio and nothing to mark.
+            let _ = req.reply.send(Some(Synthesized { pcm: Vec::new(), marks: Vec::new() }));
             continue;
         }
 
@@ -545,9 +956,22 @@ fn worker_loop(rx: mpsc::Receiver<Job>, base: PathBuf, espeak_data: PathBuf) {
         // <=MAX_CONTENT_TOKENS windows — each wrapped in its own BOS/EOS — and their PCM
         // concatenated. A window boundary lands at a token seam (rare, brief).
         let content = &ids[1..ids.len() - 1];
+        let content_spans = &id_spans[1..ids.len() - 1];
         let mut bytes: Vec<u8> = Vec::new();
         let mut failed = false;
-        for window in content.chunks(MAX_CONTENT_TOKENS) {
+        // Per-token source and audio length, accumulated across every window so the
+        // aggregation sees one continuous chunk. A sub-split is a fact about the model's
+        // token limit, not about the page, and a word straddling a window seam is still one
+        // word — running totals here rather than per-window aggregation is what keeps it so.
+        let mut unit_spans: Vec<Option<crate::text::Span>> = Vec::with_capacity(ids.len());
+        let mut unit_samples: Vec<u32> = Vec::with_capacity(ids.len());
+        // One window without durations forfeits the whole chunk's marks. Marking part of a
+        // chunk would leave the rest of the page silent-but-highlighted at whatever the last
+        // mark said, which reads as a stuck highlight rather than as an absent one.
+        let mut timing = aligned;
+        for (window, wspans) in
+            content.chunks(MAX_CONTENT_TOKENS).zip(content_spans.chunks(MAX_CONTENT_TOKENS))
+        {
             let mut wids = Vec::with_capacity(window.len() + 2);
             wids.push(0); // BOS
             wids.extend_from_slice(window);
@@ -563,8 +987,8 @@ fn worker_loop(rx: mpsc::Receiver<Job>, base: PathBuf, espeak_data: PathBuf) {
             let mut window_pcm = None;
             for attempt in 0..3u32 {
                 match run_model(session.as_mut().unwrap(), &wids, style, req.speed) {
-                    Ok(pcm) => {
-                        window_pcm = Some(pcm);
+                    Ok(r) => {
+                        window_pcm = Some(r);
                         break;
                     }
                     Err(e) => {
@@ -584,9 +1008,21 @@ fn worker_loop(rx: mpsc::Receiver<Job>, base: PathBuf, espeak_data: PathBuf) {
                 }
             }
             match window_pcm {
-                Some(pcm) => {
-                    bytes.reserve(pcm.len() * 4);
-                    for s in pcm {
+                Some(run) => {
+                    // `frames` is indexed exactly like `wids` (BOS/EOS included), which is
+                    // why `wspans` is padded the same way rather than zipped to `window`.
+                    match run.frames {
+                        Some(f) if timing => {
+                            unit_spans.push(None); // BOS
+                            unit_spans.extend_from_slice(wspans);
+                            unit_spans.push(None); // EOS
+                            unit_samples
+                                .extend(f.iter().map(|&x| x.saturating_mul(SAMPLES_PER_FRAME as u32)));
+                        }
+                        _ => timing = false,
+                    }
+                    bytes.reserve(run.pcm.len() * 4);
+                    for s in run.pcm {
                         bytes.extend_from_slice(&s.to_le_bytes());
                     }
                 }
@@ -596,6 +1032,33 @@ fn worker_loop(rx: mpsc::Receiver<Job>, base: PathBuf, espeak_data: PathBuf) {
                 }
             }
         }
-        let _ = req.reply.send(if failed { None } else { Some(bytes) });
+        if failed {
+            let _ = req.reply.send(None);
+            continue;
+        }
+
+        // Durations -> per-word marks. Every step past here can only lose the timing, never
+        // the audio: `marks` empty means "no timing for this chunk", which is exactly what a
+        // stock model produces, so the transport needs no separate signal for the two.
+        let marks = if timing && unit_spans.len() == unit_samples.len() {
+            let src = req.text.as_bytes();
+            let timed = crate::text::aggregate_spans(&unit_spans, &unit_samples, src);
+            let offsets = crate::text::utf16_offsets(src);
+            let m = WordMark::from_timed(&timed, &offsets);
+            let chunk_u16 = offsets.last().copied().unwrap_or(0);
+            let samples = (bytes.len() / 4) as u32;
+            // Validated here, on the producing side, against the same rule the consumer
+            // applies. A stream that fails its own invariants is a bug to see in this log
+            // now, not a frame the engine rejects inside Kindle after the page went quiet.
+            if WordMark::stream_is_valid(&m, 0, chunk_u16, samples) {
+                m
+            } else {
+                eprintln!("[native-synth] {} marks failed validation — dropped", m.len());
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
+        let _ = req.reply.send(Some(Synthesized { pcm: bytes, marks }));
     }
 }
