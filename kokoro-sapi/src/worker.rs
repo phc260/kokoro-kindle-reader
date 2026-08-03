@@ -96,7 +96,7 @@ impl Worker {
         let h = unsafe {
             CreateFileW(
                 PCWSTR(name.as_ptr()),
-                (GENERIC_READ.0 | GENERIC_WRITE.0) as u32,
+                GENERIC_READ.0 | GENERIC_WRITE.0,
                 FILE_SHARE_NONE,
                 None,
                 OPEN_EXISTING,

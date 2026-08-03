@@ -135,18 +135,15 @@ pub fn verify() -> String {
             return format!("verify: SetVoice(other) failed: {e:?}");
         }
         let got = match voice.GetVoice() {
-            Ok(t) => {
-                let s = t
-                    .GetId()
-                    .ok()
-                    .map(|p| {
-                        let s = p.to_string().unwrap_or_default();
-                        CoTaskMemFree(Some(p.as_ptr() as *const _));
-                        s
-                    })
-                    .unwrap_or_default();
-                s
-            }
+            Ok(t) => t
+                .GetId()
+                .ok()
+                .map(|p| {
+                    let s = p.to_string().unwrap_or_default();
+                    CoTaskMemFree(Some(p.as_ptr() as *const _));
+                    s
+                })
+                .unwrap_or_default(),
             Err(e) => return format!("verify: GetVoice failed: {e:?}"),
         };
         let overridden = got.to_ascii_lowercase().contains("kokorotts");

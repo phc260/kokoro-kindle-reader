@@ -284,7 +284,7 @@ impl ISpTTSEngine_Impl for KokoroEngine_Impl {
             return E_OUTOFMEMORY;
         }
         *wfx = WAVEFORMATEX {
-            wFormatTag: WAVE_FORMAT_PCM as u16,
+            wFormatTag: WAVE_FORMAT_PCM,
             nChannels: 1,
             nSamplesPerSec: SAMPLE_RATE,
             wBitsPerSample: 16,

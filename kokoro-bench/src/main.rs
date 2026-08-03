@@ -157,14 +157,13 @@ fn main() {
         let cold_start = Instant::now();
         let cold_result = run_model(&mut session, &wrap(content), style, 1.0);
         let cold_ms = cold_start.elapsed().as_secs_f64() * 1000.0;
-        let mut audio_secs = 0.0;
-        if let Ok(pcm) = &cold_result {
-            audio_secs = pcm.len() as f64 / 24_000.0;
-        }
-        if cold_result.is_err() {
-            println!("{:<28} -- run failed: {}", cfg.label, cold_result.unwrap_err());
-            continue;
-        }
+        let audio_secs = match &cold_result {
+            Ok(pcm) => pcm.len() as f64 / 24_000.0,
+            Err(e) => {
+                println!("{:<28} -- run failed: {e}", cfg.label);
+                continue;
+            }
+        };
 
         let mut warm_total_ms = 0.0;
         for _ in 0..TIMED_RUNS {

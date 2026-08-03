@@ -54,9 +54,11 @@ pub fn measure(gpu: bool) -> Result<Option<Speed>, String> {
     if status != BENCH_OK {
         return Err("the host sent an unexpected test result.".to_string());
     }
-    // A zero/negative span would divide to infinity or NaN; treat it as unusable rather
-    // than reporting an absurd speed.
-    if !(elapsed > 0.0) || !(audio > 0.0) {
+    // Both numbers came off the pipe, so neither is trusted to be sane. Require finite and
+    // positive rather than just non-zero: a zero or negative `elapsed` divides to an
+    // infinity, a NaN on either side propagates one, and an infinite `audio` reports an
+    // absurd speed. Treat all of them as "no measurement" instead.
+    if !elapsed.is_finite() || !audio.is_finite() || elapsed <= 0.0 || audio <= 0.0 {
         return Ok(None);
     }
     Ok(Some(Speed { realtime: audio / elapsed }))

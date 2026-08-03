@@ -792,9 +792,9 @@ pub fn normalize_spans(utf8: &[u8]) -> Normalized {
 // Unused inside the host now that the span-carrying variants have consumers, but NOT
 // dead: `kokoro-bench` includes this file with `#[path]` and calls it (kokoro-host is
 // bin-only, so there is no lib target to share instead).
-#[allow(dead_code)]
 /// (Kept for `kokoro-bench`, which includes this file via `#[path]`; the host itself goes
 /// through [`normalize_spans`].)
+#[allow(dead_code)]
 pub fn normalize(utf8: &[u8]) -> Vec<u8> {
     normalize_spans(utf8).text
 }
@@ -970,9 +970,9 @@ pub fn post_process_spans(phon: &[u8], spans: &[Span]) -> (Vec<u8>, Vec<Span>) {
 // Unused inside the host now that the span-carrying variants have consumers, but NOT
 // dead: `kokoro-bench` includes this file with `#[path]` and calls it (kokoro-host is
 // bin-only, so there is no lib target to share instead).
-#[allow(dead_code)]
 /// (Kept for `kokoro-bench`, which includes this file via `#[path]`; the host itself goes
 /// through [`post_process_spans`].)
+#[allow(dead_code)]
 pub fn post_process(phon: &[u8]) -> Vec<u8> {
     post_process_spans(phon, &identity_spans(phon.len())).0
 }

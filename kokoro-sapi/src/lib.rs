@@ -17,7 +17,7 @@ use core::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::Mutex;
 
 use windows::Win32::Foundation::{
-    CLASS_E_CLASSNOTAVAILABLE, ERROR_SUCCESS, HINSTANCE, HMODULE, S_FALSE, S_OK,
+    CLASS_E_CLASSNOTAVAILABLE, ERROR_SUCCESS, E_POINTER, HINSTANCE, HMODULE, S_FALSE, S_OK,
 };
 use windows::Win32::System::Com::StringFromGUID2;
 use windows::Win32::System::Registry::{
@@ -52,15 +52,30 @@ static HINST: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
 
 // ---- exported entry points ------------------------------------------------
 
+/// COM's entry point into this DLL: hand back a class factory for `clsid`. Called by
+/// `CoCreateInstance` inside Kindle once the registry has pointed it at this file.
+///
+/// # Safety
+///
+/// The caller must uphold the COM ABI contract: `clsid` and `iid` are either null or point
+/// to readable `GUID`s, and `ppv` is either null or points to a writable `*mut c_void`.
+/// COM itself always satisfies this; the null tolerance is here because a *misregistered*
+/// in-proc server is a real failure mode and returning an HRESULT beats faulting inside
+/// Kindle's process.
+///
+/// A null `ppv` has to be rejected outright rather than merely skipped, because the only
+/// thing left to do with it is hand it to `query` — whose own contract requires somewhere
+/// to write. `E_POINTER` is what the engine's other out-pointer entry points return.
 #[no_mangle]
 pub unsafe extern "system" fn DllGetClassObject(
     clsid: *const GUID,
     iid: *const GUID,
     ppv: *mut *mut c_void,
 ) -> HRESULT {
-    if !ppv.is_null() {
-        *ppv = null_mut();
+    if ppv.is_null() {
+        return E_POINTER;
     }
+    *ppv = null_mut();
     if clsid.is_null() || *clsid != CLSID_KOKORO {
         return CLASS_E_CLASSNOTAVAILABLE;
     }

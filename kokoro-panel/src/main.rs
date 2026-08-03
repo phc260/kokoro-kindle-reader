@@ -736,10 +736,18 @@ fn main() -> Result<(), slint::PlatformError> {
             // every 64 KB, far more often than the UI needs to repaint.
             let mut last_pct: i32 = -1;
             let (checked, repaired) = download::verify(&app_data_r, |done, total| {
-                let pct = if total > 0 { (done * 100 / total) as i32 } else { 100 };
+                // `total` is a sum of file sizes, so zero here means a manifest whose files
+                // are all zero-byte — not an empty one, which never reaches this callback at
+                // all (`download::verify` only calls it from inside its per-file loop). Every
+                // such file is trivially verified, so the answer is 100%, and it is decided
+                // once here because the bar and the whole-percent gating it used to disagree:
+                // `pct` said 100 while `frac` said 0.0.
+                let (pct, frac) = match total {
+                    0 => (100, 1.0),
+                    t => ((done * 100 / t) as i32, done as f32 / t as f32),
+                };
                 if pct != last_pct {
                     last_pct = pct;
-                    let frac = done as f32 / total.max(1) as f32;
                     let _ = weak.upgrade_in_event_loop(move |ui| ui.set_verify_frac(frac));
                 }
             });
@@ -953,10 +961,19 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.run()
 }
 
+/// What the host said, or why it couldn't be asked. The `Err` side is a message for the
+/// user, not a diagnostic: an unreachable host is the ordinary case (it is a tray daemon the
+/// user can quit), and it is the one answer no report field can express.
+type HostReply = Result<hostlink::HostReport, String>;
+
+/// The UI-thread half of an [`Intent`] — boxed because the queue holds commands of different
+/// shapes in one channel.
+type PaintReply = Box<dyn FnOnce(&AppWindow, HostReply) + Send>;
+
 /// One queued command for the host, with the painter for whatever comes back.
 struct Intent {
     action: u8,
-    paint: Box<dyn FnOnce(&AppWindow, Result<hostlink::HostReport, String>) + Send>,
+    paint: PaintReply,
 }
 
 /// Sends every command this panel issues to the host, **in the order the user issued them**,
@@ -1028,7 +1045,7 @@ impl Intents {
     fn send(
         &self,
         action: u8,
-        paint: impl FnOnce(&AppWindow, Result<hostlink::HostReport, String>) + Send + 'static,
+        paint: impl FnOnce(&AppWindow, HostReply) + Send + 'static,
     ) {
         self.epoch.fetch_add(1, Ordering::SeqCst);
         self.pending.fetch_add(1, Ordering::SeqCst);
@@ -1139,7 +1156,7 @@ impl Settling {
 fn paint_transport(
     settling: Settling,
     revert: impl FnOnce(&AppWindow) + Send + 'static,
-) -> impl FnOnce(&AppWindow, Result<hostlink::HostReport, String>) + Send + 'static {
+) -> impl FnOnce(&AppWindow, HostReply) + Send + 'static {
     move |ui, res| match res {
         Ok(st) => {
             apply_report(ui, &st);
