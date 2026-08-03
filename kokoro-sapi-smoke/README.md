@@ -35,12 +35,14 @@ offsets are non-decreasing (SAPI requires it) and inside the audio.
 The first word's offset is the quickest read on which timing path is live:
 
 ```
-  'This'    350 ms      <- kokoro-claude-variant installed: the model's own onset
-  'This'      0 ms      <- stock model.onnx: character-linear, and a word at character
-                           zero is always 0 whatever the leading silence
+  'This'    350 ms      <- the graph patch took: the model's own onset
+  'This'      0 ms      <- the host fell back to the stock graph, so the engine is
+                           interpolating; a word at character zero is always 0 whatever
+                           the leading silence
 ```
 
-Both are correct outcomes, so this is reported as a NOTE rather than checked.
+Both are correct outcomes, so this is reported as a NOTE rather than checked. The host's own
+`session: … model-derived word timing` line says which happened and why.
 
 ```powershell
 .\run-speak-test.ps1

@@ -2,9 +2,15 @@
 //
 // The platform engines report boundaries themselves (`chrome.tts`'s `word` event,
 // `speechSynthesis`'s `onboundary`). Kokoro does not: `POST /synth` hands back a block of f32
-// PCM and nothing else. The model *does* predict a duration per phoneme internally, but the
-// stock `model.onnx` exposes only the waveform output (kokoro-host/src/native_synth.rs), so
-// there is no alignment to ask for - it would take a re-exported model to expose one.
+// PCM and nothing else.
+//
+// Note the reason, because it changed. The durations are no longer unavailable: the host
+// appends 273 bytes to the graph in memory at session-build time and every session is patched,
+// this one included (kokoro-host/src/model_patch.rs). Kindle already gets those model-derived
+// marks over CMD_SYNTH_ALIGNED. What the browser lacks is a way to carry them - `/synth`'s
+// response is PCM only - and widening it is a change to the endpoint's shape AND to this
+// extension, so it is the browser path's own increment. Until then these marks are estimates
+// and must keep being described as such.
 //
 // What IS known exactly is the chunk's duration: the sample count is right there in the
 // response. So this estimates only the SPLIT of that duration across the chunk's words, and the

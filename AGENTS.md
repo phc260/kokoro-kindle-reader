@@ -74,7 +74,9 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
   writes must be read by a host reader — `native_synth::read_controls` for synth fields,
   `kindle_watch::enabled` for `kindle_kokoro`. A key written but never read is a bug, and so
   is a live command put in the file: `paused` was one, and it is host-owned state reached
-  over the pipe now.
+  over the pipe now. Also: **a BOM makes the whole file parse-fail in silence** and every
+  setting revert to its default (`gpu_synth`'s default is Gpu). Flag any script that writes it
+  with PowerShell's `Set-Content -Encoding utf8`, which adds one.
 - **Synthesis is serialized.** espeak has global state and isn't thread-safe, and the `ort`
   session is owned by one worker thread. Any code calling espeak or running the session off
   that thread is a bug.
@@ -91,17 +93,27 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
   "is Kokoro narrating?" is a fact the host states rather than a guess a client makes from
   timing. Any new source of host audio that isn't Kindle needs the same separation.
 - **Kindle's word highlight is model-derived; the browser's is not, and the two must not be
-  described alike.** With `onnx/kokoro-claude-variant.onnx` installed (a sidecar - see below), the
-  graph returns per-token frame counts, and `CMD_SYNTH_ALIGNED` carries them to the engine as marks
-  in a `CHUNK_ALIGNED` header. Things to flag:
+  described alike.** `model_patch.rs` appends 273 bytes to the stock `model.onnx`'s bytes **in
+  memory** at session build, so the graph returns per-token frame counts, and `CMD_SYNTH_ALIGNED`
+  carries them to the engine as marks in a `CHUNK_ALIGNED` header. Things to flag:
   - **A mark list that is empty means "no timing for this chunk", never "no words".** Any consumer
     reading it the other way fires no events, which is the bug that strands Kindle on sentence one.
   - **`marks` must never be approximate.** Every failure in the duration path degrades to empty and
     lets interpolation take over; nothing there may fail the *audio*.
   - **`sum(frames) * 600 == waveform length` is asserted per run.** Don't let it be relaxed to a
     tolerance, and don't rescale frames by `speed` (it is applied upstream of the rounding).
-  - **The variant is a sidecar.** Anything that writes it over `model.onnx` is wrong: the panel's
-    verify deletes manifest files whose SHA-256 doesn't match, so it would be silently reverted.
+  - **The graph edit is in memory and must stay there.** Anything that writes a patched graph to
+    disk is a regression: over `model.onnx` the panel's verify deletes it (SHA-256 mismatch) and
+    silently reverts the feature; under its own name it is a 326 MB artifact that has to be
+    hosted, downloaded or hand-copied - which is exactly why the previous sidecar shipped to
+    nobody. The append works because protobuf merges a repeated `ModelProto.graph`; flag any
+    change that turns it back into a re-serialization.
+  - **The patch must never cost the audio.** A rejected graph truncates the buffer back to the
+    file's own bytes and commits that. There is no capability flag: `run_model` asks the session
+    for `durations_frames` by name, so a stock fallback reaches interpolation with no bookkeeping.
+  - **`model_patch`'s encoder is byte-matched against `onnx`'s serialization in a unit test.**
+    A wrong protobuf field number yields a file that still parses, into a different graph, so
+    flag any change to the encoder that doesn't keep that oracle honest.
   - **`CHUNK_ALIGNED`'s absolute chunk start is load-bearing.** Chunks are trimmed and do not abut;
     accumulating `CHUNK_INFO` lengths drifts about a character per chunk. Flag any client that
     reintroduces the running total.

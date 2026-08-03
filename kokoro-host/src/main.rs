@@ -5,6 +5,7 @@
 //   - native_synth.rs (serialized Rust WebGPU synth worker + controls.json reader)
 //   - text.rs / espeak.rs (the kokoro-js text normalizer + espeak-ng FFI)
 //   - split_text.rs   (the sentence-chunk splitter)
+//   - model_patch.rs  (the in-memory ONNX graph edit exposing per-token durations)
 // are plain modules here. The ORT/espeak runtime DLLs + espeak-ng-data are staged by
 // build.rs.
 
@@ -18,6 +19,7 @@ use std::time::{Duration, Instant};
 mod espeak;
 mod kindle_ctl;
 mod kindle_watch;
+mod model_patch;
 mod native_synth;
 mod split_text;
 mod state;

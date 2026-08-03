@@ -93,9 +93,11 @@ very differently.
 
 - **The platform engines report it.** `chrome.tts` fires a `word` event and `speechSynthesis`
   fires `onboundary`, both carrying a character offset. Nothing to compute.
-- **Kokoro does not.** `POST /synth` returns a block of f32 PCM and nothing else. The model
-  predicts a duration per phoneme internally, but the stock `model.onnx` exposes only the
-  waveform output, so there is no alignment to ask for short of re-exporting the model.
+- **Kokoro does not.** `POST /synth` returns a block of f32 PCM and nothing else — not because
+  the durations are unavailable. They are: the host appends 273 bytes to the graph in memory at
+  session-build time, so every session exposes them, this one included, and Kindle already gets
+  model-derived marks over `CMD_SYNTH_ALIGNED`. What is missing is a way to carry them here,
+  and widening `/synth`'s response is a change to the endpoint *and* to this extension.
 
 So on the Kokoro path the marks are **estimated**, in `src/word-timing.ts`: the chunk's duration
 is known exactly (it is the sample count), and that duration is split across the chunk's words by

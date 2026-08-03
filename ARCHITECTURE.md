@@ -126,16 +126,25 @@ node past ~510 tokens**, so each chunk's tokens are sub-split into `MAX_CONTENT_
 also retries a couple of times — rebuilding the session on the last try — to ride out a
 transient Dawn device error.
 
-**Which graph runs.** The worker prefers `onnx/kokoro-claude-variant.onnx` if it is present
-beside `onnx/model.onnx`, and logs which one it picked. The variant is the stock graph with
-two tensors it was *already computing* appended to its outputs — `durations_frames` and
+**Which graph runs.** Always the stock, manifest-verified `onnx/model.onnx` — but its bytes are
+**patched in memory on the way into the session** ([`model_patch.rs`](kokoro-host/src/model_patch.rs)).
+The patch exports two tensors the graph was *already computing* — `durations_frames` and
 `duration_cumsum`, the length regulator's per-token frame counts — which is what turns word
-highlighting from an interpolation into the model's own schedule. It adds **270 bytes** and no
-computation; measured on this machine, stock and variant produce **bit-identical** f32 output on
-both the WebGPU and CPU EPs. It is a *sidecar*, never a replacement: the panel's startup verify
-deletes any manifest file whose SHA-256 doesn't match, so overwriting `model.onnx` would silently
-undo it. Derivation, verification and the conversion rules are in
-[`kokoro-timing-probe/README.md`](kokoro-timing-probe/README.md).
+highlighting from an interpolation into the model's own schedule. It adds **273 bytes** and no
+computation.
+
+It can be an append because `graph` is field 7 of `ModelProto` and protobuf **merges** a repeated
+appearance of a singular message field, so a second `graph` carrying only `node` and `output`
+entries extends the lists already there: no length prefix is rewritten and none of the 325 MB of
+weights moves. Nothing is written to disk, so there is no artifact to download, host or verify —
+the earlier design was a 326 MB sidecar that had to be built by a Python script and copied in by
+hand, which meant every released install silently fell back to estimated timing.
+
+Measured on this machine through the real host, stock and patched produce **bit-identical** f32
+output **on each EP** (WebGPU `b04d6e8b…`, CPU `66ddbf57…`); the two EPs do not agree with each
+other, which is expected and irrelevant to the patch. If the patched bytes are rejected,
+`build_session` truncates the buffer back to the file it read and commits that, so the host still
+speaks and the chunk falls back to interpolated timing.
 
 **Streaming.** `pipe.rs` synthesizes **sentence by sentence**, with chunk sizes that
 **ramp 1, 2, 4, … up to the `chunk` setting**: a tiny first chunk gets audio started fast,
@@ -156,8 +165,8 @@ the engine report `SPEI_WORD_BOUNDARY` / `SPEI_SENTENCE_BOUNDARY` / `SPEI_TTS_BO
   a median of 261 ms and up to 1.2 s.
 * `CHUNK_ALIGNED` (`0xFFFF_FFFC`, answering `CMD_SYNTH_ALIGNED`) — adds the chunk's **absolute**
   UTF-16 start and the model's per-word marks, so a word's offset is one the model predicted.
-  This needs `kokoro-claude-variant.onnx` installed beside `model.onnx`; with the stock graph the
-  header still arrives, carries no marks, and the engine interpolates exactly as before.
+  If the graph patch above was rejected, the header still arrives, carries no marks, and the
+  engine interpolates exactly as before.
 
 This is not cosmetic: **Kindle 18632's narrator is event-driven**
 (`WordBoundaryListHandler` + bookmark matching in `xrm120.dll`), and without these events
@@ -191,7 +200,7 @@ the engine the user actually has installed.
 
 | Path | What |
 |---|---|
-| `kokoro-host/` | The windowless tray host (x64): `main.rs` (tao event loop + tray + `auto-launch` + Kindle-watcher tick), `pipe.rs` (named-pipe server; owns chunking + prefetch + pacing), `native_synth.rs` (serialized Rust synth, GPU or CPU EP + `controls.json` reader) + `text.rs`/`espeak.rs` (kokoro-js text normalizer + espeak-ng FFI), `split_text.rs` (the sentence-chunk splitter), `state.rs` (`HostState` — the shared lock-free cell: audio clocks, live pause, Kindle belief), `kindle_ctl.rs` (the Kindle-control thread: hands-free Ctrl+A toggle of Read Aloud + `WM_CLOSE`, via raw Win32/Toolhelp32 — UI Automation only to find Kindle's window and dismiss an open flyout, never to read the reader's state back), `kindle_watch.rs` (polls for Kindle, spawns the injector). `build.rs` links the espeak-ng import lib and stages the runtime DLLs + `espeak-ng-data`. |
+| `kokoro-host/` | The windowless tray host (x64): `main.rs` (tao event loop + tray + `auto-launch` + Kindle-watcher tick), `pipe.rs` (named-pipe server; owns chunking + prefetch + pacing), `native_synth.rs` (serialized Rust synth, GPU or CPU EP + `controls.json` reader) + `text.rs`/`espeak.rs` (kokoro-js text normalizer + espeak-ng FFI), `split_text.rs` (the sentence-chunk splitter), `model_patch.rs` (the 273-byte in-memory ONNX graph edit that exposes the model's per-token durations), `state.rs` (`HostState` — the shared lock-free cell: audio clocks, live pause, Kindle belief), `kindle_ctl.rs` (the Kindle-control thread: hands-free Ctrl+A toggle of Read Aloud + `WM_CLOSE`, via raw Win32/Toolhelp32 — UI Automation only to find Kindle's window and dismiss an open flyout, never to read the reader's state back), `kindle_watch.rs` (polls for Kindle, spawns the injector). `build.rs` links the espeak-ng import lib and stages the runtime DLLs + `espeak-ng-data`. |
 | `kokoro-panel/` | The native settings panel (Slint/Fluent): `ui/panel.slint` + `src/main.rs` (incl. the 1 Hz host heartbeat), and the framework-agnostic `download.rs` / `preview.rs` (`CMD_PREVIEW`) / `benchmark.rs` (the GPU-vs-CPU speed test's `CMD_BENCH` client) / `hostlink.rs` (the `CMD_KINDLE` client — the panel's entire relationship with Kindle). Writes `controls.json`. Has no Win32 or UI Automation dependency, and must not grow one: the host owns Kindle. |
 | `kokoro-bench/` | Standalone GPU-vs-CPU synth timing tool, not part of the shipping app: reuses `kokoro-host/src/{text,espeak}.rs` via `#[path]` includes (`kokoro-host` is bin-only, no lib target). |
 | `kokoro-hook/` | x86 `cdylib` injected into Kindle 18632+: `DllMain` patches the shared `ISpVoice::SetVoice` vtable slot (index 18) → Kokoro token. `selftest` bin proves it Kindle-free. |

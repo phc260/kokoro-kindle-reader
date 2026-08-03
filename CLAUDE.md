@@ -305,8 +305,9 @@ the panel and Read Aloud in Kindle (or `test-speak.ps1`).
 - **The browser's word highlight runs on ESTIMATED boundaries, and must keep saying so.** Kindle
   gets model-derived ones over `CMD_SYNTH_ALIGNED` (see the word-timing section below); the browser
   does not, because `/synth` returns PCM and nothing else — not because the durations are
-  unavailable. They are: `kokoro-claude-variant` exposes them, and carrying them across is a change
-  to the response shape *and* the extension. So `word-timing.ts` splits each chunk's
+  unavailable. They are — every session is patched to expose them now, browser included — and
+  carrying them across is a change to the response shape *and* the extension. So `word-timing.ts`
+  splits each chunk's
   *exact* duration (the sample count) across its words by syllable count plus a punctuation beat.
   What makes that good enough is the error resetting at every chunk (one to four sentences), so
   nothing accumulates down a page. Don't add a second estimator elsewhere, and don't describe
@@ -459,24 +460,44 @@ the panel and Read Aloud in Kindle (or `test-speak.ps1`).
   native-messaging bridge and went with it; if a client ever needs *that* shape (unpaced, no
   gain, voice on the wire), it's in that commit.
 
-### Word timing on the Kindle path (`kokoro-claude-variant` + `CMD_SYNTH_ALIGNED`)
+### Word timing on the Kindle path (`model_patch.rs` + `CMD_SYNTH_ALIGNED`)
 - **The stock graph already computes per-token durations and throws them away.** Kokoro is
   StyleTTS2-derived, so a length regulator drives the decoder:
   `duration_proj → Sigmoid → ReduceSum → Div(speed) → Round → Clip → CumSum → MatMul`.
-  `kokoro-claude-variant.onnx` appends `/encoder/Clip_output_0` (as `durations_frames`, float32)
-  and `/encoder/CumSum_output_0` (as `duration_cumsum`, **int64** — the dtypes differ, and
-  declaring both float loads in `onnx.checker` then fails at ORT session creation). **+270 bytes,
-  weights untouched, no computation added.** The host fetches only `durations_frames`;
-  `duration_cumsum` is its `cumsum` and carries nothing new — it is an offline audit witness, and
-  an output ORT is never asked for costs nothing. Derivation and repro:
-  `kokoro-timing-probe/README.md`.
-- **It is a SIDECAR in `onnx/`, never a replacement for `model.onnx`.** The panel's startup verify
-  hashes every manifest file and *deletes* mismatches, so a variant written over `model.onnx` is
-  removed and re-downloaded the next time the panel opens — silently, with the highlighting
-  quietly back on estimates. Under its own name the manifest can't see it, and deleting the file
-  is a complete uninstall. `model_path()` picks it once at worker start and logs which graph is
-  live; it is **not** re-checked per utterance, so a mid-session swap can't change the timing
-  source between pages with nothing in the log to say so.
+  `model_patch.rs` exports `/encoder/Clip_output_0` (as `durations_frames`, float32) and
+  `/encoder/CumSum_output_0` (as `duration_cumsum`, **int64** — the dtypes differ, and declaring
+  both float passes `onnx.checker` then fails at ORT session creation, which is exactly what the
+  forced-rejection test reproduces). **273 bytes, weights untouched, no computation added.** The
+  host fetches only `durations_frames`; `duration_cumsum` is its `cumsum` and carries nothing new
+  — it is an offline audit witness, and an output ORT is never asked for costs nothing.
+- **The edit is applied IN MEMORY, to the bytes of the manifest-verified `model.onnx`, at session
+  build time.** There is no patched file on disk, nothing extra to download and nothing to host.
+  This works because `graph` is field 7 of `ModelProto` and **protobuf merges a repeated
+  appearance of a singular message field**: a second `graph` carrying only `node` and `output`
+  entries appends to the lists already there. So it is a pure `extend_from_slice` — no length
+  prefix is rewritten, not one of the 325 MB of weights before it moves, and no protobuf writer is
+  needed. That last point is why this replaced the previous design.
+- **It replaced a 326 MB sidecar (`kokoro-claude-variant.onnx`) and must not go back.** That file
+  could only be produced by a Python script and copied in by hand, so **every released install
+  fell back to estimated timing** — the feature shipped to nobody. It also had to dodge the
+  panel's startup verify, which deletes any file under the model dir whose SHA-256 doesn't match
+  the manifest, so writing it over `model.onnx` silently reverted the feature on the next panel
+  open. Hosting it, downloading it, or deriving it to disk all cost either 326 MB of bandwidth,
+  326 MB of disk, or a binary nobody can reproduce. In memory costs none of them, and **the
+  shipped code is the derivation**. `LEGACY_VARIANT` exists only so a host that finds a leftover
+  copy can say once that it is dead weight; it is never loaded.
+- **The encoder is byte-matched against `onnx`'s own serialization, not trusted.**
+  `model_patch::tests` asserts the emitted bytes equal the `graph.node` + `graph.output` ranges
+  lifted verbatim out of the old `kokoro-claude-variant.onnx` (186 + 84 = 270, exactly how much
+  larger that file was). Hand-rolling protobuf is fine; hand-rolling it *unverified* is not — a
+  wrong field number produces a file that still parses, into a different graph.
+- **A rejected patch must cost the marks, not the audio.** If the patched bytes don't load,
+  `build_session` truncates the same buffer back to what it read from disk and commits again —
+  stock by construction, so the host still speaks and the chunk falls back to interpolated timing.
+  The log line is deliberately *not* phrased as "the patch is bad": an unavailable execution
+  provider fails the first commit too, and only the retry tells the two apart. There is **no
+  capability flag** anywhere: `run_model` asks the session for `durations_frames` by name per run,
+  so a stock fallback reaches the interpolated path with no bookkeeping.
 - **`SAMPLES_PER_FRAME` is 600 and is asserted every run**, not trusted from the offline
   measurement: `sum(frames) * 600` must equal the waveform length. That assertion is the only
   thing that would notice the graph, the EP or the frame size moving, and the cost of missing it
@@ -484,12 +505,26 @@ the panel and Read Aloud in Kindle (or `test-speak.ps1`).
   — it is applied at `/encoder/Div`, upstream of the rounding, so the frames already describe the
   audio at the requested speed. **Do not copy the public demo's hard-coded divisor or `-3`**; they
   exist to paper over pre-rounding floats and are wrong here.
-- **Verified on this machine, through the real host, both EPs**: stock vs variant × WebGPU vs CPU
-  produced **four bit-identical f32 streams**. The voice is unchanged and adding the outputs did
-  not disturb Dawn. (`onnx-community/Kokoro-82M-v1.0-ONNX-timestamped` is equivalent — `round()` on
-  its floats recovers these frames exactly — but its output is the PRE-rounding tensor, and using
-  those floats raw costs median 19 ms / p95 71 ms / max 106 ms as the residuals random-walk along
-  the cumsum. The variant's edge is only that the rounding cannot be forgotten.)
+- **Verified on this machine, through the real host, both EPs: the patch does not change the
+  audio.** Stock vs patched is bit-identical **per EP** — WebGPU `b04d6e8b…` both ways, CPU
+  `66ddbf57…` both ways. The stock side of each pair was produced by *forcing* the fallback (a
+  deliberately mistyped `durations_frames`), so it is the same binary answering, not a different
+  build. **The two EPs do NOT agree with each other**, and an earlier note here claiming they did
+  was wrong — see the BOM trap below for why. That is unremarkable for different providers; what
+  matters is that adding the outputs disturbed neither. (`onnx-community/Kokoro-82M-v1.0-ONNX-timestamped`
+  is equivalent — `round()` on its floats recovers these frames exactly — but its output is the
+  PRE-rounding tensor, and using those floats raw costs median 19 ms / p95 71 ms / max 106 ms as
+  the residuals random-walk along the cumsum. This edit's edge is only that the rounding cannot be
+  forgotten.)
+- **A `controls.json` with a UTF-8 BOM is silently ignored in full.** `read_controls` does
+  `serde_json::from_str`, which rejects the BOM, and the whole `if let Ok(v)` is skipped — so
+  every setting reverts to its default, including `gpu_synth`, whose default is **Gpu**. Nothing
+  is logged. This is how the earlier "WebGPU and CPU are bit-identical" result happened: the
+  harness wrote the file with PowerShell 5.1's `Set-Content -Encoding utf8`, which adds a BOM, so
+  the run that was supposed to be CPU was a second GPU run. **Any script that writes
+  `controls.json` must write UTF-8 without a BOM** (`[System.IO.File]::WriteAllText` with
+  `UTF8Encoding($false)`), and any experiment that selects an EP must confirm it from the host's
+  own `session: Gpu|Cpu` log line rather than from what it wrote.
 - **Timing and audio fail independently, and marks are never approximate.** `Synthesized.marks`
   empty means "no timing for this chunk" — stock model, durations that didn't validate,
   aggregation that produced nothing — and every consumer must fall back rather than read it as "no
@@ -535,9 +570,9 @@ the panel and Read Aloud in Kindle (or `test-speak.ps1`).
   chunk even when it is wrong about a word, and a chunk with no marks still has to fire its events
   somewhere. `ChunkMap::offset_of` is the one place the two meet.
 - **The browser path still uses its own estimator** (`word-timing.ts`) — `/synth` returns PCM and
-  nothing else. The marks exist and are better; carrying them across is a change to the response
-  shape *and* the extension, and it is the browser path's own increment. Until then, keep saying
-  the browser's marks are estimates.
+  nothing else. The marks exist and are better (the browser shares the same patched session), but
+  carrying them across is a change to the response shape *and* the extension, and it is the
+  browser path's own increment. Until then, keep saying the browser's marks are estimates.
 
 ### Bitness, registration, file placement
 - **The engine must stay x86** — Kindle is a 32-bit process and loads the COM DLL
@@ -582,8 +617,8 @@ the panel and Read Aloud in Kindle (or `test-speak.ps1`).
   applies on Kindle's next launch). `kokoro-hook`'s `selftest` guards the slot-18 ABI.
 
 ### Where shared files live
-- The synth core (`native_synth.rs` + `text.rs` + `espeak.rs` + `split_text.rs`) is in
-  `kokoro-host/src/` — **not** in the engine crate. `text.rs`/`espeak.rs` must stay
+- The synth core (`native_synth.rs` + `text.rs` + `espeak.rs` + `split_text.rs` +
+  `model_patch.rs`) is in `kokoro-host/src/` — **not** in the engine crate. `text.rs`/`espeak.rs` must stay
   pure/self-contained (no `kokoro-host`-specific state) because `kokoro-bench` reuses them
   via `#[path]` includes (`kokoro-host` is bin-only, no lib target).
 - `model-manifest.json` + `icons/` are at the repo root (the panel embeds the manifest; the

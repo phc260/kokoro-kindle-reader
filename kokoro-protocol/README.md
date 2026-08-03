@@ -17,7 +17,7 @@ the clients that connect to it: the pipe name, the commands, the
 `'A'` is a **client's** choice, not the host's. The two headers carry different things, so a
 client that asked for `'S'` must not be handed `CHUNK_ALIGNED` just because the marks happened
 to exist — and an `'A'` response with **zero marks is a good answer**, meaning only "no timing
-for this chunk" (a stock `model.onnx`, or timing that failed validation). It never means the
+for this chunk" (a host whose graph patch was rejected, or timing that failed validation). It never means the
 chunk has no words, and a client reading it that way would fire no events at all, which is the
 bug that leaves Kindle stuck on sentence one.
 

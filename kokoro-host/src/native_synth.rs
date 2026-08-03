@@ -27,27 +27,20 @@ const VOICE_ROWS: usize = 510;
 /// BERT `Expand` node past ~510 tokens, so longer chunks are sub-split to this window.
 const MAX_CONTENT_TOKENS: usize = 500;
 
-/// The graph the synth prefers: stock Kokoro plus two outputs it was already computing
-/// internally, which is what makes true word marks possible. Derived locally from the stock
-/// model — see `kokoro-timing-probe/README.md`.
-///
-/// The host reads only [`DURATIONS_OUTPUT`]. The variant also exposes `duration_cumsum`,
-/// which is `cumsum` of the same tensor and so carries nothing new — it exists as a second
-/// witness when auditing the graph offline, and is never fetched here. ORT is asked for
-/// outputs by name, so an unfetched one costs nothing at run time; it was measured not to
-/// disturb either EP.
-///
-/// **A SIDECAR, never a replacement for `model.onnx`.** The panel's startup verify hashes
-/// every manifest file and *deletes* any whose SHA-256 doesn't match, so a variant written
-/// over `model.onnx` would be removed and re-downloaded the next time the panel opened —
-/// silently, and the highlighting would go back to estimates with nothing to show why.
-/// Under its own name it is invisible to the manifest, and deleting it is a complete
-/// uninstall of the feature.
-const VARIANT_MODEL: &str = "kokoro-claude-variant.onnx";
+/// A 326 MB on-disk graph earlier builds loaded in place of `model.onnx` to get the
+/// duration outputs. [`crate::model_patch`] now makes the same edit in memory at session
+/// build time, so this file is never loaded and never produced — it is only looked for so
+/// the host can tell anyone who installed one by hand that it is dead weight.
+const LEGACY_VARIANT: &str = "kokoro-claude-variant.onnx";
 
-/// Output name carrying integer frames per token on [`VARIANT_MODEL`]. Selected by name,
-/// never by index: the stock graph has one output and the variant has three, and an index
-/// that silently addressed the wrong tensor would still typecheck.
+/// Output name carrying integer frames per token, added by [`crate::model_patch`].
+/// Selected by name, never by index: the stock graph has one output and the patched graph
+/// has three, and an index that silently addressed the wrong tensor would still typecheck.
+///
+/// The host reads only this one. The patch also exposes `duration_cumsum`, which is
+/// `cumsum` of the same tensor and so carries nothing new — it is a second witness when
+/// auditing the graph offline, and is never fetched here. ORT is asked for outputs by name,
+/// so an unfetched one costs nothing at run time; it was measured not to disturb either EP.
 const DURATIONS_OUTPUT: &str = "durations_frames";
 /// The waveform output's name on both graphs. Falls back to output 0 if absent.
 const WAVEFORM_OUTPUT: &str = "waveform";
@@ -364,107 +357,16 @@ impl NativeSynth {
     }
 }
 
-#[cfg(test)]
-mod mark_tests {
-    use super::*;
-
-    fn mark(cs: u32, cl: u32, ss: u32, se: u32) -> WordMark {
-        WordMark { char_start_utf16: cs, char_len_utf16: cl, sample_start: ss, sample_end: se }
-    }
-
-    // A chunk of 20 characters starting at 100, 1000 samples long.
-    fn ok(marks: &[WordMark]) -> bool {
-        WordMark::stream_is_valid(marks, 100, 20, 1000)
-    }
-
-    #[test]
-    fn accepts_ordered_touching_marks() {
-        assert!(ok(&[mark(100, 5, 0, 400), mark(105, 6, 400, 900)]));
-        assert!(ok(&[])); // a chunk with nothing to mark is not an error
-        assert!(ok(&[mark(119, 1, 999, 1000)])); // flush against both ends
-    }
-
-    #[test]
-    fn rejects_spans_outside_the_chunk() {
-        assert!(!ok(&[mark(99, 5, 0, 100)])); // starts before the chunk
-        assert!(!ok(&[mark(118, 5, 0, 100)])); // runs past its end
-        assert!(!ok(&[mark(100, 5, 0, 1001)])); // past the chunk's audio
-        assert!(!ok(&[mark(100, 0, 0, 100)])); // empty character span
-    }
-
-    #[test]
-    fn rejects_reversed_and_overlapping() {
-        assert!(!ok(&[mark(100, 5, 400, 100)])); // sample span reversed
-        assert!(!ok(&[mark(105, 5, 0, 400), mark(100, 5, 400, 500)])); // characters go back
-        assert!(!ok(&[mark(100, 6, 0, 400), mark(105, 5, 400, 500)])); // characters overlap
-        assert!(!ok(&[mark(100, 5, 0, 400), mark(105, 5, 300, 500)])); // samples overlap
-    }
-
-    #[test]
-    fn from_timed_produces_a_stream_the_wire_accepts() {
-        use crate::text::{aggregate_spans, utf16_offsets, Span};
-        // A multi-byte character before the words, so a byte-counting conversion would
-        // place every later mark one unit early.
-        let src = "\u{00A3}5 costs 1,250 pounds".as_bytes();
-        let spans = vec![
-            None,
-            Some(Span { start: 0, end: 3 }),   // "£5"
-            Some(Span { start: 4, end: 9 }),   // "costs"
-            Some(Span { start: 10, end: 11 }), // "1"     — split report
-            Some(Span { start: 12, end: 15 }), // "250"   — of one word
-            Some(Span { start: 16, end: 22 }), // "pounds"
-            None,
-        ];
-        let samples = vec![100, 400, 300, 200, 300, 500, 100];
-        let timed = aggregate_spans(&spans, &samples, src);
-        let offsets = utf16_offsets(src);
-        let marks = WordMark::from_timed(&timed, &offsets);
-
-        assert_eq!(marks.len(), 4, "1,250 must be one mark");
-        // "£5" is 3 bytes but 2 UTF-16 units, so a byte count would start it at 0 and give
-        // it length 3. Chunk-relative, so the first word begins the chunk.
-        assert_eq!(marks[0].char_start_utf16, 0);
-        assert_eq!(marks[0].char_len_utf16, 2);
-        // "costs" then starts one unit earlier than its byte offset would suggest.
-        assert_eq!(marks[1].char_start_utf16, 3);
-        // The merged mark spans the whole page word, including the comma.
-        assert_eq!(marks[2].char_len_utf16, 5);
-
-        // And the whole stream passes the shared wire rule for its chunk.
-        let total: u32 = samples.iter().sum();
-        assert!(WordMark::stream_is_valid(&marks, 0, 21, total));
-    }
-
-    #[test]
-    fn rejects_overflow_and_unbounded_counts() {
-        assert!(!ok(&[mark(u32::MAX, 2, 0, 100)])); // char_start + char_len overflows
-        // More marks than the chunk has characters: a mark needs a character, so this
-        // cannot be a real stream — and it is the bound that keeps the x86 engine's
-        // allocation tied to what it actually asked for.
-        let many: Vec<WordMark> = (0..21).map(|i| mark(100 + i, 1, i * 10, i * 10 + 10)).collect();
-        assert!(!WordMark::stream_is_valid(&many, 100, 20, 1000));
-    }
-}
-
 fn voice_path(base: &Path, voice: &str) -> PathBuf {
     base.join("voices").join(format!("{voice}.bin"))
 }
 
-/// The graph to load: [`VARIANT_MODEL`] when it is installed beside the stock model,
-/// otherwise stock `model.onnx`.
-///
-/// Chosen once, at worker start, and not re-checked. Dropping the variant in mid-session
-/// would otherwise change the timing source between one page and the next with nothing in
-/// the log to say so; a host restart is the honest way to switch, and it is what installing
-/// the file already implies.
+/// The graph to load: always the stock, manifest-verified `model.onnx`. The duration
+/// outputs are appended to its bytes on the way into the session ([`build_session`]), so
+/// there is no second graph to choose between and no way for the timing source to depend on
+/// what happens to be sitting in the model directory.
 fn model_path(base: &Path) -> PathBuf {
-    let onnx = base.join("onnx");
-    let variant = onnx.join(VARIANT_MODEL);
-    if variant.is_file() {
-        variant
-    } else {
-        onnx.join("model.onnx")
-    }
+    base.join("onnx").join("model.onnx")
 }
 
 /// tokenizer.json `model.vocab`: char-string -> id.
@@ -616,7 +518,7 @@ fn tokenize_spans(
 }
 
 /// One model run's outputs: the audio, and the per-token frame counts when the graph
-/// exposes them ([`VARIANT_MODEL`] does, stock `model.onnx` does not).
+/// exposes them (a patched session does, a stock one does not).
 struct Run {
     pcm: Vec<f32>,
     /// One entry per token of `ids`, BOS and EOS included — they hold the leading and
@@ -625,13 +527,13 @@ struct Run {
 }
 
 /// Run the Kokoro model for one token sequence. Stock fp32 model.onnx: int64
-/// input_ids, f32 style[1,256], f32 speed[1] -> f32 waveform. [`VARIANT_MODEL`] adds
+/// input_ids, f32 style[1,256], f32 speed[1] -> f32 waveform. [`crate::model_patch`] adds
 /// [`DURATIONS_OUTPUT`], which is asked for only when the loaded graph declares it.
 fn run_model(session: &mut Session, ids: &[i64], style: &[f32], speed: f32) -> Result<Run, String> {
     let input_names: Vec<String> = session.inputs().iter().map(|i| i.name().to_string()).collect();
     let out_names: Vec<String> = session.outputs().iter().map(|o| o.name().to_string()).collect();
     // By name where the name exists; index 0 only as the fallback for a graph that doesn't
-    // label its waveform. Blind indexing is what would make a variant that reordered its
+    // label its waveform. Blind indexing is what would make a graph that reordered its
     // outputs play the duration tensor as audio.
     let output_name = out_names
         .iter()
@@ -707,7 +609,7 @@ fn run_model(session: &mut Session, ids: &[i64], style: &[f32], speed: f32) -> R
     Ok(Run { pcm, frames })
 }
 
-fn build_session(model: &Path, engine: Engine) -> Result<Session, String> {
+fn commit_session(model_bytes: &[u8], engine: Engine) -> Result<Session, String> {
     let ep = match engine {
         Engine::Gpu => WebGPU::default().build(),
         Engine::Cpu => CPU::default().build(),
@@ -720,18 +622,92 @@ fn build_session(model: &Path, engine: Engine) -> Result<Session, String> {
         .map_err(|e| e.to_string())?
         .with_memory_pattern(false)
         .map_err(|e| e.to_string())?
-        .commit_from_file(model)
+        .commit_from_memory(model_bytes)
         .map_err(|e| e.to_string())
+}
+
+/// Build a session on `engine` from the stock `model.onnx`, with
+/// [`crate::model_patch::duration_outputs`] appended so the graph also returns the
+/// per-token durations that make [`WordMark`]s possible.
+///
+/// The patch is applied to a buffer, never to the file. Writing it out was the previous
+/// design and it cost a 326 MB sidecar that only existed on machines where someone had run
+/// a Python script; it also had to dodge the panel's startup verify, which deletes any file
+/// under the model dir whose SHA-256 doesn't match the manifest. In memory there is nothing
+/// to distribute, nothing to verify and nothing to delete — and the bytes ORT sees are
+/// provably the manifest-verified file plus 273 bytes this crate can print.
+///
+/// **A rejected patch must cost the marks, not the audio.** If the patched graph doesn't
+/// load — an ORT that won't merge a repeated `graph` field, an upstream export that renamed
+/// the duration tensors — the same buffer is truncated back to exactly the bytes read from
+/// disk and committed again. That second attempt is the stock model by construction, so the
+/// host still speaks; `run_model` sees no `durations_frames` among the session's outputs and
+/// the chunk falls back to interpolated word timing — the same path every host took before
+/// the duration outputs existed.
+fn build_session(model: &Path, engine: Engine) -> Result<Session, String> {
+    use std::io::Read;
+
+    // Read with room for the patch ALREADY reserved. `extend_from_slice` past the end of an
+    // exactly-sized `Vec` grows it by *doubling*, so appending 273 bytes to a 325 MB model
+    // asks for a second 325 MB and memcpys the first into it — pure waste, since the final
+    // length is 273 bytes over.
+    //
+    // Measured on this machine, one session build: peak commit 1211 MB before, 907 MB after
+    // — a 304 MB saving, which is the model size, so it is the doubling and nothing else.
+    // Peak RSS barely moves (761 -> 754 MB): the doubled region is charged but never all
+    // resident, and both shapes still pay the copy `commit_from_memory` makes on top. So this
+    // buys commit charge and a large memcpy, NOT working set. Worth having because an engine
+    // switch builds the new session while the old one is still alive, and commit is what a
+    // machine runs out of first.
+    let patch = crate::model_patch::duration_outputs();
+    let hint = std::fs::metadata(model).map(|m| m.len() as usize).unwrap_or(0);
+    let mut bytes = Vec::with_capacity(hint + patch.len());
+    std::fs::File::open(model)
+        .and_then(|mut f| f.read_to_end(&mut bytes))
+        .map_err(|e| format!("read {}: {e}", model.display()))?;
+    // From what was actually read, never from the metadata — the truncation below has to
+    // restore the exact bytes ORT was given, and a file that grew since the stat would leave
+    // a partial graph behind instead of the stock one.
+    let stock_len = bytes.len();
+    bytes.extend_from_slice(&patch);
+
+    match commit_session(&bytes, engine) {
+        Ok(s) => {
+            eprintln!("[native-synth] session: {engine:?}, model-derived word timing");
+            Ok(s)
+        }
+        Err(e) => {
+            // Deliberately not phrased as "the patch is bad": a session build also fails
+            // when the execution provider itself is unavailable, and that failure arrives
+            // here first. The retry below tells the two apart — if it succeeds, the patch
+            // was the problem. For the same reason this promises only a retry: when the EP
+            // is what's missing, the retry fails too and the outcome is no audio at all, not
+            // estimated timing. The result is logged once it is known.
+            eprintln!("[native-synth] patched graph did not load ({e}) — retrying stock");
+            bytes.truncate(stock_len);
+            let stock = commit_session(&bytes, engine);
+            match &stock {
+                Ok(_) => eprintln!(
+                    "[native-synth] session: {engine:?}, stock graph — word timing estimated"
+                ),
+                Err(e) => eprintln!("[native-synth] stock graph did not load either ({e})"),
+            }
+            stock
+        }
+    }
 }
 
 fn worker_loop(rx: mpsc::Receiver<Job>, base: PathBuf, espeak_data: PathBuf) {
     let model = model_path(&base);
-    let aligned = model.file_name().map(|f| f == VARIANT_MODEL).unwrap_or(false);
-    eprintln!(
-        "[native-synth] model: {} ({})",
-        model.display(),
-        if aligned { "model-derived word timing" } else { "stock — estimated word timing" }
-    );
+    eprintln!("[native-synth] model: {}", model.display());
+    // A leftover from when the duration outputs shipped as a separate 326 MB graph. It is
+    // never loaded now, so say so once rather than let it sit there looking load-bearing.
+    if model.with_file_name(LEGACY_VARIANT).is_file() {
+        eprintln!(
+            "[native-synth] {LEGACY_VARIANT} is present and no longer used \
+             (the duration outputs are added in memory) — it can be deleted"
+        );
+    }
     let tokenizer = base.join("tokenizer.json");
     let exe_dir = std::env::current_exe()
         .ok()
@@ -926,7 +902,7 @@ fn worker_loop(rx: mpsc::Receiver<Job>, base: PathBuf, espeak_data: PathBuf) {
             if req.engine != cur_engine {
                 match build_session(&model, req.engine) {
                     Ok(s) => {
-                        *session.as_mut().unwrap() = s;
+                        session = Some(s);
                         cur_engine = req.engine;
                         eprintln!("[native-synth] switched engine to {cur_engine:?}");
                     }
@@ -968,7 +944,13 @@ fn worker_loop(rx: mpsc::Receiver<Job>, base: PathBuf, espeak_data: PathBuf) {
         // One window without durations forfeits the whole chunk's marks. Marking part of a
         // chunk would leave the rest of the page silent-but-highlighted at whatever the last
         // mark said, which reads as a stuck highlight rather than as an absent one.
-        let mut timing = aligned;
+        //
+        // Starts optimistic rather than being read off a capability flag: the session either
+        // declares `durations_frames` or it doesn't, `run_model` answers that question per
+        // run from the session's own outputs, and a `None` here clears the chunk. So a host
+        // that fell back to the stock graph needs no separate bookkeeping to reach the
+        // interpolated path — it simply never produces frames.
+        let mut timing = true;
         for (window, wspans) in
             content.chunks(MAX_CONTENT_TOKENS).zip(content_spans.chunks(MAX_CONTENT_TOKENS))
         {
@@ -1060,5 +1042,87 @@ fn worker_loop(rx: mpsc::Receiver<Job>, base: PathBuf, espeak_data: PathBuf) {
             Vec::new()
         };
         let _ = req.reply.send(Some(Synthesized { pcm: bytes, marks }));
+    }
+}
+
+#[cfg(test)]
+mod mark_tests {
+    use super::*;
+
+    fn mark(cs: u32, cl: u32, ss: u32, se: u32) -> WordMark {
+        WordMark { char_start_utf16: cs, char_len_utf16: cl, sample_start: ss, sample_end: se }
+    }
+
+    // A chunk of 20 characters starting at 100, 1000 samples long.
+    fn ok(marks: &[WordMark]) -> bool {
+        WordMark::stream_is_valid(marks, 100, 20, 1000)
+    }
+
+    #[test]
+    fn accepts_ordered_touching_marks() {
+        assert!(ok(&[mark(100, 5, 0, 400), mark(105, 6, 400, 900)]));
+        assert!(ok(&[])); // a chunk with nothing to mark is not an error
+        assert!(ok(&[mark(119, 1, 999, 1000)])); // flush against both ends
+    }
+
+    #[test]
+    fn rejects_spans_outside_the_chunk() {
+        assert!(!ok(&[mark(99, 5, 0, 100)])); // starts before the chunk
+        assert!(!ok(&[mark(118, 5, 0, 100)])); // runs past its end
+        assert!(!ok(&[mark(100, 5, 0, 1001)])); // past the chunk's audio
+        assert!(!ok(&[mark(100, 0, 0, 100)])); // empty character span
+    }
+
+    #[test]
+    fn rejects_reversed_and_overlapping() {
+        assert!(!ok(&[mark(100, 5, 400, 100)])); // sample span reversed
+        assert!(!ok(&[mark(105, 5, 0, 400), mark(100, 5, 400, 500)])); // characters go back
+        assert!(!ok(&[mark(100, 6, 0, 400), mark(105, 5, 400, 500)])); // characters overlap
+        assert!(!ok(&[mark(100, 5, 0, 400), mark(105, 5, 300, 500)])); // samples overlap
+    }
+
+    #[test]
+    fn from_timed_produces_a_stream_the_wire_accepts() {
+        use crate::text::{aggregate_spans, utf16_offsets, Span};
+        // A multi-byte character before the words, so a byte-counting conversion would
+        // place every later mark one unit early.
+        let src = "\u{00A3}5 costs 1,250 pounds".as_bytes();
+        let spans = vec![
+            None,
+            Some(Span { start: 0, end: 3 }),   // "£5"
+            Some(Span { start: 4, end: 9 }),   // "costs"
+            Some(Span { start: 10, end: 11 }), // "1"     — split report
+            Some(Span { start: 12, end: 15 }), // "250"   — of one word
+            Some(Span { start: 16, end: 22 }), // "pounds"
+            None,
+        ];
+        let samples = vec![100, 400, 300, 200, 300, 500, 100];
+        let timed = aggregate_spans(&spans, &samples, src);
+        let offsets = utf16_offsets(src);
+        let marks = WordMark::from_timed(&timed, &offsets);
+
+        assert_eq!(marks.len(), 4, "1,250 must be one mark");
+        // "£5" is 3 bytes but 2 UTF-16 units, so a byte count would start it at 0 and give
+        // it length 3. Chunk-relative, so the first word begins the chunk.
+        assert_eq!(marks[0].char_start_utf16, 0);
+        assert_eq!(marks[0].char_len_utf16, 2);
+        // "costs" then starts one unit earlier than its byte offset would suggest.
+        assert_eq!(marks[1].char_start_utf16, 3);
+        // The merged mark spans the whole page word, including the comma.
+        assert_eq!(marks[2].char_len_utf16, 5);
+
+        // And the whole stream passes the shared wire rule for its chunk.
+        let total: u32 = samples.iter().sum();
+        assert!(WordMark::stream_is_valid(&marks, 0, 21, total));
+    }
+
+    #[test]
+    fn rejects_overflow_and_unbounded_counts() {
+        assert!(!ok(&[mark(u32::MAX, 2, 0, 100)])); // char_start + char_len overflows
+        // More marks than the chunk has characters: a mark needs a character, so this
+        // cannot be a real stream — and it is the bound that keeps the x86 engine's
+        // allocation tied to what it actually asked for.
+        let many: Vec<WordMark> = (0..21).map(|i| mark(100 + i, 1, i * 10, i * 10 + 10)).collect();
+        assert!(!WordMark::stream_is_valid(&many, 100, 20, 1000));
     }
 }
