@@ -217,12 +217,13 @@ fn main() {
     // browser path ships: without it the transport is unusable, because there is nowhere else
     // the token is visible.
     //
-    // Which is exactly why it's off in 0.3.3. Kindle Cloud Reader is v0.4.x work; offering a
-    // pairing code for a transport this release doesn't ship would hand the user a dead end
-    // whose only honest explanation is "ignore this". The item is *built and wired* (the
-    // handler below still matches its id) and simply not appended, so turning the browser
-    // path back on is this one flag — not a re-derivation of why the menu needs it at all.
-    const SHOW_WEB_PAIRING: bool = false;
+    // It was off through 0.3.3, where offering a pairing code for a transport that release
+    // didn't ship would have handed the user a dead end whose only honest explanation is
+    // "ignore this". v0.4.x IS the browser path, and no browser change can be tested against
+    // a real host until the port and token are visible again, so it goes back on first.
+    // Delete the constant once that path actually ships to users; a permanently-true flag is
+    // noise, and the reasoning it guards is preserved above it.
+    const SHOW_WEB_PAIRING: bool = true;
     let pairing_i = MenuItem::new("Web pairing code", true, None);
     let quit_i = MenuItem::new("Quit", true, None);
     menu.append(&settings_i).expect("append settings");

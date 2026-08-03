@@ -268,11 +268,11 @@ the panel and Read Aloud in Kindle (or `test-speak.ps1`).
   - It is reproducible outside the browser: `curl` with the bearer token *is* the transport.
   - Cost of the choice: a **pairing step**, once per browser (tray → "Web pairing code"). That's
     the price of not having the browser vouch for the client, and it's a paste.
-  - **That tray item is hidden in 0.3.3** (`SHOW_WEB_PAIRING` in `main.rs`). The browser path is
-    v0.4.x, and the tray is the only place the token is visible, so hiding it is what makes the
-    endpoint unreachable in practice for this release rather than half-offered. `webserve.rs`
-    still runs and still writes `web-endpoint.json`; nothing about the transport changed. Flip
-    the flag when the browser path ships — don't rebuild the menu item, it's still wired.
+  - **The tray is the only place that pairing code is visible** — a release host is a
+    windows-subsystem exe with no console — so that menu item is load-bearing for the whole
+    browser path, not a convenience. It was hidden for 0.3.3 (`SHOW_WEB_PAIRING` in `main.rs`),
+    which is what made the endpoint unreachable in practice for a release that shipped no
+    browser path; v0.4.x turns it back on. Delete the constant once the browser path ships.
 - **The HTTP endpoint's four checks are not optional**: 127.0.0.1 bind, origin allowlist,
   constant-time bearer token, `Host` check (DNS-rebinding guard). No TLS — 127.0.0.1 is already
   a trustworthy origin and a self-signed cert defends against nobody. The security delta versus
