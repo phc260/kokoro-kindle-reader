@@ -652,19 +652,25 @@ fn build_session(model: &Path, engine: Engine) -> Result<Session, String> {
     // asks for a second 325 MB and memcpys the first into it — pure waste, since the final
     // length is 273 bytes over.
     //
-    // Measured on this machine, one session build: peak commit 1211 MB before, 907 MB after
-    // — a 304 MB saving, which is the model size, so it is the doubling and nothing else.
-    // Peak RSS barely moves (761 -> 754 MB): the doubled region is charged but never all
-    // resident, and both shapes still pay the copy `commit_from_memory` makes on top. So this
-    // buys commit charge and a large memcpy, NOT working set. Worth having because an engine
-    // switch builds the new session while the old one is still alive, and commit is what a
-    // machine runs out of first.
+    // Measured on this machine, one session build: peak commit 1211 MB before, ~905 MB after
+    // — a ~305 MB saving, which is the model size, so it is the doubling and nothing else.
+    // Peak RSS barely moved on those runs (761 -> 754 MB), but do not read that as a
+    // guarantee: during a reallocation the old buffer and the copied-into half of the new one
+    // CAN both be resident. What is reliably bought is commit charge and a 325 MB memcpy, not
+    // working set. Worth having because an engine switch builds the new session while the old
+    // one is still alive, and commit is what a machine runs out of first.
     let patch = crate::model_patch::duration_outputs();
-    let hint = std::fs::metadata(model).map(|m| m.len() as usize).unwrap_or(0);
+    let mut file =
+        std::fs::File::open(model).map_err(|e| format!("open {}: {e}", model.display()))?;
+    // Size from the OPEN HANDLE, never from a second lookup by path. The panel's verify
+    // deletes and re-downloads any model file whose SHA-256 mismatches, so a stat that raced
+    // that replacement describes a different file — and a hint that lands too small puts the
+    // doubling straight back, silently, during a repair. `std::fs::read` sizes itself this way
+    // for the same reason. A failed metadata call is the same trap wearing a zero, which is
+    // why it is worth taking from the handle rather than defaulting.
+    let hint = file.metadata().map(|m| m.len() as usize).unwrap_or(0);
     let mut bytes = Vec::with_capacity(hint + patch.len());
-    std::fs::File::open(model)
-        .and_then(|mut f| f.read_to_end(&mut bytes))
-        .map_err(|e| format!("read {}: {e}", model.display()))?;
+    file.read_to_end(&mut bytes).map_err(|e| format!("read {}: {e}", model.display()))?;
     // From what was actually read, never from the metadata — the truncation below has to
     // restore the exact bytes ORT was given, and a file that grew since the stat would leave
     // a partial graph behind instead of the stock one.

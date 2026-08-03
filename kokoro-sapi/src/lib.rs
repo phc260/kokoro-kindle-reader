@@ -57,15 +57,17 @@ static HINST: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
 ///
 /// # Safety
 ///
-/// The caller must uphold the COM ABI contract: `clsid` and `iid` are either null or point
-/// to readable `GUID`s, and `ppv` is either null or points to a writable `*mut c_void`.
-/// COM itself always satisfies this; the null tolerance is here because a *misregistered*
+/// The caller must uphold the COM ABI contract: `clsid` and `iid` are either null or point to
+/// readable `GUID`s, and `ppv` is either null or points to a writable `*mut c_void`. COM
+/// itself always satisfies this; every null is tolerated here because a *misregistered*
 /// in-proc server is a real failure mode and returning an HRESULT beats faulting inside
 /// Kindle's process.
 ///
-/// A null `ppv` has to be rejected outright rather than merely skipped, because the only
-/// thing left to do with it is hand it to `query` — whose own contract requires somewhere
-/// to write. `E_POINTER` is what the engine's other out-pointer entry points return.
+/// **Tolerated means rejected, not skipped.** `query` dereferences both `iid` and `ppv`, so
+/// neither can be quietly stepped over the way a null `clsid` can — both return `E_POINTER`,
+/// which is what `QueryInterface` itself specifies for a null out-pointer and what this
+/// engine's other out-pointer entry points return. A null or foreign `clsid` is a different
+/// question with its own answer, `CLASS_E_CLASSNOTAVAILABLE`.
 #[no_mangle]
 pub unsafe extern "system" fn DllGetClassObject(
     clsid: *const GUID,
@@ -76,6 +78,11 @@ pub unsafe extern "system" fn DllGetClassObject(
         return E_POINTER;
     }
     *ppv = null_mut();
+    // Checked after the zeroing, not folded into the test above: a caller that failed still
+    // gets its out-pointer nulled, which is what COM callers assume on every failure path.
+    if iid.is_null() {
+        return E_POINTER;
+    }
     if clsid.is_null() || *clsid != CLSID_KOKORO {
         return CLASS_E_CLASSNOTAVAILABLE;
     }
