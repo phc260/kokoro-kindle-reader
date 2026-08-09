@@ -7,7 +7,7 @@
 
 import * as capture from './capture';
 import * as ocr from './ocr';
-import { recognizePage, recognizeColumnOf, lastRoute, useRoute, type RoutedOcr } from './ocr-client';
+import { recognizePage, recognizeColumnOf } from './ocr-client';
 import { sentenceEnd, type TextPart } from '../speak';
 import * as narrate from './narrate';
 import { mountPanel, type PanelHandle } from './panel';
@@ -44,11 +44,11 @@ function logDropped(furniture: { text: string; reason: string }[]): void {
  * The console path. Narration uses `readColumns` instead, which recognizes a column at a time so
  * it can start speaking before the whole page is done.
  */
-async function scanPage(): Promise<{ page: capture.PageImage; result: RoutedOcr }> {
+async function scanPage(): Promise<{ page: capture.PageImage; result: ocr.OcrResult }> {
   const page = await capture.capture(await capture.waitForSettled());
   const result = await recognizePage(page.bytes);
   console.log(
-    `[kwr] OCR via ${result.route}, ${result.columns} column(s)${result.inverted ? ', inverted' : ''}, ` +
+    `[kwr] OCR on the host, ${result.columns} column(s)${result.inverted ? ', inverted' : ''}, ` +
       `${result.words.length} words, conf ${result.meanConfidence.toFixed(1)}, ` +
       `${result.timing.totalMs.toFixed(0)}ms (preprocess ${result.timing.preprocessMs.toFixed(0)}ms)`,
   );
@@ -103,7 +103,7 @@ async function* readColumns(
     }
 
     console.log(
-      `[kwr] OCR via ${col.route}, column ${i + 1}/${total}${col.inverted ? ', inverted' : ''}, ` +
+      `[kwr] OCR on the host, column ${i + 1}/${total}${col.inverted ? ', inverted' : ''}, ` +
         `${col.words.length} words, conf ${col.meanConfidence.toFixed(1)}, ` +
         `${col.timing.totalMs.toFixed(0)}ms`,
     );
@@ -182,8 +182,6 @@ const api = {
   ...capture,
   ocr,
   narrate,
-  lastRoute,
-  useRoute,
 
   /**
    * What the reader fetched, and what was in it. The page-world probe (net-probe.ts) hooks
@@ -225,7 +223,7 @@ const api = {
   },
 
   /** Capture -> OCR the current page, without speaking. Returns the recognized text. */
-  async readPage(): Promise<RoutedOcr> {
+  async readPage(): Promise<ocr.OcrResult> {
     const { result } = await scanPage();
     console.log(result.text.slice(0, 400) + (result.text.length > 400 ? '\n...' : ''));
     return result;
@@ -233,10 +231,15 @@ const api = {
 
   /** The whole loop for one page: capture -> OCR -> speak, marking each word as it is said. */
   async speakPage(options?: Parameters<typeof narrate.narrate>[1]): Promise<void> {
+    // Thrown, never returned. `readBook` calls this per page and turns the page after it, so a
+    // quiet return here is not "this page was skipped" - it is the reader flipping through the
+    // whole book in silence while the panel still says "Reading…", losing the place it started
+    // from and reporting "Finished." at the end of it. The one case that reliably produces it is
+    // the host answering with an empty voice list (no model, or a voices dir that never
+    // downloaded), which is precisely when the reader needs to be told.
     const voices = await narrate.checkVoices();
     if (!voices.ok) {
-      console.error('[kwr] no usable voice.', voices.advice ?? '');
-      return;
+      throw new Error(`no usable voice. ${voices.advice ?? narrate.engineError() ?? ''}`.trim());
     }
 
     const page = await capture.capture(await capture.waitForSettled());

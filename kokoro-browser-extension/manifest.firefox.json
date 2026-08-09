@@ -39,8 +39,7 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "main-world.js",
-        "vendor/*"
+        "main-world.js"
       ],
       "matches": [
         "https://read.amazon.com/*"

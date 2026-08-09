@@ -4,7 +4,15 @@
 // the matrix that produces SILENT failures: two-column vs single, light vs dark, default vs
 // non-default font. Reports word error rate and per-page time.
 //
-//   bun run build && bun run bench:ocr
+//   bun run build
+//   $env:KWR_PAIRING = 'kwr_8787_...'   # tray -> "Web pairing code"
+//   bun run bench:ocr
+//
+// Recognition happens on the HOST now, so this needs kokoro-host running and paired. The page
+// is served from localhost, not from an extension origin, so the host must be started with
+// that origin allowed:
+//
+//   $env:KOKORO_ALLOWED_ORIGINS = 'http://localhost:<the port this prints>'
 //
 // Caveat that matters: these are pages this repo renders, not pages Amazon renders. They are
 // clean synthetic text at the measured resolution, so the numbers here are an OPTIMISTIC bound
@@ -17,17 +25,20 @@ import puppeteer from 'puppeteer-core';
 
 const here = import.meta.dir;
 const dist = path.join(here, '..', 'dist', 'chrome');
-const vendor = path.join(here, '..', 'vendor');
 
-for (const [what, p] of [
-  ['dist/chrome/content.js (run `bun run build`)', path.join(dist, 'content.js')],
-  ['vendor/tesseract-worker.js (run `bun run vendor`)', path.join(vendor, 'tesseract-worker.js')],
-] as const) {
-  if (!existsSync(p)) {
-    console.error(`missing ${what}`);
-    process.exit(1);
-  }
+if (!existsSync(path.join(dist, 'content.js'))) {
+  console.error('missing dist/chrome/content.js (run `bun run build`)');
+  process.exit(1);
 }
+
+// The pairing is required, not optional with a default: a bench that silently measured a
+// different backend than the one under test would be worse than no bench.
+const pairing = /^kwr_(\d{1,5})_([0-9a-f]{32,128})$/.exec((process.env.KWR_PAIRING ?? '').trim());
+if (!pairing) {
+  console.error('set KWR_PAIRING to the code from the tray menu ("Web pairing code")');
+  process.exit(1);
+}
+const backend = { base: `http://127.0.0.1:${pairing[1]}`, token: pairing[2]! };
 
 function findBrowser(): string {
   if (process.env.CHROME_PATH) return process.env.CHROME_PATH;
@@ -51,7 +62,7 @@ const server = Bun.serve({
   port: 0,
   async fetch(req) {
     const rel = new URL(req.url).pathname;
-    const file = rel === '/content.js' ? path.join(dist, 'content.js') : rel.startsWith('/vendor/') ? path.join(vendor, rel.slice(8)) : path.join(here, rel === '/' ? 'ocr-fixture.html' : rel);
+    const file = rel === '/content.js' ? path.join(dist, 'content.js') : path.join(here, rel === '/' ? 'ocr-fixture.html' : rel);
     const f = Bun.file(file);
     return (await f.exists()) ? new Response(f) : new Response('not found', { status: 404 });
   },
@@ -72,9 +83,10 @@ const CASES = [
   { name: 'copyright footer + folio  ', opts: { columns: 1, dark: false, footer: true } },
 ];
 
-console.log('warming the OCR worker (wasm compile + language load)...');
+console.log(`serving on http://localhost:${server.port} - the host must allow that origin`);
+console.log('warming the host engine (the two models load on the first page)...');
 
-const rows = await page.evaluate(async (cases) => {
+const rows = await page.evaluate(async (cases, backend) => {
   const ocr = window.kwr.ocr;
 
   // --- word error rate against ground truth
@@ -98,13 +110,14 @@ const rows = await page.evaluate(async (cases) => {
   const truth = norm(window.GROUND_TRUTH);
   const out: any[] = [];
 
-  // First call pays worker startup; run one throwaway so the reported times are steady-state.
-  await ocr.recognize(await window.renderPage({ columns: 1 }));
+  // The first call pays for the host building both sessions; run one throwaway so the reported
+  // times are steady-state.
+  await ocr.recognize(await window.renderPage({ columns: 1 }), backend);
 
   for (const c of cases) {
     const blob = await window.renderPage(c.opts);
     const t0 = performance.now();
-    const r = await ocr.recognize(blob);
+    const r = await ocr.recognize(blob, backend);
     const wall = performance.now() - t0;
     const got = norm(r.text);
     out.push({
@@ -122,7 +135,7 @@ const rows = await page.evaluate(async (cases) => {
     });
   }
   return out;
-}, CASES);
+}, CASES, backend);
 
 await browser.close();
 await server.stop(true);

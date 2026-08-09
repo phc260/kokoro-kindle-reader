@@ -1,10 +1,11 @@
 // OCR host, running in an offscreen document.
 //
-// Why this exists: Tesseract needs a Web Worker, and a worker script must be same-origin with
-// the document that creates it. A content script's document origin is Amazon's, so
-// `new Worker(chrome-extension://.../tesseract-worker.js)` is cross-origin from there. An
-// offscreen document *is* the extension origin, so the worker is same-origin, the extension's
-// own CSP applies instead of Amazon's, and wasm compiles under `wasm-unsafe-eval`.
+// Why this exists: an offscreen document *is* the extension origin. It was built for the wasm
+// engine's Web Worker (a worker script must be same-origin with the document that creates it,
+// and a content script's document origin is Amazon's), and the engine's departure did not free
+// it - `POST /ocr` is allowlisted for `chrome-extension://<id>` and nothing else, so the fetch
+// that looks like it should be the direct one is exactly the one that 403s. The AudioContext
+// needs an origin with a document too.
 //
 // It receives a page image as base64 (extension messaging is JSON-only - Blobs and
 // ArrayBuffers do not survive the hop) and returns the OcrResult, which is already plain data.
@@ -48,6 +49,13 @@ let sources: { src: AudioBufferSourceNode; at: number; end: number; index: numbe
 let epoch = 0;
 /** The `/synth` request in flight, so Stop can abandon it rather than wait it out. */
 let inflight: AbortController | null = null;
+/**
+ * The `/ocr` requests in flight, for the same reason.
+ *
+ * A set rather than a single controller: a page being narrated and a reflow's trial re-OCR can
+ * be recognizing at the same time, and Stop wants both.
+ */
+const ocrInflight = new Set<AbortController>();
 
 function audio(): { ctx: AudioContext; gain: GainNode } {
   if (!ctx || !gain) {
@@ -279,6 +287,13 @@ function stopAudio(): void {
   // abandoned chunk and waiting on a whole abandoned page.
   inflight?.abort();
   inflight = null;
+  // Same for recognition. A Stop pressed while the second column is being read would otherwise
+  // leave the host recognizing a page nobody is going to hear, in front of whatever the next
+  // Play asks for. Aborting closes the socket, which is what the host watches for; a native
+  // recognition already inside a model run finishes there (ORT cannot abandon one), and its
+  // result is discarded.
+  for (const ac of ocrInflight) ac.abort();
+  ocrInflight.clear();
   // Dropping the context is the only reliable way to cancel already-scheduled sources.
   ctx?.close();
   ctx = null;
@@ -291,6 +306,9 @@ interface RunMessage {
   target: 'offscreen';
   b64: string;
   type?: string;
+  /** Where the host is, and what proves this client may use it. Attached by the worker. */
+  base: string;
+  token: string;
   /** Recognize only this column. Absent means the whole page, every column. */
   column?: number;
   /** Identity of the render, so a second column reuses the first's preprocessing. */
@@ -350,30 +368,39 @@ chrome.runtime.onMessage.addListener((msg: Message, _sender, sendResponse) => {
     case 'ocr-run':
       (async () => {
         const blob = b64ToBlob(msg.b64, msg.type);
-        const opts = { trial: msg.trial === true };
-        if (msg.column === undefined) {
-          const result: OcrResult = await recognize(blob, undefined, opts);
-          sendResponse({ ok: true, result });
-          return;
+        const backend = { base: msg.base, token: msg.token };
+        // One controller per request, remembered so Stop can abandon a recognition in flight
+        // rather than wait it out - the host reads the closed socket as a cancel.
+        const ac = new AbortController();
+        ocrInflight.add(ac);
+        const opts = { trial: msg.trial === true, signal: ac.signal };
+        try {
+          if (msg.column === undefined) {
+            const result: OcrResult = await recognize(blob, backend, opts);
+            sendResponse({ ok: true, result });
+            return;
+          }
+          const page = await prepareOnce(msg.key, blob);
+          // Asking for a column that isn't there is how the caller learns the page is single
+          // column: answer with the count rather than throwing, so it stops after the first.
+          if (msg.column >= page.columns.length) {
+            sendResponse({ ok: true, columns: page.columns.length });
+            return;
+          }
+          // Only the first column can discover that the page was cut wrongly; if it did, the
+          // corrected preparation replaces what is cached so the second column agrees with it.
+          let result: ColumnOcr;
+          if (msg.column === 0) {
+            const checked = await recognizeColumnChecked(blob, page, 0, backend, opts);
+            result = checked.result;
+            if (msg.key && checked.prepared !== page) prepared = { key: msg.key, page: checked.prepared };
+          } else {
+            result = await recognizeColumn(page, msg.column, backend, opts);
+          }
+          sendResponse({ ok: true, result, columns: result.columns });
+        } finally {
+          ocrInflight.delete(ac);
         }
-        const page = await prepareOnce(msg.key, blob);
-        // Asking for a column that isn't there is how the caller learns the page is single
-        // column: answer with the count rather than throwing, so it stops after the first.
-        if (msg.column >= page.columns.length) {
-          sendResponse({ ok: true, columns: page.columns.length });
-          return;
-        }
-        // Only the first column can discover that the page was cut wrongly; if it did, the
-        // corrected preparation replaces what is cached so the second column agrees with it.
-        let result: ColumnOcr;
-        if (msg.column === 0) {
-          const checked = await recognizeColumnChecked(blob, page, 0, undefined, opts);
-          result = checked.result;
-          if (msg.key && checked.prepared !== page) prepared = { key: msg.key, page: checked.prepared };
-        } else {
-          result = await recognizeColumn(page, msg.column, undefined, opts);
-        }
-        sendResponse({ ok: true, result, columns: result.columns });
       })().catch((e) => sendResponse({ ok: false, error: String(e) }));
       return true; // keep the channel open for the async reply
 
@@ -427,7 +454,9 @@ chrome.runtime.onMessage.addListener((msg: Message, _sender, sendResponse) => {
             sendResponse({ ok: true, stale: true });
             return;
           }
-          throw e;
+          // Not an abort, so it is a fetch that never got a status: say where it was going, the
+          // way the OCR post does. `synth <status>` below covers everything the host answered.
+          throw new Error(`could not reach ${msg.base}/synth: ${String(e)}`);
         } finally {
           if (inflight === ac) inflight = null;
         }

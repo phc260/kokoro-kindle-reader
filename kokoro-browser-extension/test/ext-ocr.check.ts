@@ -3,9 +3,10 @@
 // The other tests load content.js as a plain page script, where everything shares one origin.
 // That hides the question that decides whether readPage() works at all on read.amazon.com:
 //
-//   Tesseract spawns `new Worker(chrome-extension://<id>/vendor/tesseract-worker.js)` from a
-//   content script whose document origin is Amazon's. Workers must be same-origin with the
-//   document, so this may throw - and if it does, no amount of OCR quality matters.
+//   The `POST /ocr` fetch has to carry `chrome-extension://<id>` as its Origin, because that
+//   is the only origin kokoro-host allowlists. A content script's fetch carries Amazon's, so
+//   the request that looks like it should be the direct one is exactly the one that 403s - and
+//   if it does, no amount of OCR quality matters.
 //
 // This loads the real built extension into Chrome, points it at a local page that mimics a
 // rendered Kindle page, and drives the real bridge. A pass means the packaged extension can
@@ -206,8 +207,8 @@ for (const { name, pass, detail } of results) {
   }
 }
 if (failed) {
-  console.log('\nIf the Worker construction failed, the fix is to run Tesseract in an offscreen');
-  console.log('document, where the origin is chrome-extension:// and Amazon\'s CSP does not apply.');
+  console.log('\nIf the request was rejected, check the Origin it went out with: recognition must');
+  console.log('be relayed through the offscreen document, whose origin is chrome-extension://.');
 }
 console.log(`\n${results.length - failed}/${results.length} passed`);
 process.exit(failed ? 1 : 0);

@@ -17,7 +17,7 @@ commit, tag, or push (those are deliberate, separate steps).
 2. **Read the current version** from `packaging/installer.nsi` (the `!define VERSION`
    line) so you can report the old → new transition and match the exact old strings.
 
-3. **Edit these 13 locations** (the version was previously confirmed to live in exactly
+3. **Edit these 14 locations** (the version was previously confirmed to live in exactly
    these spots):
 
    Three-part `version = "X.Y.Z"` — the `[package]` `version` (line ~3) of every Rust
@@ -30,6 +30,7 @@ commit, tag, or push (those are deliberate, separate steps).
    - `kokoro-inject/Cargo.toml`
    - `kokoro-sapi-smoke/Cargo.toml`
    - `kokoro-bench/Cargo.toml`
+   - `kokoro-ocr/Cargo.toml`
 
    In `packaging/installer.nsi` — **both** the three-part define and the four-part
    product version:

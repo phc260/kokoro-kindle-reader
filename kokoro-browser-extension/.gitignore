@@ -1,14 +1,11 @@
-# bun's installed deps. `bun.lock` IS committed - it pins the toolchain, and an extension that
-# resolves a different tesseract.js than the one the OCR was tuned against is a silent
-# regression, not a build failure.
+# bun's installed deps. `bun.lock` IS committed - it pins the toolchain, and a build that
+# resolves different bytes than the ones a result was measured against is a silent regression,
+# not a build failure.
 /node_modules
 
 # Build output. `bun run build.ts` regenerates both targets from src/ + the manifests, so a
 # committed dist/ only ever goes stale - and it is where a reviewer would least notice it.
 /dist
-
-# Vendored OCR assets, ~17MB, fetched by `bun run vendor`.
-/vendor
 
 # The extension signing key. It pins the extension ID, and kokoro-host's HTTP endpoint
 # allowlists that ID as an origin - so this file is the identity the daemon trusts, not just a

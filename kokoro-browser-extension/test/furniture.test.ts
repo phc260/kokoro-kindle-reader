@@ -3,7 +3,8 @@
 // This is the only rule in the pipeline that decides a line of the book will not be read, and it
 // fails silently in both directions: keep a running head and it is spoken between every page,
 // drop a heading or a body line and the book quietly loses part of itself. It also carries state
-// ACROSS pages, which is what makes it worth testing directly rather than through a Tesseract run.
+// ACROSS pages, which is what makes it worth testing directly rather than through a whole
+// recognition pass.
 //
 // The balance it strikes is deliberate and was arrived at the hard way: nothing is dropped on a
 // guess about how a line LOOKS, because a section heading looks exactly like a running head. Only
@@ -188,7 +189,7 @@ test('a full-width title-and-folio header is not mistaken for justified text', (
   expect(furnitureReason(header(), on('p2'))).toBe('repeats');
 });
 
-test('a justified line whose words Tesseract split still reads as body text', () => {
+test('a justified line whose words the recognizer split still reads as body text', () => {
   // Split words sit touching, so the median gap is ~0 and every real gap looks enormous beside
   // it. The floor is what keeps such a line passing - it is ordinary prose.
   const split: RawWord[] = [];
@@ -241,7 +242,7 @@ test('a different page is a different page', () => {
 // --- reading across a missed gutter ----------------------------------------------------------
 //
 // `findGutter` needs a band free of ink over almost the whole page height, so ONE figure or rule
-// crossing the gutter hides it - and Tesseract then joins the two columns line by line into
+// crossing the gutter hides it - and the page is then read across its columns line by line into
 // sentences that are fluent and wrong. Nothing downstream can notice: every word is real and the
 // confidence is high. The signature it leaves is a huge gap in the middle of every full-width
 // line, which justification never produces.

@@ -1,0 +1,35 @@
+[package]
+name = "kokoro-ocr"
+version = "0.4.0"
+edition = "2021"
+description = "PP-OCR detection + recognition for the Kindle Cloud Reader path"
+
+# Standalone crate with its own target dir (there is no root workspace), and deliberately
+# TARGET-NEUTRAL: no HTTP, browser, Windows-UI, named-pipe or synthesis types appear in the
+# public API. The Linux blueprint reuses this crate unchanged; anything that knows about the
+# transport belongs in kokoro-host/src/webserve.rs instead.
+#
+# There is NO `native` feature and no stub engine. Under Tesseract there had to be one: the
+# FFI meant a link dependency, so a machine without a 9 MB native OCR stack could not build
+# the crate at all, let alone test its pure logic. ONNX Runtime is loaded at RUN time from a
+# path the host already stages, so `cargo test` builds and runs here with nothing provisioned
+# — every test that needs a model skips itself, and a host with no models answers `missing`.
+
+[dependencies]
+# Decode the submitted page image. PNG ONLY, on purpose: the extension's `convertToBlob`
+# emits PNG and nothing else, and every extra codec compiled in is another parser reachable
+# from a network-facing endpoint by anyone holding the pairing token.
+image = { version = "0.25", default-features = false, features = ["png"] }
+# Verify the staged models and dictionary against their pinned digests (`Assets::probe`).
+# Same crate the panel already uses for the model manifest, so the tree has one SHA-256
+# implementation.
+sha2 = "0.10"
+# The SAME ONNX Runtime boundary the synth uses — same version pin, same `load-dynamic`, same
+# `default-features = false`. Not a second runtime and not a second copy of the DLL: two `ort`
+# versions in one process would be two `OrtApi` tables against one library, and ort's default
+# features include downloading a binary, which a host that stages its own must never do.
+#
+# `ndarray` is deliberately absent here (tensors are built from `(shape, Vec<f32>)`), and
+# harmless if kokoro-host's own dependency turns it on — Cargo unifies features, and this
+# crate compiles either way.
+ort = { version = "=2.0.0-rc.12", default-features = false, features = ["std", "load-dynamic", "api-24"] }

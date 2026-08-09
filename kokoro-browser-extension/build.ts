@@ -61,7 +61,9 @@ for (const t of targets) {
   const manifest = await Bun.file(path.join(root, t.manifest)).json();
   await Bun.write(path.join(outdir, 'manifest.json'), JSON.stringify(manifest, null, 2));
 
-  await cp(path.join(root, 'vendor'), path.join(outdir, 'vendor'), { recursive: true }).catch(() => {});
+  // Nothing to stage for OCR. Recognition is `POST /ocr` on the host, so the package carries
+  // no engine, no wasm and no language data - the ~17 MiB `vendor/` copy this used to make is
+  // the whole reason the migration was worth doing.
   if (!skip[t.name]?.includes('offscreen.js')) {
     await cp(path.join(root, 'offscreen.html'), path.join(outdir, 'offscreen.html'));
   }

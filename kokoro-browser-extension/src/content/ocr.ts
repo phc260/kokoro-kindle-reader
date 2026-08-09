@@ -1,20 +1,41 @@
-// Page image -> text + word boxes. The only place Tesseract is touched.
+// Page image -> text + word boxes. The only place the OCR backend is called.
 //
-// Two preprocessing steps exist because both produce SILENT failures - wrong text rather than
-// an error - and both are driven by reader settings the user can change mid-session, so they
-// are decided per page and never cached:
+// Recognition itself runs in the host now (`POST /ocr`, PP-OCR: a detector then a recognizer),
+// not in this extension. What did NOT move is everything below the fetch: the column split,
+// the missed-gutter retry, and the whole evidence-based furniture policy. Those rules decide
+// what gets narrated, they can remove a line of the book silently, and they were paid for in
+// four separate content losses - so the engine swap is the entire change and they stay where
+// they are reviewed. The backend returns the raw structure they already consumed: lines in
+// reading order, each a list of words with text, confidence and a rectangle.
 //
-//   1. Dark mode. Tesseract on light-text-on-dark returns garbage. Detect and invert.
-//   2. Two-column layout. Left ungated, Tesseract interleaves the columns line by line and
-//      produces fluent-looking scrambled sentences. Detect the gutter and OCR each column.
+// There is no in-extension fallback and there must not be one. A missing host is a state to
+// report, not a reason to run a second engine nobody has measured against these fixtures.
 //
-// Word boxes come back in ORIGINAL image pixel coordinates - inversion changes no geometry and
-// the column split's x offset is added back - so highlight.ts can map them to the screen with
-// only the CSS/natural scale and the live devicePixelRatio.
+// WHAT IS POSTED IS THE PAGE AS THE READER RENDERED IT - original colour, neither flattened
+// nor inverted. That is a reversal, and the reason is the engine change. Tesseract wanted dark
+// ink on a light ground, so this file used to hand it a grayscale, possibly inverted page; a
+// detector whose job is to find four words inside an illustration needs every bit of that
+// discarded contrast, and engine-specific preprocessing is the backend's to own now. The
+// dark-page test survives, but only to know which way ink runs for the gutter search below.
+//
+// Checked on a rendered dark-theme fixture - light grey serif on near-black paper reads
+// perfectly through the backend with no inversion at all, at full confidence. A real dark-theme
+// Cloud Reader capture is still on the corpus gate, and if one comes back wrong the inversion
+// belongs in the BACKEND next to the models that want it, not here.
+//
+// One preprocessing step is left, and it is here because it produces a SILENT failure - wrong
+// text rather than an error - and is driven by a reader setting the user can change
+// mid-session, so it is decided per page and never cached: a two-column page left unsplit is
+// read across the gutter, line by line, into fluent-looking scrambled sentences. Detect the
+// gutter and OCR each column.
+//
+// Word boxes come back in ORIGINAL image pixel coordinates - the column split's x offset is
+// added back - so highlight.ts can map them to the screen with only the CSS/natural scale and
+// the live devicePixelRatio.
 
 export interface OcrWord {
   text: string;
-  /** 0-100. Below ~60 usually means Tesseract guessed. */
+  /** 0-100. The mean CTC probability of the characters in the word, times 100. */
   confidence: number;
   /** Original-image pixel coordinates. */
   bbox: { x0: number; y0: number; x1: number; y1: number };
@@ -36,30 +57,33 @@ export interface OcrResult {
   timing: { preprocessMs: number; recognizeMs: number; totalMs: number };
 }
 
-export interface OcrAssets {
-  workerPath: string;
-  corePath: string;
-  langPath: string;
-}
-
-/** In an extension these resolve to packaged files; the bench overrides them. */
-export function defaultAssets(tier: 'fast' | 'standard' = 'fast'): OcrAssets {
-  const url = (p: string) =>
-    typeof chrome !== 'undefined' && chrome.runtime?.getURL ? chrome.runtime.getURL(p) : `/${p}`;
-  return {
-    workerPath: url('vendor/tesseract-worker.js'),
-    corePath: url('vendor/tesseract-core-simd-lstm.wasm.js'),
-    langPath: url(`vendor/tessdata-${tier}`),
-  };
+/**
+ * Where the OCR backend is, and what proves this client may use it.
+ *
+ * Passed in on every call rather than read from `chrome.storage` here. Two reasons, and the
+ * second is the one that matters: this module stays free of any `chrome` dependency, so the
+ * furniture rules can still be tested under bun without a browser; and the pairing already
+ * travels this way for `/synth` (see the `http-synth` message), so there is one answer to
+ * "who knows the token" instead of two.
+ */
+export interface OcrBackend {
+  base: string;
+  token: string;
 }
 
 // ------------------------------------------------------------------------- preprocess
 
 export interface Prepared {
-  /** One canvas per column, left to right. */
+  /** One canvas per column, left to right, in the page's original colours. */
   columns: OffscreenCanvas[];
   /** x offset of each column within the original image. */
   offsets: number[];
+  /**
+   * The page is set light-on-dark.
+   *
+   * Reported and logged, and used here for one thing only: which way "ink" runs when looking
+   * for the gutter. Nothing is inverted - see the header.
+   */
   inverted: boolean;
 }
 
@@ -69,7 +93,7 @@ const GUTTER_CLEAN = 0.995;
 const MIN_GUTTER_FRAC = 0.02;
 /** Only look for a gutter in the middle of the page, not in the margins. */
 const GUTTER_SEARCH = [0.3, 0.7] as const;
-/** A pixel darker than this counts as ink (after any inversion). */
+/** A pixel this far from the paper's own level counts as ink. */
 const INK = 160;
 
 /**
@@ -118,33 +142,30 @@ export async function preprocess(source: Blob | ImageBitmap, opts: PreprocessOpt
   const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
   ctx.drawImage(bitmap, 0, 0);
 
-  const img = ctx.getImageData(0, 0, w, h);
-  const px = img.data;
+  // The canvas is left exactly as the reader drew it - the columns cropped out of it below are
+  // what gets posted. Everything from here to the split reads a separate luminance plane and
+  // writes nothing back.
+  const px = ctx.getImageData(0, 0, w, h).data;
 
-  // --- grayscale + a luminance histogram in one pass
+  // --- luminance + its histogram in one pass
+  const gray = new Uint8Array(w * h);
   const hist = new Uint32Array(256);
-  for (let i = 0; i < px.length; i += 4) {
+  for (let i = 0, p = 0; i < px.length; i += 4, p++) {
     const g = (px[i]! * 0.299 + px[i + 1]! * 0.587 + px[i + 2]! * 0.114) | 0;
-    px[i] = px[i + 1] = px[i + 2] = g;
+    gray[p] = g;
     hist[g]!++;
   }
 
-  // --- invert if the PAPER is dark. Tesseract expects dark ink on a light ground.
+  // --- which way does ink run? Dark paper means light text, so the ink test flips with it.
   const inverted = backgroundLevel(hist) < 128;
-  if (inverted) {
-    for (let i = 0; i < px.length; i += 4) {
-      const v = 255 - px[i]!;
-      px[i] = px[i + 1] = px[i + 2] = v;
-    }
-  }
-  ctx.putImageData(img, 0, 0);
 
   // --- ink profile per column, for gutter detection
   const inkPerCol = new Float32Array(w);
   for (let y = 0; y < h; y++) {
-    const row = y * w * 4;
+    const row = y * w;
     for (let x = 0; x < w; x++) {
-      if (px[row + x * 4]! < INK) inkPerCol[x]! += 1;
+      const level = inverted ? 255 - gray[row + x]! : gray[row + x]!;
+      if (level < INK) inkPerCol[x]! += 1;
     }
   }
 
@@ -161,9 +182,9 @@ export async function preprocess(source: Blob | ImageBitmap, opts: PreprocessOpt
  * A false positive here cannot slice through words, whatever it does to reading order: the band
  * has to be free of ink over `cleanFrac` of the FULL page height, so a page it splits has a real
  * empty stripe down the middle of it. The failure that does happen is the other one - one figure
- * or rule crossing the gutter breaks the strict test, no split is made, and Tesseract interleaves
- * the columns into fluent nonsense. `looksInterleaved` catches that afterwards and asks for a
- * second look with `cleanFrac` relaxed.
+ * or rule crossing the gutter breaks the strict test, no split is made, and the page is read
+ * across its columns into fluent nonsense. `looksInterleaved` catches that afterwards and asks
+ * for a second look with `cleanFrac` relaxed.
  */
 function findGutter(ink: Float32Array, w: number, h: number, cleanFrac: number): number | null {
   const lo = Math.floor(w * GUTTER_SEARCH[0]);
@@ -199,63 +220,141 @@ function crop(src: OffscreenCanvas, x: number, width: number): OffscreenCanvas {
 
 // -------------------------------------------------------------------------- recognize
 
-type TesseractWorker = {
-  recognize: (image: unknown, opts?: unknown, output?: unknown) => Promise<{ data: RawPage }>;
-  terminate: () => Promise<unknown>;
-};
-
 export interface RawWord {
   text: string;
   confidence: number;
   bbox: { x0: number; y0: number; x1: number; y1: number };
 }
-interface RawPage {
-  text: string;
-  confidence: number;
-  words?: RawWord[];
-  blocks?: { paragraphs?: { lines?: { words?: RawWord[] }[] }[] }[];
-}
-
-let workerPromise: Promise<TesseractWorker> | null = null;
 
 /**
- * One worker for the process lifetime. Spinning one up costs ~1-2 s (wasm compile + language
- * load), which would blow the per-page budget on its own if paid per page.
+ * The version-1 `/ocr` response, frozen with the host before this adapter was written.
+ *
+ * `version` is in it so a host and an extension that disagree say so, instead of the mismatch
+ * arriving as an undefined field halfway down a page.
  */
-export async function getWorker(assets: OcrAssets = defaultAssets()): Promise<TesseractWorker> {
-  workerPromise ??= (async () => {
-    const { createWorker } = await import('tesseract.js');
-    return (await createWorker('eng', 1, {
-      workerPath: assets.workerPath,
-      corePath: assets.corePath,
-      langPath: assets.langPath,
-      // Never let it reach for a CDN, and never build the worker from a blob: URL - MV3's CSP
-      // rejects both.
-      workerBlobURL: false,
-      gzip: true,
-    })) as unknown as TesseractWorker;
-  })();
-  return workerPromise;
+interface HostResponse {
+  version: number;
+  engine: string;
+  /** Both models, named separately - either can be repinned without the other. */
+  detector: string;
+  recognizer: string;
+  width: number;
+  height: number;
+  lines: { words?: RawWord[] }[];
+  detectMs: number;
+  recognizeMs: number;
+  ocrMs: number;
 }
 
-export async function terminate(): Promise<void> {
-  if (!workerPromise) return;
-  const w = await workerPromise;
-  workerPromise = null;
-  await w.terminate();
+/** What this client can parse. Matches `RESPONSE_VERSION` in `kokoro-ocr`. */
+export const RESPONSE_VERSION = 1;
+
+/**
+ * Recognize one prepared column image into lines of words.
+ *
+ * Line grouping arrives from the backend rather than being reassembled here: the whole point
+ * of a line is that the furniture rules judge one, and the engine is what knows where one
+ * ends.
+ */
+export type LineRecognizer = (
+  image: Blob,
+  backend: OcrBackend,
+  signal?: AbortSignal,
+) => Promise<RawWord[][]>;
+
+let recognizer: LineRecognizer | null = null;
+
+/**
+ * Swap the recognizer out. For fixtures and for comparing engines offline - **not** a
+ * production seam, and emphatically not a fallback: nothing installs one automatically, and a
+ * host that cannot recognize a page is reported, never worked around.
+ */
+export function setRecognizer(r: LineRecognizer | null): void {
+  recognizer = r;
 }
 
-/** Words grouped into lines - line structure is what makes furniture detection possible. */
-function collectLines(page: RawPage): RawWord[][] {
-  const out: RawWord[][] = [];
-  for (const b of page.blocks ?? [])
-    for (const p of b.paragraphs ?? [])
-      for (const l of p.lines ?? []) {
-        const words = (l.words ?? []).filter((w) => w.text?.trim());
-        if (words.length) out.push(words);
-      }
-  if (out.length === 0 && page.words?.length) out.push(page.words.filter((w) => w.text?.trim()));
-  return out;
+/**
+ * The posted size, in the unit the host's own cap is written in.
+ *
+ * It is in the message because an over-cap POST is the failure most likely to arrive with no
+ * response at all: a client streams the body, the host answers and closes, and whether the reply
+ * is ever read is a race the client loses. The host now drains before refusing, so the legible
+ * 413 is what should turn up - and if one doesn't, this number is what says whether size was the
+ * question. A full-page colour plate is where it matters; a page of prose is a fraction of a MiB.
+ */
+const mib = (bytes: number): string => `${(bytes / (1024 * 1024)).toFixed(2)} MiB`;
+
+/** Post one column to the host and unpack it. */
+async function recognizeViaHost(
+  image: Blob,
+  backend: OcrBackend,
+  signal?: AbortSignal,
+): Promise<RawWord[][]> {
+  let res: Response;
+  try {
+    res = await fetch(`${backend.base}/ocr`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${backend.token}`, 'content-type': 'image/png' },
+      body: image,
+      signal,
+    });
+  } catch (e) {
+    // A rejected fetch is the ONE failure that arrives with no status, no body and no URL -
+    // `TypeError: Failed to fetch` and nothing else - so it is the one that has to be given
+    // those facts here. An abort is Stop working and is left alone; the caller knows.
+    if (signal?.aborted) throw e;
+    throw new Error(`could not reach ${backend.base}/ocr (posted ${mib(image.size)}): ${String(e)}`);
+  }
+
+  if (!res.ok) throw new Error(await describeFailure(res, image.size));
+
+  const data = (await res.json()) as HostResponse;
+  if (data.version !== RESPONSE_VERSION)
+    throw new Error(
+      `the host speaks /ocr v${data.version}, this extension speaks v${RESPONSE_VERSION} - update both`,
+    );
+
+  // Rectangles are already in the coordinate space of the image that was posted, whatever
+  // scale the backend used internally. The column x-offset is added exactly once, downstream.
+  return data.lines.map((l) => l.words ?? []).filter((words) => words.some((w) => w.text?.trim()));
+}
+
+/**
+ * Turn a failed response into a sentence naming the next action.
+ *
+ * The host distinguishes its failures on purpose - a missing language pack, a timeout and a
+ * page it could not read are three different problems - and losing that distinction here would
+ * put the browser engine's worst property back: one "OCR failed" for everything, so the user
+ * retries the one thing retrying cannot fix.
+ */
+async function describeFailure(res: Response, posted: number): Promise<string> {
+  let code = '';
+  let error = '';
+  try {
+    const body = (await res.json()) as { code?: string; error?: string };
+    code = body.code ?? '';
+    error = body.error ?? '';
+  } catch {
+    // A body that is not JSON is still a failure; the status carries the rest.
+  }
+  switch (res.status) {
+    case 401:
+      return 'the Kokoro host rejected the pairing token - re-pair from the options page';
+    case 403:
+      return 'the Kokoro host does not allow this extension id';
+    case 413:
+      // The host's message states the LIMIT; only this side knows what was actually sent, and
+      // the gap between the two is the whole of what anyone can act on. A page of prose is a
+      // fraction of a MiB, so a number far above the cap says the page is a full-colour plate
+      // being re-encoded losslessly rather than that the cap is merely a little tight.
+      return `this page encodes to ${mib(posted)}, over the Kokoro host's limit${error ? ` (${error})` : ''}`;
+    case 429:
+      return 'the Kokoro host is busy with other pages - try again in a moment';
+    case 503:
+      return `the Kokoro host cannot do OCR${error ? `: ${error}` : ''}`;
+    default:
+      return `ocr ${res.status}${code ? ` (${code})` : ''}${error ? `: ${error}` : ''}`;
+  }
 }
 
 /** Fraction of page height at top/bottom where running heads and folios live. */
@@ -312,7 +411,7 @@ export function measureOf(lines: RawWord[][]): number {
  * Justification stretches the space between every pair of words together, so a line set as body
  * text has no outlier. One huge gap means two groups of words that are not a phrase: a
  * title-left/folio-right header, or - the reason this is shared with `looksInterleaved` - two
- * COLUMNS that Tesseract read across as though they were one line.
+ * COLUMNS the detector found as one region and read across as though they were one line.
  */
 function hasOutlierGap(line: RawWord[]): boolean {
   if (line.length < 3) return false; // too few gaps to tell one apart from the rest
@@ -326,8 +425,8 @@ function hasOutlierGap(line: RawWord[]): boolean {
   const median = gaps[(gaps.length - 1) >> 1]!;
   const widest = gaps[gaps.length - 1]!;
 
-  // Floored at the type size rather than a pixel count, because a median of ~0 is real: Tesseract
-  // splits a word now and then, and the halves sit touching. Without a floor those lines could
+  // Floored at the type size rather than a pixel count, because a median of ~0 is real: a word
+  // gets split now and then, and the halves sit touching. Without a floor those lines could
   // never pass; with a fixed one the threshold means something different at every font size.
   const height = Math.max(...line.map((w) => w.bbox.y1 - w.bbox.y0));
   return widest > Math.max(median * SPACING_EVEN, height * 1.5);
@@ -346,8 +445,8 @@ const INTERLEAVED_FRAC = 0.4;
  * Was this page read ACROSS a gutter that was missed?
  *
  * `findGutter` needs a band free of ink over almost the whole page height, so one figure, rule or
- * full-width heading crossing the gutter is enough to hide it - and then Tesseract joins the two
- * columns line by line into sentences that are fluent and wrong. Nothing downstream can notice:
+ * full-width heading crossing the gutter is enough to hide it - and then the two columns are read
+ * line by line into sentences that are fluent and wrong. Nothing downstream can notice:
  * the words are all real and the confidence is high.
  *
  * What it leaves behind is every full-width line having one enormous gap in the middle where the
@@ -492,7 +591,7 @@ function repeatsAcrossPages(key: string, token: string): boolean {
  * Exported for `test/furniture.test.ts`. This is the one place in the pipeline that decides a
  * line of the book will not be read, it carries state across pages, and both of those are
  * invisible from the outside - so it is worth reaching in to test directly rather than through
- * a Tesseract run.
+ * a whole recognition pass.
  */
 export function furnitureReason(line: RawWord[], page: PageContext): string | null {
   if (line.length > FURNITURE_MAX_WORDS) return null;
@@ -582,12 +681,21 @@ export interface RecognizeOptions {
    *      to relocate onto and goes dark for as long as that heading is being spoken.
    */
   trial?: boolean;
+  /**
+   * Abandon the request. Stop presses this, and so does a page that has been superseded.
+   *
+   * It reaches the host as a closed socket, which is what lets it cancel the work rather than
+   * merely stop listening to it. ONNX Runtime cannot abandon a run in progress, so the host
+   * stops between lines and a job already inside one finishes there and has its result thrown
+   * away - safe precisely because the cross-page furniture memory is here, not in the host.
+   */
+  signal?: AbortSignal;
 }
 
 export async function recognizeColumn(
   prepared: Prepared,
   index: number,
-  assets?: OcrAssets,
+  backend: OcrBackend,
   options: RecognizeOptions = {},
 ): Promise<ColumnOcr> {
   const t1 = performance.now();
@@ -595,13 +703,12 @@ export async function recognizeColumn(
   if (!canvas) throw new Error(`no column ${index} on a ${prepared.columns.length}-column page`);
   const dx = prepared.offsets[index]!;
 
-  const worker = await getWorker(assets);
   const blob = await canvas.convertToBlob({ type: 'image/png' });
-  const { data } = await worker.recognize(blob, {}, { blocks: true, text: true });
+  const lines = await (recognizer ?? recognizeViaHost)(blob, backend, options.signal);
 
-  // Text is assembled from the retained lines rather than taken from Tesseract's `data.text`,
-  // because furniture has to be dropped from BOTH the text and the word list or highlighting
-  // and narration disagree about what is on the page.
+  // Text is assembled from the retained lines rather than from a whole-page string, because
+  // furniture has to be dropped from BOTH the text and the word list or highlighting and
+  // narration disagree about what is on the page.
   const kept: RawWord[][] = [];
   const furniture: { text: string; reason: string }[] = [];
   let confSum = 0;
@@ -609,7 +716,6 @@ export async function recognizeColumn(
 
   // Per column, not per page: two columns each have their own measure, and a page-wide figure
   // would be the wider of them and disqualify every line of the narrower.
-  const lines = collectLines(data);
   const context: PageContext = {
     height: canvas.height,
     width: canvas.width,
@@ -684,11 +790,11 @@ export async function recognizeColumnChecked(
   source: Blob | ImageBitmap,
   prepared: Prepared,
   index: number,
-  assets?: OcrAssets,
+  backend: OcrBackend,
   options: RecognizeOptions = {},
 ): Promise<{ result: ColumnOcr; prepared: Prepared }> {
   const undo = furnitureCheckpoint();
-  const result = await recognizeColumn(prepared, index, assets, options);
+  const result = await recognizeColumn(prepared, index, backend, options);
   if (!result.suspectSplit) return { result, prepared };
 
   console.warn('[kwr] page read across a missed gutter - splitting and reading it again');
@@ -701,7 +807,7 @@ export async function recognizeColumnChecked(
 
   // Only now is the first read genuinely thrown away.
   undo();
-  return { result: await recognizeColumn(split, index, assets, options), prepared: split };
+  return { result: await recognizeColumn(split, index, backend, options), prepared: split };
 }
 
 /**
@@ -734,7 +840,7 @@ export function joinColumns(columns: ColumnOcr[]): { text: string; words: OcrWor
  */
 export async function recognize(
   source: Blob | ImageBitmap,
-  assets?: OcrAssets,
+  backend: OcrBackend,
   options: RecognizeOptions = {},
 ): Promise<OcrResult> {
   const t0 = performance.now();
@@ -743,11 +849,11 @@ export async function recognize(
 
   // The first column decides whether the page was cut correctly; the rest follow whatever it
   // settled on.
-  const first = await recognizeColumnChecked(source, prepared, 0, assets, options);
+  const first = await recognizeColumnChecked(source, prepared, 0, backend, options);
   prepared = first.prepared;
   const columns: ColumnOcr[] = [first.result];
   for (let i = 1; i < prepared.columns.length; i++)
-    columns.push(await recognizeColumn(prepared, i, assets, options));
+    columns.push(await recognizeColumn(prepared, i, backend, options));
 
   const { text, words } = joinColumns(columns);
   const furniture = columns.flatMap((c) => c.furniture);

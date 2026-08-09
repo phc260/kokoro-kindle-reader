@@ -7,6 +7,8 @@
 // UUID per render. There are no iframes but ~37 shadow hosts, so every walk must pierce
 // shadowRoot. Discovery is structural - never by selector, id, or class name.
 
+import { assertAttached } from './alive';
+
 export interface Route {
   onReader: boolean;
   asin: string | null;
@@ -288,6 +290,10 @@ async function readPixels(el: HTMLImageElement, src: string): Promise<Blob> {
  */
 function captureViaPageWorld(src: string): Promise<Blob> {
   if (!mainWorldReady) {
+    // Reached only once the canvas and the direct fetch have both failed, and `getURL` is another
+    // `chrome.runtime` member that an extension reload takes away - so without this the last
+    // fallback reports a missing property rather than the reason the page cannot be captured.
+    assertAttached();
     mainWorldReady = new Promise<void>((resolve, reject) => {
       const s = document.createElement('script');
       s.src = chrome.runtime.getURL('main-world.js');

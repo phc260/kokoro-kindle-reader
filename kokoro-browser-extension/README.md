@@ -4,26 +4,29 @@ Reads **Kindle Cloud Reader** (`read.amazon.com`) aloud with Kokoro, by capturin
 page, OCR'ing it locally, and narrating it through `kokoro-host`.
 
 ```
-read.amazon.com  ──capture──▶  Tesseract (offscreen doc)  ──text──▶  narrator
-       ▲                              │                                 │
-       └── highlight ◀── word boxes ◀──┘       loopback HTTP 127.0.0.1:8787
+read.amazon.com  ──capture──▶  POST /ocr (host)  ──text──▶  narrator
+       ▲                            │                                 │
+       └── highlight ◀── word boxes ◀┘       loopback HTTP 127.0.0.1:8787
                     ◀── word marks ◀──────────────────┴──┐
                                                          │
                                         kokoro-host (webserve.rs) ──▶ Kokoro-82M
 ```
 
-Nothing leaves the machine. The OCR runs in WASM in the browser; the synthesis runs in the tray
-app you already have installed for Kindle for PC.
+Nothing leaves the machine. Page images and recognized text go to `kokoro-host` on 127.0.0.1 and
+no further; both the OCR and the synthesis run in the tray app you already have installed for
+Kindle for PC.
 
 ## Why OCR at all
 
 Kindle Cloud Reader renders the book to a canvas. There is no selectable text to read — the
 page is pixels by the time the extension can see it. So the pipeline captures the canvas and
-OCRs it, which is also why `vendor/` is 17 MB and why a first page is slower than the rest.
+posts it to the host, which is why a first page is slower than the rest — the two OCR models load
+on it. The extension itself ships no OCR engine: that was ~17 MB of wasm and language data, and
+moving it out is most of why this migration happened.
 
 It is also why the **word highlight** is a box floated over the page rather than a styled range:
-there is no text node to wrap and no selection to set. Tesseract already reports a bounding box
-per word, so the mark is that box mapped through the image's live on-screen rect.
+there is no text node to wrap and no selection to set. The host returns a bounding box per word,
+so the mark is that box mapped through the image's live on-screen rect.
 
 ## A page is read a column at a time
 
@@ -214,7 +217,7 @@ header) live in [`kokoro-host/src/webserve.rs`](../kokoro-host/src/webserve.rs).
 | `src/content/highlight.ts` | The word mark: `charIndex` → OCR word → bbox → screen rect, in its own shadow root. Relocates the word when a resize reflows the page |
 | `src/background.ts` | Service worker. Picks the engine (Kokoro if paired, else `chrome.tts`), owns the port to the page, and feeds a page's parts into one utterance |
 | `src/speak.ts` | The narration seam: chunk schedule, the part stream and its offset mapping, where a part may be cut |
-| `src/offscreen.ts` | Offscreen document: the Tesseract worker **and** the AudioContext — a service worker has neither. Fires the word marks off the audio clock, and gives back the lead on a speed change |
+| `src/offscreen.ts` | Offscreen document: the extension-origin `fetch` (the host allowlists that origin and no other) **and** the AudioContext — a service worker has neither. Fires the word marks off the audio clock, and gives back the lead on a speed change |
 | `src/offscreen-client.ts` | The pacing rules: lead cap, throttle loop, epoch handling, word-mark subscription, and the waits a speed change has to be able to cut short |
 | `src/word-timing.ts` | Splits a chunk's known duration across its words. Kokoro's only source of boundaries |
 | `src/kokoro-http.ts` | The narrator, pairing storage, and the daemon probe |
@@ -240,11 +243,24 @@ Firefox as working until it is.
 ```bash
 bun run typecheck     # tsc --noEmit
 bun test test/        # chunking + offsets, part streaming, word timing, word lookup, furniture,
-                      # voices, tar, the speed-change re-send, and manifest/permission drift guards
+                      # voices, tar, the speed-change re-send, the loopback transport end to end,
+                      # host-loss recovery, and manifest/permission/host-contract drift guards
 ```
 
 The manifest tests exist because permission drift fails **silently**: Chrome simply omits the
 API, the feature-detect returns false, and a fallback engages with nothing logged anywhere.
+
+`host-contract.test.ts` is the same idea aimed at `kokoro-host`, and it reads the host's own Rust
+rather than a second copy of each value: the extension id the manifest `key` pins against the one
+`webserve.rs` allowlists, the probe port, the sample rate the offscreen `AudioContext` is built at,
+the pairing-string format, and the `/synth` fields. Every one of those fails as something other
+than itself — a stale id is a 403 on every request, which reads exactly like a pairing problem,
+and a stale sample rate is not an error at all, just a book read at the wrong pitch.
+
+`host-http.test.ts` runs an OCR'd page through the real narrator and the real offscreen handler
+into a loopback server that enforces what `webserve.rs` enforces. It is the only check that builds
+an actual `/synth` request; everything else stubs the fetch out. Keep the mirror in step with
+`webserve.rs` — a pass is only worth what the mirror is faithful to.
 
 ## Gotchas
 
@@ -266,7 +282,7 @@ API, the feature-detect returns false, and a fallback engages with nothing logge
   switching books.
 - **A page read across a missed gutter is detected and read again.** `findGutter` needs a band
   free of ink over almost the whole page height, so one figure or rule crossing the gutter hides
-  it — and Tesseract then joins the columns line by line into sentences that are fluent and wrong,
+  it — and the columns are then read line by line into sentences that are fluent and wrong,
   with every word real and the confidence high. `looksInterleaved` spots the huge mid-line gap
   that justification never produces and asks for a second look with the test relaxed.
 - **The highlight only draws on the page it was measured on.** The boxes belong to one specific

@@ -87,6 +87,11 @@ Section "Install"
   SetOutPath "$INSTDIR\espeak-ng-data"
   File /r "${STAGING}\espeak-ng-data\*.*"
 
+  ; Cloud Reader OCR: the pinned detector, recognizer and dictionary. kokoro-host looks for
+  ; this directory beside its own exe and re-verifies all three digests on every status poll.
+  SetOutPath "$INSTDIR\ocr"
+  File /r "${STAGING}\ocr\*.*"
+
   ; Connect-only x86 SAPI engine + guard scripts (voice-setup.ps1 reads from here),
   ; plus the x86 Kindle-hook DLL + injector the host spawns to force the Kokoro voice.
   SetOutPath "$INSTDIR\resources"
@@ -167,6 +172,7 @@ Section "Uninstall"
   RMDir "$SMPROGRAMS\${APPNAME}"
 
   RMDir /r "$INSTDIR\espeak-ng-data"
+  RMDir /r "$INSTDIR\ocr"
   RMDir /r "$INSTDIR\resources"
   RMDir /r "$INSTDIR\licenses"
   Delete "$INSTDIR\kokoro-host.exe"

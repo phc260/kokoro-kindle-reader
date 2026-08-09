@@ -703,6 +703,39 @@ fn build_session(model: &Path, engine: Engine) -> Result<Session, String> {
     }
 }
 
+/// Point `ort` at the `onnxruntime.dll` staged beside the exe, once for the process.
+///
+/// **Call this before spawning anything that might build a session**, which is why `main` does
+/// it first and this worker only re-runs it as a backstop. Two things use ORT now — the synth
+/// here and `kokoro-ocr`'s worker — and whichever touches a session first is what decides which
+/// library the process loads. They do not decide it the same way: this names the staged DLL by
+/// absolute path, while `ort`'s lazy path honours `ORT_DYLIB_PATH` first and only then falls
+/// back to searching beside the exe. With that variable set, "whoever got there first" is the
+/// difference between two different runtimes, and the window is a few milliseconds of startup —
+/// short enough never to be hit on purpose and long enough to be real.
+///
+/// Idempotent by construction: loading an already-loaded dylib is a no-op, and `commit`
+/// returning false means an environment was already configured, which is the outcome this
+/// wants. No default execution provider is registered globally — each session picks its own
+/// (GPU or CPU) per the `engine` control, since a running host can switch live.
+pub fn init_ort(exe_dir: &Path) -> Result<(), String> {
+    match ort::init_from(exe_dir.join("onnxruntime.dll")) {
+        Ok(b) => {
+            b.commit();
+            Ok(())
+        }
+        Err(e) => Err(format!("ort init_from failed: {e}")),
+    }
+}
+
+/// The directory the exe lives in, which is where its runtime DLLs are staged.
+pub fn exe_dir() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(Path::to_path_buf))
+        .unwrap_or_default()
+}
+
 fn worker_loop(rx: mpsc::Receiver<Job>, base: PathBuf, espeak_data: PathBuf) {
     let model = model_path(&base);
     eprintln!("[native-synth] model: {}", model.display());
@@ -715,10 +748,7 @@ fn worker_loop(rx: mpsc::Receiver<Job>, base: PathBuf, espeak_data: PathBuf) {
         );
     }
     let tokenizer = base.join("tokenizer.json");
-    let exe_dir = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(Path::to_path_buf))
-        .unwrap_or_default();
+    let exe_dir = exe_dir();
 
     // espeak + ORT init eagerly (neither needs the downloaded model). A failure here
     // means we can't synthesize at all — drain requests replying None.
@@ -727,16 +757,11 @@ fn worker_loop(rx: mpsc::Receiver<Job>, base: PathBuf, espeak_data: PathBuf) {
         eprintln!("[native-synth] espeak init failed: {e}");
         broken = true;
     }
-    // No default execution provider registered globally — each session picks its own
-    // (GPU or CPU) per the `engine` control, since a running host can switch live.
-    match ort::init_from(exe_dir.join("onnxruntime.dll")) {
-        Ok(b) => {
-            b.commit();
-        }
-        Err(e) => {
-            eprintln!("[native-synth] ort init_from failed: {e}");
-            broken = true;
-        }
+    // Ordinarily a no-op: `main` has already done this before anything was spawned. Kept
+    // because this worker cannot function without it and must set `broken` if it failed.
+    if let Err(e) = init_ort(&exe_dir) {
+        eprintln!("[native-synth] {e}");
+        broken = true;
     }
 
     // Lazily built on the first request (so model download isn't blocked on them).

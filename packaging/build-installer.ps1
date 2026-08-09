@@ -59,6 +59,28 @@ foreach ($d in 'onnxruntime.dll', 'onnxruntime_providers_shared.dll', 'dxcompile
 Copy-Item -Recurse (Join-Path $hostRel 'espeak-ng-data') $stage
 Copy-Item (Join-Path $root 'icons\icon.ico') (Join-Path $stage 'icon.ico')
 
+# 3a. The Cloud Reader OCR models (9.80 MB). Staged from native-deps rather than from the
+#     build output: they are loaded at RUN time, so nothing in the build copies them next to
+#     the exe, and a host that ships without them answers every /ocr with `missing`. Failing
+#     here is the point - the alternative is an installer that looks complete and cannot read
+#     a page.
+#     All THREE are verified against their pinned digests, by the fetch script's own
+#     -VerifyOnly mode - not by an existence check on one of them, and not by a second
+#     copy of the pins here. An interrupted download leaves one file present and another
+#     absent or truncated, which an existence check waves through: the build then
+#     succeeds, the installer looks complete, and the host reports 'missing' on the
+#     first page.
+#     The three files are then copied BY NAME, not as a directory. A recursive copy would
+#     stage whatever else is sitting in native-deps\ocr - a stale model from an older pin,
+#     a scratch file - and ship it verified by nothing.
+$ocrSrc = Join-Path $root 'native-deps\ocr'
+& (Join-Path $root 'native-deps\fetch-ocr-models.ps1') -VerifyOnly
+$ocrStage = Join-Path $stage 'ocr'
+New-Item -ItemType Directory -Force $ocrStage | Out-Null
+foreach ($f in 'det.onnx', 'rec.onnx', 'en_dict.txt') {
+    Copy-Item (Join-Path $ocrSrc $f) $ocrStage
+}
+
 # 3b. License texts. The bundle links espeak-ng (GPL-3.0-or-later, and MODIFIED -- see
 #     native-deps\build-espeak.ps1) and Slint under its GPL-3.0-only option, so the
 #     installed app as a whole is conveyed under GPLv3: the notices + the GPL text must

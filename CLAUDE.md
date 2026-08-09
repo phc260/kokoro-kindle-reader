@@ -60,7 +60,8 @@ Load the detail on demand:
 | Kindle 18632 hook + injector | [`kokoro-hook/README.md`](kokoro-hook/README.md) · [`kokoro-inject/README.md`](kokoro-inject/README.md) |
 | Browser path: the extension itself — setup, pairing, layout, browser support | [`kokoro-browser-extension/README.md`](kokoro-browser-extension/README.md) |
 | Browser path: the loopback HTTP endpoint and its four security checks | [`kokoro-host/src/webserve.rs`](kokoro-host/src/webserve.rs) |
-| Dep provisioning (ORT/Dawn DLLs, espeak-ng) | [`native-deps/README.md`](native-deps/README.md) |
+| Browser path: Cloud Reader OCR — the two models, the boundary, the post-processing | [`kokoro-ocr/README.md`](kokoro-ocr/README.md) |
+| Dep provisioning (ORT/Dawn DLLs, espeak-ng, OCR models) | [`native-deps/README.md`](native-deps/README.md) |
 | GPU-vs-CPU synth timings + settled perf dead ends | [`kokoro-bench/README.md`](kokoro-bench/README.md) |
 | User-facing install/usage | [`README.md`](README.md) |
 | Codex's copy of these instructions (reviewer role + constraints) | [`AGENTS.md`](AGENTS.md) — keep its invariant list in sync with this file |
@@ -86,6 +87,16 @@ cargo build --release --target i686-pc-windows-msvc --manifest-path kokoro-sapi\
 bun run build.ts --stage         # from kokoro-browser-extension/; --stage copies off U:\ for Chrome
 bun test test/                   # chunking + offsets, word timing, manifest/permission drift
 curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8787/status   # the whole transport, reproducible
+
+# Cloud Reader OCR (kokoro-ocr, PP-OCR on the host). The models are loaded at RUN time, so the
+# host builds without them and reports `missing`; fetch them once. Digests verified on download
+# AND on every /status probe.
+native-deps\fetch-ocr-models.ps1
+cargo test --manifest-path kokoro-ocr\Cargo.toml   # needs no models: bounds, DB post, CTC decode
+# The real graphs over one PNG, no browser and no host — the only thing that catches a tensor
+# layout or class-count mistake, which otherwise reads out as fluent, confident, wrong text.
+$env:ORT_DYLIB_PATH = "native-deps\runtime\onnxruntime.dll"
+cargo run --manifest-path kokoro-ocr\Cargo.toml --example ocr-check -- page.png native-deps\ocr
 
 # Kindle 18632 hook + injector — both x86 (Kindle is 32-bit; the host spawns the injector).
 cargo build --release --target i686-pc-windows-msvc --manifest-path kokoro-hook\Cargo.toml
@@ -280,6 +291,73 @@ the panel and Read Aloud in Kindle (or `test-speak.ps1`).
   any process running as this user (that's why `bench_busy` and `MAX_FRAME_SAMPLES` exist), so
   the local-process threat was already accepted. What a port uniquely adds is reachability from
   **web pages** — which is what the origin allowlist and bearer token address.
+- **Nothing a peer SIZES is allocated or copied before the token check.** `read_head` stops at the
+  blank line; `serve_conn` runs Host, Origin and bearer-token checks, and only then calls
+  `read_body` or `discard_body`. State it as "peer-sized", not as "no byte of the body is read" —
+  the stricter phrasing was written here first and is **false**: `BufReader`'s 8 KiB buffer will
+  have prefetched the leading body bytes whenever head and body share a TCP segment, and `take` in
+  `read_line_capped` bounds what the *adapter yields*, not what the reader pulls from the socket.
+  That costs a fixed 8 KiB per connection, which a peer cannot influence, so the property that
+  matters survives — but the sentence has to say which property that is.
+  The order is the security property, not tidiness: `vec![0u8; len]` is the one allocation in the
+  request path whose size a peer chooses, `serve_loop` spawns a task per accepted socket with no
+  cap on how many, and the runtime being filled is the one feeding Kindle its audio — so a stranger
+  declaring `Content-Length: 33554432` and sending nothing could hold 32 MiB × N for the whole
+  deadline. Past the token check the peer holds the pairing token and was already inside the
+  accepted threat model (same as anything that can open `PIPE_NAME`), which is what makes
+  `discard_body`'s 64 MiB affordable. `reading_the_head_consumes_none_of_the_body` pins the seam
+  (that the head read leaves the body retrievable), not the ordering — see below for why the
+  ordering has no test.
+- **The accepted cost of checking first: a bad token plus a large body loses its 401.** The reply
+  is written under an upload still in flight, and the close can destroy it — the same shape as the
+  413 bug above, kept deliberately this time, because draining for an unauthenticated peer is the
+  thing the ordering exists to prevent. **Do not justify this with "`/status` runs first"** — it
+  was justified that way here and the justification was wrong: `kwr.readPage()` posts a page image
+  with no handshake having run at all. What covers it is `diagnosePaired` in `kokoro-http.ts`,
+  which re-asks with a **bodiless** `/status` — that request cannot lose its reply, so it separates
+  a stale token from a dead host, which is the distinction the lost 401 costs.
+- **`refuse_oversized` is the only writer of the TRANSPORT's 413, and that is load-bearing.**
+  Driving `serve_conn` from a test means standing up a `Ctx` (a live `NativeSynth` and
+  `KindleCtl`), so nothing proves the endpoint *calls* the drain — one door that always drains is
+  what stands in for the test. An earlier version of
+  `an_over_cap_post_is_refused_with_a_status_the_client_can_read` inlined the drain in its own
+  fixture, so deleting the drain from the endpoint left it green: it tested the test. Keep it
+  calling the real function. Say "the transport's": `ocr_status_line` maps `Error::TooLarge` to
+  413 as well, for a decoded image over `max_pixels`/`max_dimension`, and that one needs no drain
+  because its body was read in full before the engine saw it.
+- **`refuse_oversized`'s drain gets its own budget, NOT the connection deadline.** Sharing it put
+  the original bug straight back for a slow upload: the drain was cancelled at 15 s and the 413
+  written underneath a client still sending, which is the undeliverable refusal again. A second
+  window is affordable here alone, because this runs only after the token check and
+  `MAX_DISCARD_BYTES` still bounds the bytes when the clock does not.
+- **An over-cap body must be READ before it is refused**, or the 413 is unreachable from a browser.
+  `read_head` never *allocates* one — that is the point of the cap — but not reading it meant
+  answering and closing the socket under a client still uploading: `fetch` sends no
+  `Expect: 100-continue`, so Chrome's own write failed and it never read the reply. Every legible
+  distinction the endpoint makes (`too_large`, the byte limit, the route) arrived as
+  `TypeError: Failed to fetch` — the one error shape that names neither cause nor next action, and
+  indistinguishable from the host being down. `discard_body` reads and sinks up to
+  `MAX_DISCARD_BYTES` (4x the largest cap; bounded in time by `REQUEST_TIMEOUT`), and beyond that
+  a reset is the honest answer to a client no browser is. **curl cannot see this bug** — it sends
+  `Expect: 100-continue` and reads the 413 cleanly, which is why the transport tested healthy while
+  the browser could not use it. `an_over_cap_post_is_refused_with_a_status_the_client_can_read`
+  speaks the browser's dialect deliberately; suppress `Expect:` in any curl repro.
+- **The `/ocr` body cap is sized for a PICTURE BOOK, not for prose** (32 MiB, and `MAX_OCR_BODY`
+  must stay equal to `Limits::max_body_bytes`). Reasoning it from "a column of book text is well
+  under 1 MiB" gave 8 MiB and refused a real Cloud Reader page. The overrun is structural, not
+  marginal: the extension captures at the reader's own device-pixel resolution and re-encodes to
+  **PNG, losslessly**, so a painterly page that arrived as a few hundred KiB of JPEG leaves the
+  canvas an order of magnitude bigger. **PNG-only is not the thing to revisit** — one decoder is
+  one parser reachable from a network-facing endpoint — and neither is downscaling before the
+  post: the recognizer crops each line from the SOURCE pixels, which is what upsamples small type
+  for free, so a page-wide shrink trades away the one thing resolution still buys. The cap is what
+  fits the format.
+- **A fetch that fails below HTTP is the only failure with no status, so it must be told where it
+  was going.** `/ocr` and `/status` both name the endpoint (and `/ocr` the posted size, since the
+  cap is what it is most likely to have hit), and `connectKokoro` turns it into
+  `describeProbe(await probeDaemon())` — the three sentences that already existed for the unpaired
+  case and never ran for a paired one. A bare `TypeError` reaching the panel is the bug, not the
+  diagnosis.
 - **The extension's manifest `key` is load-bearing** even with no native messaging: an unpacked
   extension's id derives from its path, and the endpoint allowlists that id as an **origin**.
   Unpinned, the id changes whenever the folder moves and every request 403s.
@@ -460,6 +538,75 @@ the panel and Read Aloud in Kindle (or `test-speak.ps1`).
   native-messaging bridge and went with it; if a client ever needs *that* shape (unpaced, no
   gain, voice on the wire), it's in that commit.
 
+### Cloud Reader OCR runs on the HOST (`kokoro-ocr`), and it is a detector plus a recognizer
+- **The extension ships no OCR engine.** Recognition is `POST /ocr`, behind the same four checks
+  as `/synth`. There is **no in-page fallback and must not be one**: a missing host is a state to
+  report, not a reason to run a second engine nobody has measured against these fixtures. The
+  package therefore also carries no wasm, no language data and no `wasm-unsafe-eval` — a CSP
+  relaxation kept for an engine that left is a standing invitation with nothing behind it.
+- **PP-OCR, not Tesseract, and one real page decided it.** A Cloud Reader picture-book page — four
+  sparse lines of serif type in the corner of a full-page illustration — is a *detection* problem,
+  and Tesseract's page segmentation expects a page of text. Two models: a DBNet detector emits a
+  text-probability map, and only the regions it finds reach the CTC recognizer. That separation
+  also returns a running head and its folio as **two lines**, which is what lets
+  `repeatsAcrossPages` match the head; Tesseract merged them into one line whose text changes
+  every page, so the head was narrated forever. Full comparison in `OCR_EXPERIMENT.md`.
+- **The extension posts the page in ORIGINAL COLOUR** — not flattened, not inverted. It used to
+  send grayscale-and-maybe-inverted because Tesseract wanted dark ink on a light ground; a
+  detector looking for four words inside an illustration needs that contrast, and
+  engine-specific preprocessing belongs next to the engine. `preprocess` still computes the
+  luminance mode, but only to know which way ink runs for the gutter search. **Do not put an
+  inversion back in the extension**: a rendered dark-theme fixture reads perfectly through the
+  backend with none, and if a real dark capture ever fails, the fix goes in the backend.
+- **There is no page-wide upscale any more, and its absence is deliberate.** Scale was
+  Tesseract's dominant accuracy lever (16.19 % → 0.95 % from a 2x, with no engine change) because
+  it reads whatever resolution it is handed. The recognizer resizes every detected line to a
+  fixed 48 px height *from the source pixels*, so small type is upsampled per line for free; a
+  2x in front of that resamples twice and quadruples the detector's input for nothing.
+- **Word boxes come from CTC timesteps, and the space class is what splits words.** Detection
+  returns *line* boxes; `hasOutlierGap` measures the gap between consecutive *words*, so an
+  engine without word boxes cannot drive the furniture policy at all. The timestep a character
+  fires at is its x-position (mean 1.78 px from Tesseract's own boxes on 170 words). The
+  dictionary's leading empty sentinel must be dropped and a trailing space class appended —
+  keeping the sentinel shifts the whole alphabet by one, and losing the space class leaves one
+  run-together string with nothing to split.
+- **The models are pinned by SHA-256, and the digests gate the LOAD as well as `/status`.**
+  Checking them in `probe()` alone left the pin decorative where it mattered: `/status` would
+  answer `corrupt` while `/ocr` recognized with whatever was on disk, and a recognizer that
+  emits the same class count passes every other check and returns fluent, confident, wrong
+  text. **Calling `probe()` from the load path is not the fix** — its digest cache is keyed on
+  length and mtime (right for a polled endpoint, wrong for a gate), and a path checked is not a
+  path reopened. Each file is read once, hashed as bytes, and committed from that same buffer
+  via `commit_from_memory`; what was verified is what runs. They are re-verified on every probe, not just at install, because they are data
+  reachable from a network-facing endpoint. `probe()` never builds a session (loading is
+  ~10 MiB and a third of a second, and `/status` is polled), and a failed load is never cached
+  — the fix for `missing` is to put the file back. The worker catches a *panic* out of the load
+  too: ORT's dylib resolution has no `Result` on its failure path, and an unwind would kill the
+  worker for the life of the process.
+- **`kokoro-ocr` must not initialize ONNX Runtime**, and its `ort` dependency must stay identical
+  to `kokoro-host`'s (`=2.0.0-rc.12`, `load-dynamic`, `default-features = false`). `ort`'s own
+  rule is that the application creates the environment; two `ort` versions in one process would
+  be two `OrtApi` tables against one library, and ort's defaults include *downloading* a runtime.
+  **`main` calls `native_synth::init_ort` before spawning anything**, because two workers now use
+  ORT and whichever builds a session first decides which library the process loads — and they do
+  not decide it alike: `init_ort` names the staged DLL by absolute path, while `ort`'s lazy
+  fallback honours `ORT_DYLIB_PATH` first.
+- **Cancellation is a discard contract.** ORT cannot abandon a run, so the flag is checked
+  between stages and before each line — fine, because a page is one detection pass plus one
+  inference per line. A deadline fails the whole page rather than returning part of it, and is
+  checked *before* each line for that reason: a partial column narrated as a whole one is the
+  book silently going missing.
+- **The installer verifies all three digests via `fetch-ocr-models.ps1 -VerifyOnly`**, never an
+  existence check and never a second copy of the pins. An interrupted download leaves one file
+  present and another absent, which an existence check waves through: the build succeeds, the
+  package looks complete, and the host reports `missing` on the first page. It then stages the
+  three files **by name** — a recursive copy would ship whatever else is in `native-deps\ocr`,
+  verified by nothing.
+- **`fetch-ocr-models.ps1` pins a revision per URL and pulls the recognizer from
+  `media.githubusercontent.com`.** That file is Git LFS, and `raw.` answers 200 with a 132-byte
+  *pointer* — the shape of download a size check waves through. The dictionary is not LFS and
+  `media` 404s for anything that isn't, so the two deliberately come from different hosts.
+
 ### Word timing on the Kindle path (`model_patch.rs` + `CMD_SYNTH_ALIGNED`)
 - **The stock graph already computes per-token durations and throws them away.** Kokoro is
   StyleTTS2-derived, so a length regulator drives the decoder:
@@ -629,6 +776,10 @@ the panel and Read Aloud in Kindle (or `test-speak.ps1`).
   `kokoro-host` and `kokoro-sapi`, so the two ends can't drift. Neither may hardcode them.
 - The Kindle-18632 hook + injector are standalone root crates (`kokoro-hook/`,
   `kokoro-inject/`), built x86 and staged into the installer's `resources\`.
+- Cloud Reader OCR is `kokoro-ocr/` — a path dep of `kokoro-host` with a **target-neutral**
+  public API (no HTTP, browser, Windows-UI, pipe or synthesis types), so the Linux blueprint
+  reuses it unchanged and `webserve.rs` stays the only file that knows both halves. Its models
+  are staged into the installer's `ocr\`, beside the exe.
 - There is **no root workspace**; each crate builds standalone with its own target dir.
 
 ### Licensing of the bundle (MIT source, GPLv3 binaries)
@@ -658,6 +809,13 @@ the panel and Read Aloud in Kindle (or `test-speak.ps1`).
   `(ACP)` log line) since the file has no BOM — `Unicode true` only makes the *output*
   installer's strings Unicode. So a UTF-8 `…`/`—` in a user-visible `DetailPrint`/
   `MessageBox` renders as mojibake (`â€¦`) in the install UI. Use plain ASCII (`...`, `-`).
+- **Reloading the extension orphans the content script in every open tab.** It keeps running with
+  its panel and captured state intact and `chrome.runtime` removed, so every route back throws
+  `Cannot read properties of undefined (reading '<whatever>')` — which names a line, not a cause,
+  and there is nothing to retry. **Reload the reader tab too**, always, after `--stage` +
+  reload-unpacked. `assertAttached` (`content/alive.ts`) is what turns it into a sentence; it is
+  checked at each boundary, never once at startup, because the invalidation is mid-session by
+  definition.
 - **File locks:** rebuilds hit LNK1104 / "Access is denied" while Kindle holds
   `KokoroSapi.dll` or a running `kokoro-panel.exe`/`kokoro-host.exe` holds its exe — stop
   them first. Port lingers after a crashed session.

@@ -33,8 +33,7 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "main-world.js",
-        "vendor/*"
+        "main-world.js"
       ],
       "matches": [
         "https://read.amazon.com/*"
@@ -54,7 +53,7 @@
     "service_worker": "background.js"
   },
   "content_security_policy": {
-    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+    "extension_pages": "script-src 'self'; object-src 'self'"
   },
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA2xaOkfwI6ujl5UhYzE6KLemDUuyOM3pmn1HTqtaV+GvTpv+3fpUoedvwhJUn8tCsVMRJPu7VXOSsyNuCr2upK9ZUjlkNSNi8vsLs5eQgcrCtj/XuUL1lElPslBWvi8BmdGbEQPwqzqc767KhAOfTz7SEkWeCEFCNEcjDJHsn+To1uufKpAe5qdqzgeFITRhOYZ52sG+D4LJP/5wf+zpLKrtvlwrRwIDlXm/9yEsTZDsmcbBWKI8OPEymFLGsLQ5VCt2+F8SxQ97AFYwIgSJyBDOk/MX2IjPlMCqxL+MHsHasKz/0oOwtKZ7tuSgy5ab4DupJi8En/tQQPDNq/jdLWwIDAQAB",
   "options_ui": {

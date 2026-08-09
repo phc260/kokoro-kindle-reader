@@ -19,6 +19,13 @@ winresource = "0.1"
 [dependencies]
 # The named-pipe wire format, shared with the SAPI engine (one source of truth).
 kokoro-protocol = { path = "../kokoro-protocol" }
+# Cloud Reader OCR: PP-OCR detection + recognition on the SAME `ort` boundary the synth uses
+# (see its Cargo.toml for why the version pin and `default-features = false` have to match).
+# The engine knows nothing about HTTP; webserve.rs is the only file that knows both, and the
+# extension keeps every rule that decides what gets narrated. There is no feature switch: the
+# models are loaded at run time from a directory the installer stages, so a host built
+# anywhere still builds, and one with nothing staged reports `missing`.
+kokoro-ocr = { path = "../kokoro-ocr" }
 # Named-pipe server + async streaming/pacing.
 tokio = { version = "1", features = ["net", "io-util", "rt", "rt-multi-thread", "sync", "time", "macros"] }
 # controls.json + tokenizer.json parsing (native_synth.rs).

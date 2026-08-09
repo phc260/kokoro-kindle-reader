@@ -68,8 +68,8 @@ export interface HighlightHandle {
 const HOST_ID = 'kokoro-kindle-cloud-reader-highlight';
 
 /**
- * Grow the box by this fraction of its height on each side. Tesseract's boxes are tight to the
- * ink, so an unpadded mark clips ascenders and looks like a mistake rather than a highlight.
+ * Grow the box by this fraction of its height on each side. A word box is tight to its line, so
+ * an unpadded mark sits flush against the type and looks like a mistake rather than a highlight.
  */
 const PAD = 0.16;
 

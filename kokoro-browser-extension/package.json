@@ -8,7 +8,6 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test test/",
     "test:capture": "bun run test/capture.check.ts",
-    "vendor": "bun run scripts/vendor-tesseract.ts",
     "bench:ocr": "bun run test/ocr-bench.ts",
     "test:ext": "bun run test/ext-ocr.check.ts",
     "make-key": "bun run scripts/make-key.ts",
@@ -19,8 +18,5 @@
     "@types/chrome": "^0.0.268",
     "puppeteer-core": "^23.0.0",
     "typescript": "^5.5.0"
-  },
-  "dependencies": {
-    "tesseract.js": "^7.0.0"
   }
 }

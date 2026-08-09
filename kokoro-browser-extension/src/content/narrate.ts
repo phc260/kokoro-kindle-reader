@@ -14,6 +14,7 @@ import {
   type VoiceInfo,
   type WordBoundary,
 } from '../speak';
+import { assertAttached } from './alive';
 
 /**
  * Talks to the service worker's ChromeTtsNarrator over a port.
@@ -43,6 +44,9 @@ export class PortNarrator implements Narrator {
   #connect(): { port: chrome.runtime.Port; pending: Set<(e: Error) => void> } {
     if (this.#port) return { port: this.#port, pending: this.#pending };
 
+    // An extension reload leaves this script running with no `chrome.runtime` to connect through.
+    // `hasWorker()` cannot cover it - that runs once, at startup, when the context is still valid.
+    assertAttached();
     const port = chrome.runtime.connect({ name: 'narrate' });
     const pending = new Set<(e: Error) => void>();
     this.#port = port;
@@ -52,7 +56,18 @@ export class PortNarrator implements Narrator {
       // An MV3 worker can be evicted, crash, or be torn down by an extension reload while a page
       // is mid-utterance. Nothing else would ever answer these, and `readBook` awaits them - so
       // silence here is a permanent hang, not a lost message.
-      const why = new Error(chrome.runtime.lastError?.message ?? 'the extension worker disconnected');
+      //
+      // Which is exactly what `chrome.runtime.lastError` used to cause in one of those three
+      // cases: an extension RELOAD removes `chrome.runtime` itself, so reading `lastError` off it
+      // threw before a single pending request was rejected - the throw escaping into an event
+      // listener where nothing catches it, and `readBook` left awaiting a promise that can now
+      // never settle. The optional chain has to be on `runtime`, not on `lastError`.
+      const why = new Error(
+        chrome.runtime?.lastError?.message ??
+          (typeof chrome === 'undefined' || !chrome.runtime
+            ? 'the extension was reloaded - refresh this page to reconnect it'
+            : 'the extension worker disconnected'),
+      );
       for (const reject of pending) reject(why);
       pending.clear();
       if (this.#port === port) {
@@ -94,7 +109,22 @@ export class PortNarrator implements Narrator {
         done();
         reject(e);
       };
-      const on = (m: { t: string; voices?: VoiceInfo[]; engine?: string; engineError?: string | null }) => {
+      const on = (m: {
+        t: string;
+        id?: string;
+        message?: string;
+        voices?: VoiceInfo[];
+        engine?: string;
+        engineError?: string | null;
+      }) => {
+        // An error with no id belongs to a request that carries none, and `voices` is the only
+        // one of those. Without this it matches nothing and the request waits out the timeout
+        // below - a minute of "Loading…" for a failure the worker already reported.
+        if (m.t === 'error' && m.id === undefined) {
+          done();
+          reject(new Error(m.message ?? 'the extension worker could not list voices'));
+          return;
+        }
         if (m.t !== 'voices') return;
         done();
         if (m.engine) this.kind = m.engine;
@@ -313,6 +343,7 @@ export function engineError(): string | null {
  * Answers "why am I hearing a platform voice" without opening the service worker's devtools.
  */
 export function kokoroStatus(): Promise<unknown> {
+  assertAttached();
   const p = chrome.runtime.connect({ name: 'narrate' });
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('worker did not answer')), 130_000);
@@ -375,6 +406,8 @@ export async function narrateStream(
   stopped = false;
   const engine = getNarrator();
   const report = (b: WordBoundary) => onWord?.(b.charIndex, b.charLength);
+  /** The narrator the fallback below displaced, so this page's failure is not the session's. */
+  let displaced: Narrator | null = null;
 
   // Over the port the parts go as ONE utterance and the worker chunks them, because the right
   // chunk schedule depends on the engine the worker chose (src/speak.ts, speakStream).
@@ -386,9 +419,19 @@ export async function narrateStream(
       // The text never arrived - an OCR pass threw. Another engine would find the same nothing,
       // so report it rather than pretending to read the page.
       if (e instanceof SourceError) throw e.reason;
-      // Firefox ships no background page at all, so the bridge fails on the first utterance.
-      // Fall back once rather than making the caller know which browser it is on.
-      console.warn('[kwr] worker bridge unavailable, falling back to speechSynthesis:', String(e));
+      // Anything else - the worker was evicted mid-page, or kokoro-host failed a chunk - leaves
+      // the rest of THIS page unsaid, so finish it on the portable engine rather than stopping in
+      // the middle of a paragraph. The swap has to be the module-level narrator: `stop`/`pause`/
+      // `resume` all go through `getNarrator()`, and a fallback the transport controls cannot
+      // reach is a page that will not stop.
+      //
+      // It is put back in the `finally` below, and that is the load-bearing half. Left in place it
+      // was a permanent, silent downgrade: one failed chunk and the whole rest of the book was read
+      // by a system voice, with the reason only in the console and Kokoro never tried again however
+      // long the host had been back.
+      console.warn('[kwr] narration failed, finishing this page on speechSynthesis:', String(e));
+      lastEngineError = String(e);
+      displaced = engine;
       narrator = new WebSpeechNarrator();
     }
   }
@@ -407,9 +450,15 @@ export async function narrateStream(
     }
   })();
 
-  await speakStream(narrator!, halting, options, (b) => {
-    if (!stopped) onWord?.(b.charIndex, b.charLength);
-  });
+  try {
+    await speakStream(narrator!, halting, options, (b) => {
+      if (!stopped) onWord?.(b.charIndex, b.charLength);
+    });
+  } finally {
+    // However this page ended, the next one starts by asking the worker again. Guarded on
+    // identity so a `useEngine` call made during the page is not undone by it.
+    if (displaced && narrator instanceof WebSpeechNarrator) narrator = displaced;
+  }
 }
 
 /**

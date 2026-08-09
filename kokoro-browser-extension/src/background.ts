@@ -18,7 +18,14 @@
 // navigation inside the reader cannot interrupt playback.
 
 import { ChromeTtsNarrator, PartQueue, speakStream, type Narrator, type SpeakOptions } from './speak';
-import { KokoroHttpNarrator, describeProbe, loadPairing, probeDaemon } from './kokoro-http';
+import {
+  KokoroHttpNarrator,
+  describeProbe,
+  describeUnreachable,
+  diagnosePaired,
+  loadPairing,
+  probeDaemon,
+} from './kokoro-http';
 
 // --- engine selection ----------------------------------------------------------------------
 // Kokoro over the tray app's loopback HTTP endpoint if one is paired, else the platform engine.
@@ -51,8 +58,28 @@ async function connectKokoro(): Promise<{ narrator: KokoroHttpNarrator; ready: R
 
   await ensureOffscreen(); // audio has to have somewhere to play before we commit
   const narrator = new KokoroHttpNarrator(pairing);
-  const ready = await narrator.status(); // handshake, and the warm-up that loads the model
+  // The handshake, and the warm-up that loads the model. `status()` names every failure it can
+  // read off a response; a fetch that never got one is the case it cannot, so the probe answers
+  // that here instead - a paired extension pointed at a host that has moved, or stopped, would
+  // otherwise report `TypeError: Failed to fetch`, which is the one string that names neither
+  // the cause nor the next action.
+  const ready = await narrator.status().catch(async (e) => {
+    throw unreachable(e)
+      ? new Error(describeUnreachable(pairing.base, await probeDaemon()))
+      : e;
+  });
   return { narrator, ready };
+}
+
+/**
+ * Did this fetch fail below HTTP - no host, wrong port, connection reset mid-upload?
+ *
+ * Those are the failures with no status to inspect, and the only ones worth re-asking the probe
+ * about. Anything the host actually answered has already been turned into a sentence by whoever
+ * read the response, and replacing that with "the daemon is up" would lose the better message.
+ */
+function unreachable(e: unknown): boolean {
+  return e instanceof TypeError || /failed to fetch|networkerror|load failed/i.test(String(e));
 }
 
 async function narratorFor(): Promise<Narrator> {
@@ -90,8 +117,10 @@ async function useEngine(which: 'kokoro' | 'platform'): Promise<string> {
 }
 
 // --- offscreen OCR host -------------------------------------------------------------------
-// The content script cannot spawn Tesseract's worker itself (cross-origin worker script), so
-// OCR runs in an offscreen document. This creates it on demand and relays requests to it.
+// OCR and audio both run in an offscreen document, and after the engine moved to the host it is
+// the ORIGIN that keeps them there: a content script's `fetch` carries read.amazon.com's origin,
+// and the host's allowlist admits `chrome-extension://<id>` and nothing else. This creates the
+// document on demand and relays requests to it.
 
 let creating: Promise<void> | null = null;
 
@@ -103,10 +132,11 @@ async function ensureOffscreen(): Promise<void> {
   creating ??= chrome.offscreen
     .createDocument({
       url: 'offscreen.html',
-      // WORKERS: Tesseract's worker. AUDIO_PLAYBACK: a service worker has no AudioContext,
-      // so Kokoro's PCM is scheduled here too.
-      reasons: [chrome.offscreen.Reason.WORKERS, chrome.offscreen.Reason.AUDIO_PLAYBACK],
-      justification: 'Run the Tesseract OCR worker and play synthesized audio.',
+      // AUDIO_PLAYBACK alone now. WORKERS was here for the wasm OCR engine, which is gone;
+      // a reason a document does not need is a permission claimed for nothing. A service
+      // worker has no AudioContext, so Kokoro's PCM is still scheduled here.
+      reasons: [chrome.offscreen.Reason.AUDIO_PLAYBACK],
+      justification: 'Play synthesized audio and reach the local Kokoro host from the extension origin.',
     })
     .finally(() => {
       creating = null;
@@ -124,12 +154,18 @@ chrome.runtime.onMessage.addListener(
     if (msg?.t !== 'ocr') return;
 
     (async () => {
+      // Recognition happens on the host now, so an OCR request needs the pairing exactly as a
+      // synthesis request does. Same failure, same sentence: "no daemon" and "daemon up, not
+      // paired" are different problems and `describeProbe` is the one place that says which.
+      const pairing = await loadPairing().catch(() => null);
+      if (!pairing) throw new Error(describeProbe(await probeDaemon()));
+
       await ensureOffscreen();
       // `column`/`key`/`trial` pass straight through: a page is recognized one column at a time so
       // the first can be spoken while the second is still running, `key` is what lets the
       // offscreen document reuse the preprocessing between the two, and `trial` marks a read whose
       // text is discarded so it must not touch the furniture memory.
-      const reply = await chrome.runtime.sendMessage({
+      const reply = (await chrome.runtime.sendMessage({
         t: 'ocr-run',
         target: 'offscreen',
         b64: msg.b64,
@@ -137,8 +173,23 @@ chrome.runtime.onMessage.addListener(
         column: msg.column,
         key: msg.key,
         trial: msg.trial,
-      });
-      sendResponse(reply);
+        // The token stops here and in the offscreen document. It is never handed to a content
+        // script, which shares a process with the page.
+        base: pairing.base,
+        token: pairing.token,
+      })) as { ok: boolean; error?: string } | undefined;
+      // The offscreen document names the endpoint and the size it posted; only this side can say
+      // WHY nothing answered. `diagnosePaired` rather than the probe, because an OCR post carries
+      // a page image: the host writes its 401 without draining that body, so a stale token loses
+      // its reply and looks exactly like a host that is gone. `kwr.readPage()` reaches here
+      // without any handshake having run first, so this is not a theoretical ordering.
+      // A new object rather than a write into the one the offscreen document sent: it arrives as a
+      // fresh clone per message in the browser, but nothing here should depend on that.
+      sendResponse(
+        reply && !reply.ok && unreachable(reply.error)
+          ? { ...reply, error: `${reply.error} - ${await diagnosePaired(pairing)}` }
+          : reply,
+      );
     })().catch((e) => sendResponse({ ok: false, error: String(e) }));
 
     return true; // async reply
@@ -183,9 +234,28 @@ chrome.runtime.onConnect.addListener((port) => {
   }) => {
     try {
       switch (msg.t) {
+        // Asked once by the panel, and again by every page - `speakPage` checks there is a voice
+        // before it captures. For Kokoro that check IS a real request to the host (`/status`), so
+        // this is the first place a host that went away is noticed.
         case 'voices': {
           const n = await narratorFor();
-          port.postMessage({ t: 'voices', voices: await n.voices(), engine: n.kind, engineError });
+          try {
+            port.postMessage({ t: 'voices', voices: await n.voices(), engine: n.kind, engineError });
+          } catch (e) {
+            // The chosen narrator could not answer. `chosen` is a decision, not a health check -
+            // it survives the host it was made about - so drop it and choose again: that re-probes
+            // and picks a restarted host straight back up, and settles on the platform voice with
+            // a reason when there isn't one.
+            //
+            // Answering at all is the load-bearing half. The generic `error` reply below carries
+            // the request's id, and a voices request has none, so `PortNarrator.voices()` cannot
+            // recognize it - a page then sat on its 60 s timeout, once per page, for what a dead
+            // host answers in milliseconds.
+            engineError = String(e);
+            if (chosen === n) chosen = null;
+            const retry = await narratorFor();
+            port.postMessage({ t: 'voices', voices: await retry.voices(), engine: retry.kind, engineError });
+          }
           break;
         }
 

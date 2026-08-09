@@ -79,6 +79,65 @@ export function describeProbe(p: Probe): string {
   }
 }
 
+/**
+ * Why a request to a PAIRED host failed below HTTP, which is a different question.
+ *
+ * `describeProbe` reads a 401 as "not paired", and that is right only for the caller that already
+ * knows there is no pairing. Said to someone who has one it is a wrong diagnosis - worse than a
+ * vague one, because it sends them to re-paste a code that was never the problem. What a probe
+ * means once a pairing exists depends on WHERE that pairing points:
+ *
+ *   * a different base from the one answering - the host moved port, so the saved code is stale;
+ *   * the same base, answering a probe but not this request - the port is live, so the request
+ *     itself is what failed. An over-cap body is the way that happens on this endpoint: the reply
+ *     lands while the client is still uploading and is lost with the connection.
+ */
+export function describeUnreachable(base: string, p: Probe): string {
+  if (p.state === 'absent')
+    return base === p.base
+      ? `no Kokoro daemon on ${base} - start Kokoro Kindle Reader (the tray app)`
+      : `nothing is listening on ${base} (paired) or ${p.base} - start Kokoro Kindle Reader (the tray app)`;
+  if (p.state === 'origin-rejected')
+    return `Kokoro daemon is running on ${p.base} but does not allow this extension id (${chrome.runtime.id})`;
+  if (base !== p.base)
+    return `paired with ${base}, but the Kokoro daemon is on ${p.base} - copy a fresh pairing code from the tray`;
+  return `the Kokoro daemon on ${base} is listening but the request did not complete - see the service worker console`;
+}
+
+/**
+ * Why a request that carried a BODY failed below HTTP, asked with one that carries none.
+ *
+ * A large POST is the one request whose failure cannot distinguish its own causes. The host writes
+ * its 401 without draining the body - deliberately, so an unauthenticated peer cannot make it copy
+ * megabytes - and a reply written under an upload still in flight can be lost with the connection.
+ * So a stale token and an unreachable host arrive here as the same nothing.
+ *
+ * A bodiless `/status` separates them, because it cannot lose its reply: the request fits in a
+ * single segment, so there is no in-flight write for the close to destroy. Worth the extra
+ * round-trip because it only happens on a path that has already failed, and because "re-pair" and
+ * "the daemon is gone" send the user to completely different places.
+ */
+export async function diagnosePaired(p: Pairing): Promise<string> {
+  try {
+    const res = await fetch(`${p.base}/status`, {
+      headers: { authorization: `Bearer ${p.token}` },
+    });
+    if (res.status === 401) return 'the Kokoro host rejected the pairing token - re-pair from the options page';
+    if (res.status === 403) return `the Kokoro host does not allow this extension id (${chrome.runtime.id})`;
+    if (res.ok)
+      // Reachable and paired, so the pairing is not the question - but do NOT name a cause. Two
+      // different failures land here and only one of them is size: an over-cap body, and a body
+      // that stalled past the host's own request timeout (`REQUEST_TIMEOUT`), which drops the
+      // connection with no response at all. "Check its size" is a wrong next action for the
+      // second, and a wrong next action costs more than a vague one.
+      return `the Kokoro host on ${p.base} is reachable and paired, so the pairing is not the problem - the request itself did not complete (too large, or slower than the host waits)`;
+    return `the Kokoro host on ${p.base} answered ${res.status}`;
+  } catch {
+    // Even the bodiless request could not get through, so the pairing is not the question.
+    return describeUnreachable(p.base, await probeDaemon());
+  }
+}
+
 /** `kwr_<port>_<token>` - one opaque string is easier to paste correctly than two fields. */
 export function parsePairing(s: string): Pairing | null {
   const m = /^kwr_(\d{1,5})_([0-9a-f]{32,128})$/.exec(s.trim());
@@ -111,9 +170,18 @@ export class KokoroHttpNarrator implements Narrator {
 
   /** Handshake. Also the warm-up: the daemon has the model loaded before the first page. */
   async status(): Promise<{ voice: string; voices: string[]; sampleRate: number }> {
-    const res = await fetch(`${this.#pairing.base}/status`, {
-      headers: { authorization: `Bearer ${this.#pairing.token}` },
-    });
+    let res: Response;
+    try {
+      res = await fetch(`${this.#pairing.base}/status`, {
+        headers: { authorization: `Bearer ${this.#pairing.token}` },
+      });
+    } catch (e) {
+      // Every branch below reads a status off a response. A fetch that failed below HTTP has
+      // none, and its message names nothing - not the host, not the port, not the endpoint - so
+      // it is the one failure that has to be told where it was going. Which KIND of not-running
+      // this is comes from `probeDaemon`, at the caller that has one.
+      throw new Error(`could not reach ${this.#pairing.base}/status: ${String(e)}`);
+    }
     if (res.status === 401) throw new Error('token rejected - re-pair from the options page');
     if (res.status === 403) throw new Error('origin rejected - the daemon does not allow this extension id');
     if (!res.ok) throw new Error(`status ${res.status}`);

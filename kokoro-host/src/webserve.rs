@@ -1,7 +1,8 @@
 // Loopback HTTP transport for the browser extension — the ONLY one.
 //
-//   GET  /status -> {"ok":true,"voice":…,"voices":[…],"sampleRate":24000}
+//   GET  /status -> {"ok":true,"voice":…,"voices":[…],"sampleRate":24000,"ocr":{…}}
 //   POST /synth  {"text":…,"voice":…,"speed":…} -> raw little-endian f32 PCM
+//   POST /ocr    image/png bytes -> {"version":1,"lines":[{"words":[…]}],…}
 //
 // WHY THIS ONE. A native-messaging bridge was prototyped ahead of this and rejected. It has
 // the better security story on paper: no listening socket, and the browser itself enforces
@@ -42,6 +43,19 @@
 // TLS is deliberately absent: browsers already treat 127.0.0.1 as a trustworthy origin, so
 // there is no mixed-content problem, and a self-signed cert would add a trust prompt and an
 // expiry while defending against nobody — a local attacker can read the cert too.
+//
+// OCR ARRIVES HERE AND NOWHERE ELSE. `/ocr` is one more route behind the same four checks —
+// not a second listener, not a WebSocket, and not a server-to-browser channel. The engine
+// itself is `kokoro-ocr` (PP-OCR: a DBNet detector, then a CTC recognizer), which knows
+// nothing about HTTP; this file is the only thing that knows both. Note what did NOT move
+// with it: the dark-page check, the gutter split, the missed-gutter retry and the whole
+// evidence-based furniture policy are still in the extension, because those rules decide what
+// gets narrated and swapping the engine underneath them is already the entire change.
+//
+// The posted image is the page as the reader RENDERED it — original colour, not flattened and
+// not inverted. A detector that has to find four words inside an illustration needs the
+// contrast the old Tesseract-shaped preprocessing threw away, and the backend owns whatever
+// preprocessing its own models want.
 //
 // UNPACED. The extension schedules every frame onto its own AudioContext cursor and *depends*
 // on synthesis outrunning playback to build a lead that hides the next chunk's synthesis; pacing
@@ -88,6 +102,49 @@ const MAX_HEADER_BYTES: usize = 8 * 1024;
 /// Kindle, so parked connections are not a self-contained problem. Generous enough that a real
 /// request can never hit it: the client is on loopback.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Cap on a posted page image, before decoding.
+///
+/// It is the SAME number `kokoro-ocr`'s limits carry (see `ocr_limits`), because a transport that
+/// accepts what the engine will refuse is a 413 delivered a megabyte late.
+///
+/// **Sized for a picture book, not for prose, and 8 MiB was not.** A column of book text is well
+/// under 1 MiB, which is what the first number was reasoned from — and it refused a real Cloud
+/// Reader page. The pages that blow a byte cap are full-page colour plates, and they blow it for a
+/// reason that is structural rather than marginal: the extension captures at the reader's own
+/// render resolution (device-pixel-ratio scaled) and re-encodes to PNG, which is **lossless**, so
+/// a painterly page that arrived as a few hundred KiB of JPEG leaves the canvas an order of
+/// magnitude larger. PNG-only is not the thing to revisit — one decoder is one parser reachable
+/// from a network-facing endpoint — so the cap is what has to fit the format.
+///
+/// Still an order of magnitude below what `max_pixels` (40 Mpx) would admit at PNG's worst
+/// realistic density, so this remains the binding, cheap check it was meant to be.
+const MAX_OCR_BODY: usize = 32 * 1024 * 1024;
+
+/// How much of an over-cap body is read and discarded so the 413 can be read (`discard_body`).
+///
+/// Absolute rather than a multiple of the cap: the point is to bound work done for a request
+/// already refused, and pinning it to the cap means every future raise silently doubles the
+/// reading too. Comfortably above `MAX_OCR_BODY`, so a client that overshoots by a plate's worth
+/// still gets a legible refusal instead of a reset; past it, the reset is the honest answer to a
+/// client no browser is. Nothing is allocated either way.
+const MAX_DISCARD_BYTES: usize = 64 * 1024 * 1024;
+
+/// The only image type `/ocr` accepts.
+///
+/// One, deliberately. The extension's `convertToBlob` emits PNG and nothing else, and every
+/// additional decoder is another parser reachable from a network-facing endpoint by anyone
+/// holding the pairing token. The crate is compiled with only this codec, so the allowlist and
+/// what can actually be decoded are the same fact stated twice.
+const OCR_CONTENT_TYPE: &str = "image/png";
+
+/// How long a whole `/ocr` request gets, queue time included.
+///
+/// `Limits::deadline` bounds the recognition itself; this bounds the wait. They are different
+/// failures — a page with forty lines on it versus a page that is fourth in line behind three
+/// others — and only the second one is fixed by asking again later. Generous, because the
+/// honest answer to a slow page is the page, not a 504.
+const OCR_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub struct Endpoint {
     pub port: u16,
@@ -174,7 +231,45 @@ struct Request {
     origin: Option<String>,
     host: Option<String>,
     auth: Option<String>,
+    content_type: Option<String>,
+    /// What the peer says it is about to send. Read from the head and acted on only after the
+    /// four checks pass — see `serve_conn`.
+    len: usize,
+    /// Empty until `read_body` fills it, which happens after authentication and never for an
+    /// over-cap request.
     body: Vec<u8>,
+    /// The peer declared a `Content-Length` over this route's cap. Carried as a flag rather than
+    /// as a short read because truncating a PNG and then decoding it reports "not a PNG", which
+    /// is a lie about what went wrong.
+    oversized: bool,
+}
+
+impl Request {
+    /// The media type without its parameters, lowercased. `image/png; charset=binary` is a
+    /// thing browsers have been known to send.
+    fn media_type(&self) -> String {
+        self.content_type
+            .as_deref()
+            .unwrap_or("")
+            .split(';')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase()
+    }
+}
+
+/// The body cap for one route.
+///
+/// Per route, because the two are different by orders of magnitude and one bound cannot be
+/// right for both: `/synth` takes a chunk of text, `/ocr` takes a page image. Picked from the
+/// request line, which is parsed before any header, so the cap is known before a single body
+/// byte is accepted.
+fn body_cap(path: &str) -> usize {
+    match path.split('?').next().unwrap_or("") {
+        "/ocr" => MAX_OCR_BODY,
+        _ => MAX_TEXT_BYTES as usize,
+    }
 }
 
 /// Constant-time in the token's CONTENTS: the fold always visits every byte, so no early exit
@@ -210,24 +305,100 @@ async fn read_line_capped(reader: &mut BufReader<TcpStream>, out: &mut String) -
     Some(())
 }
 
-async fn read_request(reader: &mut BufReader<TcpStream>) -> Option<Request> {
+/// Read and throw away an over-cap body, so the 413 can actually be delivered.
+///
+/// Called ONLY after the token check has passed (`serve_conn`). That ordering is what keeps this
+/// from being a gift to an unauthenticated peer: reading 64 MiB on behalf of a request that has
+/// already been refused is affordable for a client holding the pairing token — that peer was
+/// inside the accepted threat model before any of this existed — and is not something a stranger
+/// should be able to ask for.
+///
+/// Bounded twice over: by `MAX_DISCARD_BYTES` here, and in time by the connection deadline the
+/// caller passes. A peer declaring more than the bound gets the connection reset — the honest
+/// answer to a client no legitimate browser is, and the only case left where an over-cap POST
+/// fails without a status.
+///
+/// It reads rather than allocating: `take` bounds the reader itself, and `sink` keeps nothing.
+async fn discard_body(reader: &mut BufReader<TcpStream>, len: usize) {
+    let want = len.min(MAX_DISCARD_BYTES) as u64;
+    let _ = tokio::io::copy(&mut (&mut *reader).take(want), &mut tokio::io::sink()).await;
+}
+
+/// Answer an over-cap request: drain first, THEN reply.
+///
+/// One function rather than two statements at the call site, because the order is the whole fix
+/// and a 413 written without the drain is invisible to a browser. Nothing else writes the
+/// TRANSPORT's 413 — the one for a declared over-cap `Content-Length` — so that ordering cannot be
+/// skipped by adding a branch elsewhere, which is as close to a guarantee as this gets: driving
+/// `serve_conn` from a test would mean standing up a `Ctx` (a live `NativeSynth` and `KindleCtl`).
+/// (`ocr_status_line` also answers 413, for a decoded image over `max_pixels`/`max_dimension`.
+/// That one needs no drain: its body was read in full before the engine ever saw it.)
+///
+/// Called only after the token check. See the ordering note in `serve_conn`.
+///
+/// **The drain gets its own budget, not the connection deadline.** Sharing it re-created the exact
+/// bug this exists to fix: an upload still running when the 15 s expired had its drain cancelled
+/// and the 413 written underneath it anyway, which is the undeliverable refusal again — reachable
+/// by nothing more exotic than a large page on a busy machine. A fresh window is affordable here
+/// and nowhere else, because this runs only after the token check: the peer holds the pairing
+/// token, and `MAX_DISCARD_BYTES` still bounds the bytes even when the clock does not.
+async fn refuse_oversized(
+    stream: &mut BufReader<TcpStream>,
+    req: &Request,
+    cors: &str,
+) {
+    let _ = tokio::time::timeout(REQUEST_TIMEOUT, discard_body(stream, req.len)).await;
+    let body = format!(
+        "{{\"ok\":false,\"code\":\"too_large\",\"error\":\"body over the {} byte limit for {}\"}}",
+        body_cap(&req.path),
+        req.path
+    );
+    respond(stream, "413 Payload Too Large", cors, "application/json", body.as_bytes()).await;
+}
+
+/// Allocate and read exactly the body the head declared.
+///
+/// Separate from `read_head` because WHEN it runs is a security property, not a detail: this is
+/// the only allocation in the request path whose size a peer chooses, and it must not happen for
+/// a peer that has not authenticated. See `serve_conn`.
+async fn read_body(reader: &mut BufReader<TcpStream>, len: usize) -> Option<Vec<u8>> {
+    let mut body = vec![0u8; len];
+    reader.read_exact(&mut body).await.ok()?;
+    Some(body)
+}
+
+/// Read the request line and headers, and NOTHING of the body.
+///
+/// Stopping here is the point. The four checks all read from the head, so parsing the head is the
+/// least a request can be understood by — and every byte read past it is work done for a peer
+/// that has not yet proved it may ask for any.
+async fn read_head(reader: &mut BufReader<TcpStream>) -> Option<Request> {
     let mut line = String::new();
     read_line_capped(reader, &mut line).await?;
     let mut parts = line.split_whitespace();
     let method = parts.next()?.to_string();
     let path = parts.next()?.to_string();
 
-    let (mut origin, mut host, mut auth, mut len) = (None, None, None, 0usize);
+    let cap = body_cap(&path);
+    let (mut origin, mut host, mut auth, mut ctype, mut len) = (None, None, None, None, 0usize);
     for _ in 0..MAX_HEADERS {
         let mut h = String::new();
         read_line_capped(reader, &mut h).await?;
         let h = h.trim_end();
         if h.is_empty() {
-            let mut body = vec![0u8; len.min(MAX_TEXT_BYTES as usize)];
-            if !body.is_empty() {
-                reader.read_exact(&mut body).await.ok()?;
-            }
-            return Some(Request { method, path, origin, host, auth, body });
+            // The blank line ends the head. The body stays on the socket: what happens to it is
+            // `serve_conn`'s to decide, once it knows whether this peer is allowed to ask.
+            return Some(Request {
+                method,
+                path,
+                origin,
+                host,
+                auth,
+                content_type: ctype,
+                len,
+                body: Vec::new(),
+                oversized: len > cap,
+            });
         }
         let (name, value) = h.split_once(':')?;
         let value = value.trim().to_string();
@@ -235,6 +406,7 @@ async fn read_request(reader: &mut BufReader<TcpStream>) -> Option<Request> {
             "origin" => origin = Some(value),
             "host" => host = Some(value),
             "authorization" => auth = Some(value),
+            "content-type" => ctype = Some(value),
             "content-length" => len = value.parse().unwrap_or(0),
             _ => {}
         }
@@ -281,11 +453,75 @@ async fn respond(
     let _ = s.flush().await;
 }
 
-/// Everything a connection needs: the shared synth context and this endpoint's port/token.
+/// Everything a connection needs: the shared synth context, this endpoint's port/token, and
+/// the OCR worker.
+///
+/// OCR hangs off the WEB context rather than off `Ctx`, because the browser is the only client
+/// that has a page image to recognize. The pipe has no OCR command and is not getting one:
+/// Kindle for PC narrates from its own text, and a second caller would put the whole picture
+/// path in front of a release that is only meant to replace the browser's engine.
 #[derive(Clone)]
 pub struct WebCtx {
     pub ctx: Ctx,
     pub endpoint: Arc<Endpoint>,
+    /// One worker for the process, shared by every connection. Started at construction; no
+    /// model is loaded until a page actually arrives.
+    pub ocr: Arc<kokoro_ocr::Ocr>,
+}
+
+impl WebCtx {
+    pub fn new(ctx: Ctx, endpoint: Arc<Endpoint>) -> WebCtx {
+        let assets = ocr_assets();
+        eprintln!("[host] OCR models = {}", assets.dir.display());
+        WebCtx { ctx, endpoint, ocr: Arc::new(kokoro_ocr::Ocr::new(assets, ocr_limits())) }
+    }
+}
+
+/// The OCR model directory name, beside the exe. `ocr\` rather than a `models\` subfolder:
+/// `model_base` already means the Kokoro voice model, which the panel downloads, verifies
+/// against `model-manifest.json` and deletes files out of — and these are staged by the
+/// installer and pinned in `kokoro-ocr` instead.
+const OCR_DIR: &str = "ocr";
+
+/// Where the two models and the dictionary live: `ocr\` beside the exe, which is what the
+/// installer stages. The dev fallback is the provisioned tree, so a `cargo run` works without
+/// a copy step — and it is `debug_assertions`-gated, because a release build that silently
+/// read a developer's `native-deps` would hide exactly the staging bug this path exists to
+/// expose.
+fn ocr_assets() -> kokoro_ocr::Assets {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let staged = dir.join(OCR_DIR);
+            if staged.exists() {
+                return kokoro_ocr::Assets::new(staged);
+            }
+        }
+    }
+    #[cfg(debug_assertions)]
+    {
+        let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("native-deps")
+            .join(OCR_DIR);
+        if dev.exists() {
+            return kokoro_ocr::Assets::new(dev);
+        }
+    }
+    // Nothing found. Returning the expected location rather than erroring is what lets
+    // `/status` say `missing` with a path in it, instead of the endpoint refusing to start.
+    kokoro_ocr::Assets::new(
+        std::env::current_exe()
+            .ok()
+            .and_then(|e| e.parent().map(|d| d.join(OCR_DIR)))
+            .unwrap_or_else(|| PathBuf::from(OCR_DIR)),
+    )
+}
+
+/// The request bounds. `max_body_bytes` is deliberately the same constant the transport
+/// enforces above — one number, checked at both ends of the same hop.
+fn ocr_limits() -> kokoro_ocr::Limits {
+    kokoro_ocr::Limits { max_body_bytes: MAX_OCR_BODY, ..kokoro_ocr::Limits::default() }
 }
 
 /// Serve until a fatal listener error. Returns immediately if the port is already taken (a
@@ -311,10 +547,14 @@ pub async fn serve_loop(web: WebCtx) -> std::io::Result<()> {
 
 async fn serve_conn(stream: TcpStream, web: WebCtx) -> std::io::Result<()> {
     let mut stream = BufReader::new(stream);
-    // Bound the whole request head + body in TIME as well as size. Dropping the connection on
-    // expiry is the right answer: nothing has authenticated yet, so there is no one to apologize
-    // to, and a parked task would otherwise sit on the runtime the pipe server shares.
-    let req = match tokio::time::timeout(REQUEST_TIMEOUT, read_request(&mut stream)).await {
+    // ONE deadline for the whole connection, head and body together. Taken once and passed to
+    // each read as an absolute instant rather than re-armed per stage: two 15 s timeouts in
+    // sequence is a 30 s budget, and the point of the bound is that a peer cannot park a task on
+    // the runtime the pipe server — the one feeding Kindle audio — shares. Dropping the
+    // connection on expiry is the right answer: nothing has authenticated, so there is no one to
+    // apologize to.
+    let deadline = tokio::time::Instant::now() + REQUEST_TIMEOUT;
+    let mut req = match tokio::time::timeout_at(deadline, read_head(&mut stream)).await {
         Ok(Some(req)) => req,
         _ => return Ok(()),
     };
@@ -356,17 +596,104 @@ async fn serve_conn(stream: TcpStream, web: WebCtx) -> std::io::Result<()> {
         return Ok(());
     }
 
+    // ---- authenticated from here, and ONLY from here is a byte of body read ----
+    //
+    // The order is the security property. `read_head` stops at the blank line, so an
+    // unauthenticated peer cannot make this process allocate the buffer it named in
+    // `Content-Length` (up to `MAX_OCR_BODY`, held for the whole deadline while `read_exact`
+    // waits for bytes that need never come), and cannot make it copy an over-cap body either.
+    // Neither is bounded by anything else: `serve_loop` spawns one task per accepted socket with
+    // no cap on how many. Past this line the peer holds the pairing token — which is the point at
+    // which it was already inside the accepted threat model, the same as any process that can
+    // open `PIPE_NAME`.
+    //
+    // The cost of putting the checks first: a request with a BAD token and a large body has its
+    // 401 written under an upload still in flight, so the write may fail and the reply be lost —
+    // the same shape as the 413 bug this ordering's sibling fix cured. Accepted deliberately.
+    // `connectKokoro` handshakes on `/status`, which has no body at all, so a stale token is
+    // surfaced there long before anything posts an image; and any body inside a socket buffer
+    // (every `/synth` request) completes its write and reads the 401 normally.
+
+    // Declared longer than its route allows. Answered here rather than per route: the reason is
+    // the same one for all of them and the connection is done.
+    if req.oversized {
+        refuse_oversized(&mut stream, &req, &cors).await;
+        return Ok(());
+    }
+
+    if req.len > 0 {
+        match tokio::time::timeout_at(deadline, read_body(&mut stream, req.len)).await {
+            Ok(Some(body)) => req.body = body,
+            _ => return Ok(()),
+        }
+    }
+
     match (req.method.as_str(), req.path.split('?').next().unwrap_or("")) {
         ("GET", "/status") => {
             let (voice, _c) = native_synth::read_controls(&web.ctx.app_data);
+            // `probe` reads the file system and hashes what it finds; it does NOT build a
+            // session, which is what makes it safe to answer a polled endpoint with.
+            let ocr = kokoro_ocr::probe(web.ocr.assets());
             let body = serde_json::json!({
                 "ok": true,
                 "voice": voice,
                 "voices": available_voices(&web.ctx.model_base),
                 "sampleRate": SAMPLE_RATE,
+                "ocr": {
+                    "state": ocr.state.as_str(),
+                    "engine": ocr.engine,
+                    // Both halves, because "pp-ocr" alone is two independently pinned models
+                    // and a capture has to be traceable to what actually read it.
+                    "detector": ocr.detector,
+                    "recognizer": ocr.recognizer,
+                    "language": ocr.language,
+                    "provider": ocr.provider,
+                    // Only ever present when the state is not `ready`. The extension shows
+                    // it: "OCR unavailable" with no path in it is the message that gets
+                    // reported as a bug against the wrong component.
+                    "detail": ocr.detail,
+                },
             })
             .to_string();
             respond(&mut stream, "200 OK", &cors, "application/json", body.as_bytes()).await;
+        }
+
+        ("POST", "/ocr") => {
+            if req.media_type() != OCR_CONTENT_TYPE {
+                let body = format!(
+                    "{{\"ok\":false,\"code\":\"unsupported_media_type\",\
+                      \"error\":\"send {OCR_CONTENT_TYPE}, not '{}'\"}}",
+                    req.media_type()
+                );
+                respond(
+                    &mut stream,
+                    "415 Unsupported Media Type",
+                    &cors,
+                    "application/json",
+                    body.as_bytes(),
+                )
+                .await;
+                return Ok(());
+            }
+
+            match run_ocr(&mut stream, &web, req.body).await {
+                Ok(Some(body)) => {
+                    respond(&mut stream, "200 OK", &cors, "application/json", body.as_bytes()).await
+                }
+                // The peer went away mid-recognition. There is nobody to answer and the job
+                // has been told to stop; anything it still produces is discarded.
+                Ok(None) => return Ok(()),
+                Err(e) => {
+                    let body = serde_json::json!({
+                        "ok": false,
+                        "code": e.code(),
+                        "error": e.to_string(),
+                    })
+                    .to_string();
+                    respond(&mut stream, ocr_status_line(&e), &cors, "application/json", body.as_bytes())
+                        .await;
+                }
+            }
         }
 
         ("POST", "/synth") => {
@@ -425,4 +752,333 @@ async fn serve_conn(stream: TcpStream, web: WebCtx) -> std::io::Result<()> {
         _ => respond(&mut stream, "404 Not Found", &cors, "text/plain", b"no such endpoint\n").await,
     }
     Ok(())
+}
+
+// ------------------------------------------------------------------------------------ OCR
+
+/// Recognize one posted column. `Ok(None)` means the peer went away and there is nobody to
+/// answer.
+///
+/// Three things can end this and they are deliberately three separate arms:
+///
+///   * the worker answers — the ordinary case;
+///   * the browser aborts (`AbortController`, a closed tab, a Stop), which shows up as the
+///     socket reaching EOF. The job is told to stop, and whatever it produces anyway is
+///     dropped. ORT offers no way to abandon a run in progress, so this is a discard contract
+///     rather than a stop button — safe here only because the cross-page furniture memory
+///     lives in the extension, so a late result has nothing left to poison;
+///   * the request deadline, which covers QUEUE TIME as well as recognition. That is the case
+///     `Limits::deadline` cannot see: a page fourth in line behind three others is not a page
+///     the models are struggling with, and only one of those is worth asking about again
+///     later.
+async fn run_ocr(
+    stream: &mut BufReader<TcpStream>,
+    web: &WebCtx,
+    body: Vec<u8>,
+) -> Result<Option<String>, kokoro_ocr::Error> {
+    let handle = web.ocr.submit(body)?;
+    let cancel = handle.cancel_handle();
+
+    // `wait` blocks, and recognition is hundreds of milliseconds of CPU. This runtime also
+    // carries the named pipe that feeds Kindle's audio, so it does not get to run here.
+    let job = tokio::task::spawn_blocking(move || handle.wait());
+    tokio::pin!(job);
+
+    let finished = tokio::select! {
+        joined = &mut job => Some(joined),
+        _ = peer_gone(stream) => None,
+        _ = tokio::time::sleep(OCR_REQUEST_TIMEOUT) => Some(Ok(Err(kokoro_ocr::Error::Timeout))),
+    };
+
+    let Some(joined) = finished else {
+        cancel.cancel();
+        return Ok(None);
+    };
+
+    match joined {
+        Ok(Ok(page)) => Ok(Some(ocr_json(&page))),
+        Ok(Err(e)) => {
+            // A no-op unless this was the deadline arm, where the job is still running.
+            cancel.cancel();
+            Err(e)
+        }
+        // A panic on the blocking pool leaves nothing to report but the fact of it. Same
+        // class as a worker that stopped: nothing arriving later can help.
+        Err(_) => Err(kokoro_ocr::Error::Unavailable("the OCR task did not finish".into())),
+    }
+}
+
+/// Resolves when the peer closes the connection (or resets it). Never resolves while the
+/// browser is still waiting for its answer.
+///
+/// The request body has already been consumed, so anything further on this socket is either
+/// EOF — which is what an aborted `fetch` looks like — or a pipelined request this server has
+/// no intention of serving (`Connection: close` is on every response).
+async fn peer_gone(stream: &mut BufReader<TcpStream>) {
+    let mut sink = [0u8; 256];
+    loop {
+        match stream.read(&mut sink).await {
+            Ok(0) | Err(_) => return,
+            Ok(_) => continue,
+        }
+    }
+}
+
+/// One failure, one status code. The `code` field in the body is what a client branches on;
+/// this is what a `curl` shows without reading the body at all.
+fn ocr_status_line(e: &kokoro_ocr::Error) -> &'static str {
+    match e {
+        kokoro_ocr::Error::Decode(_) => "400 Bad Request",
+        kokoro_ocr::Error::TooLarge(_) => "413 Payload Too Large",
+        kokoro_ocr::Error::Busy => "429 Too Many Requests",
+        kokoro_ocr::Error::Unavailable(_) => "503 Service Unavailable",
+        kokoro_ocr::Error::Timeout => "504 Gateway Timeout",
+        // nginx's convention for "the client asked and then left". Only reachable when
+        // something other than the socket cancelled the job, which in practice means it was
+        // already cancelled when the worker picked it up.
+        kokoro_ocr::Error::Cancelled => "499 Client Closed Request",
+        kokoro_ocr::Error::Recognize(_) => "500 Internal Server Error",
+    }
+}
+
+/// The version-1 response. Frozen before the extension adapter was written — this shape is a
+/// contract two codebases share, and `version` is in it so a mismatch is legible rather than
+/// arriving as a missing field.
+///
+/// Rectangles are in the coordinate space of the image that was POSTED, whatever the backend
+/// resized to internally — the detector runs on a downscaled page and the recognizer on a
+/// 48 px line crop, and neither of those coordinate spaces ever leaves the crate. The
+/// extension adds its column x-offset to these exactly once.
+fn ocr_json(page: &kokoro_ocr::Page) -> String {
+    let lines: Vec<serde_json::Value> = page
+        .lines
+        .iter()
+        .map(|line| {
+            let words: Vec<serde_json::Value> = line
+                .words
+                .iter()
+                .map(|w| {
+                    serde_json::json!({
+                        "text": w.text,
+                        "confidence": w.confidence,
+                        "bbox": {
+                            "x0": w.bbox.x0,
+                            "y0": w.bbox.y0,
+                            "x1": w.bbox.x1,
+                            "y1": w.bbox.y1,
+                        },
+                    })
+                })
+                .collect();
+            serde_json::json!({ "words": words })
+        })
+        .collect();
+
+    serde_json::json!({
+        "version": kokoro_ocr::RESPONSE_VERSION,
+        "engine": kokoro_ocr::ENGINE_NAME,
+        "detector": kokoro_ocr::DETECTOR_NAME,
+        "recognizer": kokoro_ocr::RECOGNIZER_NAME,
+        "width": page.width,
+        "height": page.height,
+        "lines": lines,
+        // Both stages, separately. A page that is slow because forty lines were found is a
+        // different fact from one that is slow because the detector is grinding, and the two
+        // are indistinguishable in a single total.
+        "detectMs": page.detect_ms,
+        "recognizeMs": page.recognize_ms,
+        "ocrMs": page.ocr_ms,
+    })
+    .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn page() -> kokoro_ocr::Page {
+        kokoro_ocr::Page {
+            width: 1194,
+            height: 1681,
+            lines: vec![kokoro_ocr::Line {
+                words: vec![kokoro_ocr::Word {
+                    text: "Example".into(),
+                    confidence: 96.5,
+                    bbox: kokoro_ocr::Rect { x0: 80, y0: 120, x1: 176, y1: 148 },
+                }],
+            }],
+            detect_ms: 137.8,
+            recognize_ms: 615.6,
+            ocr_ms: 740.1,
+        }
+    }
+
+    #[test]
+    fn the_response_shape_is_the_frozen_one() {
+        let v: serde_json::Value = serde_json::from_str(&ocr_json(&page())).unwrap();
+        assert_eq!(v["version"], 1);
+        assert_eq!(v["engine"], "pp-ocr");
+        // Named separately: two models are pinned, and either can move without the other.
+        assert_eq!(v["detector"], "en-PP-OCRv3-det");
+        assert_eq!(v["recognizer"], "en-PP-OCRv5-mobile-rec");
+        assert_eq!(v["width"], 1194);
+        assert_eq!(v["height"], 1681);
+        let word = &v["lines"][0]["words"][0];
+        assert_eq!(word["text"], "Example");
+        assert_eq!(word["bbox"]["x0"], 80);
+        assert_eq!(word["bbox"]["y1"], 148);
+        assert!(v["detectMs"].as_f64().unwrap() > 0.0);
+        assert!(v["recognizeMs"].as_f64().unwrap() > 0.0);
+        assert!(v["ocrMs"].as_f64().unwrap() >= v["recognizeMs"].as_f64().unwrap());
+    }
+
+    #[test]
+    fn a_blank_column_is_an_empty_line_list_not_an_error() {
+        let mut p = page();
+        p.lines.clear();
+        let v: serde_json::Value = serde_json::from_str(&ocr_json(&p)).unwrap();
+        assert_eq!(v["lines"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn the_ocr_body_cap_is_the_one_the_engine_enforces() {
+        // Two places state this bound; a transport that accepts what the engine refuses is a
+        // 413 delivered a megabyte late.
+        assert_eq!(body_cap("/ocr"), ocr_limits().max_body_bytes);
+        assert_eq!(body_cap("/ocr?x=1"), MAX_OCR_BODY);
+    }
+
+    #[test]
+    fn synth_keeps_its_own_much_smaller_cap() {
+        assert_eq!(body_cap("/synth"), MAX_TEXT_BYTES as usize);
+        assert_eq!(body_cap("/status"), MAX_TEXT_BYTES as usize);
+    }
+
+    #[test]
+    fn media_type_ignores_parameters_and_case() {
+        let req = |ct: Option<&str>| Request {
+            method: "POST".into(),
+            path: "/ocr".into(),
+            origin: None,
+            host: None,
+            auth: None,
+            content_type: ct.map(str::to_string),
+            len: 0,
+            body: Vec::new(),
+            oversized: false,
+        };
+        assert_eq!(req(Some("Image/PNG; charset=binary")).media_type(), OCR_CONTENT_TYPE);
+        assert_eq!(req(Some(" image/png ")).media_type(), OCR_CONTENT_TYPE);
+        assert_ne!(req(Some("image/jpeg")).media_type(), OCR_CONTENT_TYPE);
+        assert_ne!(req(None).media_type(), OCR_CONTENT_TYPE);
+    }
+
+    #[test]
+    fn every_failure_has_its_own_status() {
+        use kokoro_ocr::Error::*;
+        let codes = [
+            ocr_status_line(&Decode(String::new())),
+            ocr_status_line(&TooLarge(String::new())),
+            ocr_status_line(&Busy),
+            ocr_status_line(&Unavailable(String::new())),
+            ocr_status_line(&Timeout),
+            ocr_status_line(&Recognize(String::new())),
+        ];
+        let mut seen = codes.to_vec();
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(seen.len(), codes.len(), "two failures share a status: {codes:?}");
+    }
+
+    #[test]
+    fn the_token_comparison_visits_every_byte() {
+        assert!(secret_eq("abc", "abc"));
+        assert!(!secret_eq("abc", "abd"));
+        assert!(!secret_eq("abc", "abcd"));
+        assert!(!secret_eq("", "a"));
+    }
+
+    /// The 413 has to survive the wire, not just be constructed.
+    ///
+    /// This is the one thing the unit tests above could not see and the thing that was wrong: the
+    /// refusal was correct, complete and unreadable, because answering without reading the body
+    /// closed the socket under a client still uploading. `Expect: 100-continue` is what hid it —
+    /// curl sends it and read its 413 cleanly, a browser `fetch` sends none and reported
+    /// `TypeError: Failed to fetch`. So this test speaks the browser's dialect deliberately.
+    ///
+    /// **What it does NOT cover:** that `serve_conn` calls `refuse_oversized` at all, and that it
+    /// does so after the token check. Driving `serve_conn` means building a `Ctx` — a live
+    /// `NativeSynth` and `KindleCtl` — which is not a unit test. What stands in for it is that
+    /// `refuse_oversized` is the only writer of this status, so there is one door and it drains.
+    #[tokio::test]
+    async fn an_over_cap_post_is_refused_with_a_status_the_client_can_read() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut stream = BufReader::new(stream);
+            let req = read_head(&mut stream).await.expect("the head must still parse");
+            assert!(req.oversized);
+            assert!(req.body.is_empty(), "an over-cap body is never allocated");
+            // The REAL refusal, not a re-implementation of it. An earlier version of this test
+            // inlined the drain and the reply, which meant deleting the drain from the endpoint
+            // left it green — it proved the fixture, not the code.
+            refuse_oversized(&mut stream, &req, "").await;
+        });
+
+        let mut client = TcpStream::connect(addr).await.unwrap();
+        let body = vec![0u8; MAX_OCR_BODY + 1024 * 1024];
+        let head = format!(
+            "POST /ocr HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: image/png\r\n\
+             Content-Length: {}\r\n\r\n",
+            body.len()
+        );
+        client.write_all(head.as_bytes()).await.unwrap();
+        // The load-bearing assertion is this one: before the fix the peer had closed by now and
+        // the write failed, which is the whole of what the browser could see.
+        client.write_all(&body).await.expect("the body must be accepted, not reset");
+
+        let mut reply = String::new();
+        client.read_to_string(&mut reply).await.unwrap();
+        assert!(reply.starts_with("HTTP/1.1 413"), "{reply}");
+
+        server.await.unwrap();
+    }
+
+    /// The head read must leave the body where it is, or the checks cannot come first.
+    ///
+    /// This is the whole basis of the ordering in `serve_conn`: an unauthenticated peer names a
+    /// `Content-Length` and nothing in this process acts on it. If `read_head` consumed so much
+    /// as a byte, the allocation and the copy would both be back in front of the token check —
+    /// where an attacker chooses the size, `serve_loop` spawns a task per socket with no cap on
+    /// how many, and the runtime being filled is the one that feeds Kindle its audio.
+    #[tokio::test]
+    async fn reading_the_head_consumes_none_of_the_body() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut stream = BufReader::new(stream);
+            let req = read_head(&mut stream).await.unwrap();
+            assert_eq!(req.len, 5);
+            assert!(!req.oversized);
+            assert!(req.body.is_empty());
+            // Everything the peer sent is still there to be read - by a caller that has by now
+            // decided it is allowed to.
+            let body = read_body(&mut stream, req.len).await.unwrap();
+            assert_eq!(body, b"hello");
+        });
+
+        let mut client = TcpStream::connect(addr).await.unwrap();
+        client
+            .write_all(
+                b"POST /synth HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 5\r\n\r\nhello",
+            )
+            .await
+            .unwrap();
+
+        server.await.unwrap();
+    }
 }

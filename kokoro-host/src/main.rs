@@ -86,6 +86,14 @@ fn start_pipe_server() -> std::sync::Arc<state::HostState> {
         eprintln!("[host] WARNING: model.onnx not found — synthesis fails until the model is downloaded.");
     }
 
+    // BEFORE anything that could build a session. The synth worker and kokoro-ocr's worker both
+    // use ORT and would otherwise race to decide which library the process loads — and they do
+    // not decide it the same way (see `init_ort`). Doing it here means the answer is settled
+    // before either thread exists, and neither has to care about the other.
+    if let Err(e) = native_synth::init_ort(&native_synth::exe_dir()) {
+        eprintln!("[host] {e}");
+    }
+
     let native = native_synth::NativeSynth::spawn(base.clone(), espeak);
     // One cell for everything a peer can ask about: the audio clocks CMD_STATUS/CMD_KINDLE
     // answer from, the live pause, and what the host believes Kindle is doing.
@@ -106,7 +114,7 @@ fn start_pipe_server() -> std::sync::Arc<state::HostState> {
     // The web endpoint is best-effort: a failure to create or bind it must not take the pipe
     // down with it, because Kindle depends on the pipe and not on this.
     let web = match webserve::Endpoint::load_or_create(&app_data) {
-        Ok(ep) => Some(webserve::WebCtx { ctx: ctx.clone(), endpoint: std::sync::Arc::new(ep) }),
+        Ok(ep) => Some(webserve::WebCtx::new(ctx.clone(), std::sync::Arc::new(ep))),
         Err(e) => {
             eprintln!("[host] web endpoint disabled: {e}");
             None

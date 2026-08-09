@@ -38,8 +38,27 @@ test('both manifests grant the loopback origin the narrator fetches', () => {
   expect(firefox.host_permissions).toContain('http://127.0.0.1/*');
 });
 
-test('wasm-unsafe-eval is granted, or Tesseract cannot compile in the offscreen document', () => {
-  expect(chrome.content_security_policy?.extension_pages ?? '').toContain('wasm-unsafe-eval');
+// The reverse of what this used to assert. `wasm-unsafe-eval` was here so the in-page OCR engine
+// could compile its wasm; recognition is `POST /ocr` on the host now, so the package contains no
+// wasm at all - and a CSP relaxation kept for an engine that left is a standing invitation with
+// nothing behind it. Same for the vendored worker/core/language assets the package used to carry.
+test('the package grants nothing the departed OCR engine needed', () => {
+  const csp = chrome.content_security_policy?.extension_pages ?? '';
+  expect(csp).not.toContain('wasm-unsafe-eval');
+  expect(csp).toContain("script-src 'self'");
+  for (const m of [chrome, firefox]) {
+    const entries = (m.web_accessible_resources ?? []) as { resources?: string[] }[];
+    const exposed = entries.flatMap((r) => r.resources ?? []);
+    expect(exposed).not.toContain('vendor/*');
+  }
+});
+
+// The offscreen document outlived the worker it was created for - the host's origin allowlist is
+// what keeps it - but the REASON it declares has to match what it actually does.
+test('the offscreen document no longer claims a WORKERS reason', async () => {
+  const background = await Bun.file(new URL('../src/background.ts', import.meta.url)).text();
+  expect(background).not.toContain('Reason.WORKERS');
+  expect(background).toContain('Reason.AUDIO_PLAYBACK');
 });
 
 // Still load-bearing without native messaging: an unpacked extension's id is derived from its

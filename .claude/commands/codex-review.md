@@ -244,6 +244,41 @@ Worth keeping honest, since it tells you how much verification each round needs.
   still being served with no sender left in the tree — the "path has no consumer" shape it is
   usually best at, missed here because the prompt scoped it away.
 
+- **2026-08-09, the loopback transport fixes, three consecutive rounds** (`gpt-5.6-terra`, `high`,
+  same uncommitted working diff; rounds 1-2 that day covered the PP-OCR migration, 8 findings, all
+  real). **Rounds 3, 4 and 5 each returned 4 findings and every one of the 12 was real.** Rounds 4
+  and 5 reviewed only the previous round's fixes, and that is where the value was: 3 of round 4's
+  and 2 of round 5's landed on code that existed solely because of the round before.
+  - **Round 3** caught two security-relevant regressions I had just written: a `discard_body` that
+    let an *unauthenticated* peer make the host copy 64 MiB, and an 8 -> 32 MiB cap raise that
+    quadrupled a pre-auth `vec![0u8; len]` a peer sizes — both before the token check, on a runtime
+    shared with the pipe that feeds Kindle. It separated "regression" from "pre-existing unbounded
+    spawn" without being asked twice, and *verified* rather than assumed that `discard_body` itself
+    allocates nothing.
+  - **Round 4's best finding is the one to remember: a test that had silently stopped testing
+    anything.** I had proved the over-cap test failed without the fix — then a refactor moved the
+    drain into the test's own fixture, so from that point deleting it from the endpoint left the
+    test green. **A verification expires when the code under test moves.** Round 4 also disproved a
+    *justification* (not a rejection) by naming a call path: my "`/status` handshakes first" defence
+    of a lost 401 was true for the Play button and false for `kwr.readPage()`, which posts a page
+    image with no handshake at all.
+  - **Round 5 found the fix for round 4 skipping half its own contract.** `refuse_oversized` was
+    extracted precisely so drain-then-reply could not come apart — and it took the shared connection
+    deadline, so a slow upload cancelled the drain and the 413 went out underneath it anyway. **A
+    two-step contract wrapped in one function still has to guarantee both steps.** It also caught
+    the replacement test being wrong one level up (it drove the helper, not the wiring — the same
+    shape as its own round-4 finding) and a doc claim over-broad by one word (`refuse_oversized` is
+    the only writer of the *transport's* 413; `ocr_status_line` writes another).
+  - **Two rejections held under direct challenge across two rounds.** Asked for a specific disproof
+    — an unauthenticated peer-sized allocation, or a peer able to influence `BufReader`'s fixed
+    8 KiB prefetch — it produced neither and said so plainly rather than restating the risk. It also
+    cleared a concern I raised about `diagnosePaired`'s unbounded `/status` by finding the digest
+    cache makes the 10 MiB hash cold-only. **It returns empty priorities when they are clean.**
+  **Standing note, now five for five: its edge is the claim with no implementation and the path
+  with no consumer** — and a test that no longer covers what its name says is the same shape wearing
+  different clothes. New: it is good at *my own justifications*, which are softer targets than my
+  rejections, so state them in the prompt as things to attack.
+
 ## Notes
 
 - Requires `codex` >= 0.144 and a logged-in ChatGPT account. Older CLIs fail with a 400: the
