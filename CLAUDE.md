@@ -898,7 +898,22 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   `THIRD_PARTY_NOTICES.md`; if the patch changes, update that notice.
 - **Invariant: `LICENSE` + `THIRD_PARTY_NOTICES.md` + `licenses/` must ship inside the
   installer** (staged by `build-installer.ps1`, installed by `installer.nsi`) — GPLv3
-  requires the text to accompany the binaries.
+  requires the text to accompany the binaries. `licenses/` is staged and installed
+  **recursively**, so adding a text there needs no packaging edit.
+- **A licence that is NAMED but whose text isn't shipped is the bug.** Three were:
+  `dxcompiler.dll` shipped with no NCSA text at all, `unicode-ident`'s
+  `(MIT OR Apache-2.0) AND Unicode-3.0` had no Unicode text (the **`AND`** is why picking
+  Apache doesn't discharge it, and it's in 6 of the 8 lockfiles), and Dawn/Tint's
+  BSD-3-Clause was pointed at upstream. All three now have texts in `licenses/`.
+- **ONNX Runtime's notices are PROVISIONED, not tracked** — `fetch-deps.ps1` keeps the
+  wheel's own `LICENSE`/`ThirdPartyNotices.txt` into `native-deps/runtime/notices/` and
+  `build-installer.ps1` stages them to `licenses/onnxruntime/`. That keeps them matched to
+  the exact wheel the DLLs came from; a hand copy goes stale at the next version bump. Both
+  ends **throw** when they're missing — and the fetch re-runs when the notices are absent
+  even if the DLLs are present, or an old provision would never acquire them. The glob is
+  `Get-ChildItem $wex -Recurse -File -Include …` on the **bare** directory: adding the
+  conventional trailing `\*` matches **nothing** in that combination on PS 5.1 (measured,
+  0 vs 4).
 - **No shipped artifact may claim plain "MIT" in its version resource.** Three places set
   it and all three must stay accurate: `installer.nsi`'s `VIAddVersionKey`, and the
   `LegalCopyright` in `kokoro-host/build.rs` + `kokoro-panel/build.rs` (Windows shows that

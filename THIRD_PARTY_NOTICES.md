@@ -74,7 +74,7 @@ itself. The model files are a separate matter; see PP-OCR models below.
 | **ONNX Runtime** (WebGPU build) | `onnxruntime.dll`, `onnxruntime_providers_shared.dll` | MIT |
 | **Dawn / Tint** | statically linked into `onnxruntime.dll` | BSD-3-Clause |
 | **DirectX Shader Compiler** | `dxcompiler.dll`, `dxil.dll` | see below |
-| **Rust crates** | statically linked into both `.exe`s and the x86 `.dll`s | MIT OR Apache-2.0 |
+| **Rust crates** | statically linked into both `.exe`s and the x86 `.dll`s | MIT OR Apache-2.0, **and** Unicode-3.0 |
 | **Kokoro-82M** model weights | *not shipped* — downloaded on first run | Apache-2.0 |
 
 ---
@@ -144,8 +144,17 @@ Python wheel.
 
 ONNX Runtime itself bundles further third-party code — including **Dawn** and **Tint**
 (BSD-3-Clause, <https://dawn.googlesource.com/dawn>), which implement the WebGPU
-execution provider this application runs on. See ONNX Runtime's own
-`ThirdPartyNotices.txt` in the upstream repository for the complete list.
+execution provider this application runs on; Dawn's licence, which also covers Tint, is in
+[`licenses/dawn-BSD-3-Clause.txt`](licenses/dawn-BSD-3-Clause.txt).
+
+**ONNX Runtime's own licence and notice files ship in `licenses\onnxruntime\` beside the
+installed application**, taken verbatim from the same wheel the DLLs came out of. (They are
+provisioned rather than checked in, so that directory exists in an install and not in the
+source tree.) That is the authoritative and complete list of what ORT bundles — far
+more than this file enumerates — and provisioning it with the binaries is what keeps it
+matched to the exact build being shipped. `native-deps/fetch-deps.ps1` retains it and
+`packaging/build-installer.ps1` stages it; both fail loudly rather than ship the DLLs with
+no notices.
 
 ### DirectX Shader Compiler — `dxcompiler.dll`, `dxil.dll`
 
@@ -153,8 +162,11 @@ Upstream: <https://github.com/microsoft/DirectXShaderCompiler>. Copyright (c) Mi
 Corporation. Redistributed unmodified, exactly as obtained from the official
 `onnxruntime-webgpu` wheel; required by the WebGPU execution provider to compile
 shaders. The DirectX Shader Compiler is published under the University of
-Illinois/NCSA Open Source License; `dxil.dll` is a Microsoft-signed validator component
-redistributed under the terms accompanying its official binary release.
+Illinois/NCSA Open Source License — full text, including the licences of the components it
+in turn bundles, in [`licenses/dxcompiler-NCSA.txt`](licenses/dxcompiler-NCSA.txt). That
+licence requires its notice accompany binary redistributions, which is why the text is here
+and not merely named. `dxil.dll` is a Microsoft-signed validator component redistributed
+under the terms accompanying its official binary release.
 
 ### Google Material Symbols — Apache-2.0
 
@@ -197,6 +209,15 @@ transitive dependency. Each crate's `Cargo.lock` records the authoritative *list
 crates and versions — it does not record their licenses. To enumerate the licenses
 themselves, read the crates' own manifests, or run `cargo license` / `cargo about` in a
 crate directory.
+
+One term in that closure is **not** an alternative you can decline, so its text ships:
+`unicode-ident` — a dependency of six of the eight crate lockfiles, and so of nearly every
+binary here — is `(MIT OR Apache-2.0) AND Unicode-3.0`. The `AND` is the point: choosing
+Apache-2.0 does not discharge the Unicode licence, whose text is in
+[`licenses/Unicode-3.0.txt`](licenses/Unicode-3.0.txt). The other unusual licences in the
+closure are all `OR` alternatives already covered by the Apache-2.0 or MIT text shipped
+here — `ryu` (BSL-1.0), `untrusted` (ISC), `slotmap` and `foldhash` (Zlib), `webpki-roots`
+(CDLA-Permissive-2.0), all reached through Slint.
 
 Slint, listed separately above, is the one dependency in this set that is **not**
 permissively licensed.

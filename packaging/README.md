@@ -40,6 +40,15 @@ them from the staging list or the `File` directives. `licenses/` is staged and i
 **recursively**, so a new licence text there ships with no edit here — which is what keeps
 `Apache-2.0.txt` alongside `GPL-3.0.txt` without a second list to forget.
 
+ONNX Runtime's own licence and notice set is the exception: it is **provisioned, not
+tracked**. `fetch-deps.ps1` keeps it from the wheel into `native-deps\runtime\notices\` and
+this script stages it into `licenses\onnxruntime\`, so it stays matched to the exact build
+the DLLs came from instead of being a hand copy that goes stale at the next version bump.
+Both ends **throw** when it is absent rather than proceed: four of the installed binaries
+come out of that wheel, and `dxcompiler.dll`'s NCSA licence requires its notice accompany
+them. An installer missing licence text looks complete and is not — the same trap as the
+OCR models above.
+
 Nor may any shipped artifact claim plain "MIT" in its version resource — that's
 `VIAddVersionKey` here, **and** the `LegalCopyright` set in `kokoro-host/build.rs` and
 `kokoro-panel/build.rs`, which is what Windows shows in each exe's Properties dialog. See

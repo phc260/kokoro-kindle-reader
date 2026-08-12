@@ -90,6 +90,21 @@ Copy-Item (Join-Path $root 'LICENSE') $stage
 Copy-Item (Join-Path $root 'THIRD_PARTY_NOTICES.md') $stage
 Copy-Item -Recurse (Join-Path $root 'licenses') $stage
 
+#     ONNX Runtime's own licence + notice set, staged from native-deps rather than kept in
+#     the repo, so it stays matched to the exact wheel the shipped DLLs came out of. Four
+#     of the binaries we install come from that wheel, and dxcompiler.dll's licence
+#     (University of Illinois/NCSA) requires its notice accompany them.
+#     Throwing beats shipping without: an installer missing licence text looks complete and
+#     is not, which is the same trap as the OCR models above.
+$ortNotices = Join-Path $root 'native-deps\runtime\notices'
+if (-not (Test-Path (Join-Path $ortNotices '*'))) {
+    throw ("No ONNX Runtime notices at $ortNotices - run native-deps\fetch-deps.ps1 " +
+           '(it fetches them alongside the runtime DLLs).')
+}
+$ortStage = Join-Path $stage 'licenses\onnxruntime'
+New-Item -ItemType Directory -Force $ortStage | Out-Null
+Copy-Item (Join-Path $ortNotices '*') $ortStage -Force
+
 $res = Join-Path $stage 'resources'
 Copy-Item $sapiDll $res
 Copy-Item $hookDll $res
