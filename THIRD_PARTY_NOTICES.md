@@ -1,9 +1,10 @@
 # Third-party notices
 
-Kokoro Kindle Reader's own source code is MIT-licensed — see [`LICENSE`](LICENSE).
-The **distributed binaries** (the `-setup.exe` and everything it unpacks) additionally
-bundle third-party components, one of which is copyleft. This file is the notice that
-accompanies those binaries; the installer places a copy next to the application.
+Kokoro Kindle Reader's own source code is MIT-licensed — see [`LICENSE`](LICENSE) —
+apart from a handful of files ported from Apache-2.0 projects, listed below. The
+**distributed binaries** (the `-setup.exe` and everything it unpacks) additionally bundle
+third-party components, one of which is copyleft. This file is the notice that accompanies
+those binaries; the installer places a copy next to the application.
 
 ## The short version
 
@@ -12,9 +13,57 @@ accompanies those binaries; the installer places a copy next to the application.
 therefore conveyed under the GNU General Public License, version 3** — full text in
 [`licenses/GPL-3.0.txt`](licenses/GPL-3.0.txt).
 
-This does not restrict the project's own source: MIT is GPL-compatible, so every file
-in this repository remains available to you under MIT terms. Only the *combined binary*
-— MIT code linked against GPL code — is GPLv3.
+This does not restrict the project's own source: its terms are GPL-compatible, so the
+repository remains available to you under them. Only the *combined binary* — the project's
+own code linked against GPL code — is GPLv3. Those terms are MIT for most of the tree and
+Apache-2.0 for the ported files in the next section.
+
+## Source in this repository that is not MIT
+
+Two upstream projects are represented in this repository not as bundled binaries but as
+**source**: files here are ports or deliberate simplifications of their code. A derivative
+work carries the original's licence, so those files are offered under **Apache-2.0**, not
+MIT. Full text: [`licenses/Apache-2.0.txt`](licenses/Apache-2.0.txt).
+
+This changes nothing about how the application may be used or redistributed — Apache-2.0 is
+compatible with both MIT and GPLv3 — but attribution and a copy of the licence are
+conditions of that permission, and this section is where they are given.
+
+| File(s) | Derived from | License |
+|---|---|---|
+| `kokoro-host/src/text.rs`, the `phonemize_segment_spans` structure in `kokoro-host/src/espeak.rs`, the style-row rule in `kokoro-host/src/native_synth.rs` | **kokoro-js** | Apache-2.0 |
+| `kokoro-ocr/src/detect.rs`, `prep.rs`, `recognize.rs`, `session.rs` | **PaddleOCR** | Apache-2.0 |
+
+### kokoro-js — Apache-2.0
+
+Upstream: <https://github.com/hexgrad/kokoro> (npm `kokoro-js`).
+
+**This library is not a dependency of the project and never was** — it appears in no
+`package.json`, lockfile or `Cargo.toml` in any commit. It ran in the WebView2 edition that
+was deleted in July 2026, and nothing loads it today. The obligation comes from the *port*,
+which is still here and still maintained: Apache-2.0's conditions attach to a derivative
+work, and translating upstream's logic into this tree is a stronger form of that than
+linking the library would have been. This is an easy notice to lose, because the thing it
+covers looks like ordinary project source.
+
+`text.rs` is a behavioural port of that library's text normalization, punctuation
+segmentation and phoneme post-processing. It operates on UTF-8 bytes specifically so its
+scanning passes reproduce the upstream regexes, and it is verified by token-parity against
+the original — it is a translation of that code into Rust, not an independent
+implementation. `espeak.rs` mirrors the same library's `PhonemizeSegment` (trace to a file,
+fold clause-per-line into one space-joined string), and `native_synth.rs` takes its
+style-row selection rule, `clamp(nTokens - 2, 0, 509)`, from its `generate_from_ids`.
+
+### PaddleOCR — Apache-2.0
+
+Upstream: <https://github.com/PaddlePaddle/PaddleOCR>.
+
+`detect.rs` implements a deliberate simplification of PaddleOCR's DBNet post-processing —
+connected components and axis-aligned boxes in place of contour fitting and a Vatti polygon
+offset — and the threshold, normalization and geometry constants across `kokoro-ocr` are
+PaddleOCR's own defaults, which is the configuration the shipped weights were exported and
+evaluated under. Each is named against the upstream parameter it comes from in the source
+itself. The model files are a separate matter; see PP-OCR models below.
 
 ## Components in the installed application
 
@@ -113,7 +162,7 @@ Upstream: <https://github.com/google/material-design-icons>. Copyright Google In
 settings panel's icon buttons use glyphs from the Material Symbols (Rounded) set, checked
 into `kokoro-panel/ui/` as SVG and compiled into `kokoro-panel.exe`: `play-arrow`,
 `pause`, `stop`, `sprint`, and `resume`. Licensed under the Apache License, Version 2.0
-(<https://www.apache.org/licenses/LICENSE-2.0>). `resume` is **modified** — its left bar
+([`licenses/Apache-2.0.txt`](licenses/Apache-2.0.txt)). `resume` is **modified** — its left bar
 is lengthened past the play triangle; the rest are used unmodified apart from being
 recoloured at runtime.
 
@@ -134,7 +183,8 @@ pinned by SHA-256 and fetched at build time by
   <https://github.com/PT-Perkasa-Pilar-Utama/ppu-paddle-ocr-models>.
 
 All three are licensed under the Apache License, Version 2.0
-(<https://www.apache.org/licenses/LICENSE-2.0>), as are both redistributing projects.
+([`licenses/Apache-2.0.txt`](licenses/Apache-2.0.txt)), as are both redistributing projects
+and PaddleOCR itself.
 
 ### Rust crates — MIT OR Apache-2.0
 
@@ -158,8 +208,9 @@ of <https://huggingface.co/hexgrad/Kokoro-82M>). The weights and voice embedding
 **not** included in the installer — the settings panel downloads them from Hugging Face
 when you click **Download**, into your own user profile, per the checksums in
 [`model-manifest.json`](https://github.com/phc260/kokoro-kindle-reader/blob/main/model-manifest.json).
-They are licensed Apache-2.0 by their authors, and your use of them is governed by that
-license and by Hugging Face's terms.
+They are licensed Apache-2.0 by their authors
+([`licenses/Apache-2.0.txt`](licenses/Apache-2.0.txt)), and your use of them is governed by
+that license and by Hugging Face's terms.
 
 ---
 

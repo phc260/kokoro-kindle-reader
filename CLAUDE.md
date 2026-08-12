@@ -880,11 +880,19 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   are staged into the installer's `ocr\`, beside the exe.
 - There is **no root workspace**; each crate builds standalone with its own target dir.
 
-### Licensing of the bundle (MIT source, GPLv3 binaries)
+### Licensing of the bundle (permissive source, GPLv3 binaries)
 - The project's own code is **MIT**, but the shipped app links **espeak-ng**
   (GPL-3.0-or-later) and **Slint** under its GPL-3.0-only option, so **every binary
   release is conveyed under GPLv3**. That's fine and doesn't restrict the repo — MIT is
   GPL-compatible — but it comes with obligations that live in code, not just docs.
+- **The tree is not uniformly MIT, and saying it is was the bug.** `text.rs` is a port of
+  **kokoro-js** (Apache-2.0) verified by token-parity against it, `espeak.rs` mirrors its
+  `PhonemizeSegment`, `native_synth.rs` takes its style-row rule; `kokoro-ocr`'s `detect.rs`
+  simplifies **PaddleOCR**'s DBNet post-processing and its constants are PaddleOCR's
+  defaults. Those files carry Apache-2.0, which is why `licenses/Apache-2.0.txt` exists and
+  why `THIRD_PARTY_NOTICES.md` names them file by file. Attribution is a *condition* of
+  Apache-2.0, not a courtesy — a new port of upstream code adds a row there, and the source
+  comment saying where it came from is what makes that row findable later.
 - **`build-espeak.ps1` *modifies* espeak-ng** (the horse-hoarse `o@` revert), so GPLv3
   §5(a) requires a stated notice of modification + date. It's in
   `THIRD_PARTY_NOTICES.md`; if the patch changes, update that notice.

@@ -234,7 +234,12 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
   `live` options are published before `narratorFor()` is awaited, which on a first Play is seconds.
 - **Kindle 18632's narrator is event-driven.** The SAPI engine must emit word/sentence/
   bookmark events at true audio offsets, or Kindle speaks one sentence per page and stops.
-- **The bundle is GPLv3 even though the source is MIT.** The app links espeak-ng
+- **The tree is not uniformly MIT.** `kokoro-host/src/text.rs` (+ `espeak.rs`'s
+  `PhonemizeSegment` mirror, `native_synth.rs`'s style-row rule) is ported from **kokoro-js**
+  and `kokoro-ocr/src/detect.rs` (+ the `kokoro-ocr` constants) from **PaddleOCR** — both
+  Apache-2.0, both attributed file-by-file in `THIRD_PARTY_NOTICES.md`, with the text in
+  `licenses/Apache-2.0.txt`. Flag any new port of upstream code that doesn't add a row there.
+- **The bundle is GPLv3 even though the source is permissive.** The app links espeak-ng
   (GPL-3.0-or-later, and *modified* by `native-deps/build-espeak.ps1`) and Slint under its
   GPL-3.0 option. So `LICENSE` + `THIRD_PARTY_NOTICES.md` + `licenses/` must stay staged
   by `build-installer.ps1` and installed by `installer.nsi`. No shipped artifact may claim

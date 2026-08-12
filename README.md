@@ -165,15 +165,17 @@ CI, releasing) is in [**DEVELOPMENT.md**](DEVELOPMENT.md).
 
 ## Licensing
 
-This project's own source code is **MIT** — see [LICENSE](LICENSE). Reuse any of it on
-MIT terms.
+This project's own source code is **MIT** — see [LICENSE](LICENSE) — with the exception of
+a few files ported from **Apache-2.0** projects (`kokoro-js`, PaddleOCR), which carry that
+licence instead. Both are permissive and both permit reuse; which files, and what they were
+ported from, is in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 The **installed app** is a different question, because it bundles third-party pieces:
 it links [espeak-ng](https://github.com/espeak-ng/espeak-ng) (GPL-3.0-or-later, and
 patched here for phoneme parity with the model) and [Slint](https://slint.dev) under its
 GPL-3.0 option. **The binaries in a release are therefore conveyed under the GNU GPL
-version 3.** That's the normal outcome of MIT code linking a GPL library — it doesn't
-restrict the source in this repository, only the combined binary.
+version 3.** That's the normal outcome of permissively licensed code linking a GPL library
+— it doesn't restrict the source in this repository, only the combined binary.
 
 Full component list, the required notice of modification to espeak-ng, and where to get
 corresponding source: [**THIRD_PARTY_NOTICES.md**](THIRD_PARTY_NOTICES.md). The GPLv3
