@@ -7,33 +7,47 @@ This is the engine only. It decides **nothing** about what gets narrated.
 
 ## Why two models rather than one engine
 
-The first version of this crate was native Tesseract, and a single real Cloud Reader
-picture-book page withdrew it: four sparse lines of large serif type in the corner of a
-full-page illustration. Tesseract's own quality guide says its page segmentation expects a page
-of text, and the fix would have been a growing pile of layout heuristics.
+> **This section is the canonical record of why the crate is shaped this way**, and the only place
+> in the repo that argues it. Everything else — `CLAUDE.md`, `AGENTS.md`, the file headers here and
+> in the extension's `src/ocr/` — states the *rule* and points here for the *reason*. It was told
+> in eight places once, which is how a settled decision starts being re-litigated.
+>
+> Every rule below was **measured**, against alternatives, before it was written down. What is
+> recorded here is the decision and what follows from it; the bake-off itself is not part of this
+> repo, and figures from it are deliberately not quoted — they date, they are machine-specific, and
+> nobody reading the code can reproduce them from it. Several of these rules **invert** what a
+> general-purpose OCR engine would want, so read what each one says rather than deriving it from
+> such an engine's properties.
+
+The first version of this crate was a conventional single-pass OCR engine — one that takes a page,
+segments it itself, and returns text — and a single real Cloud Reader picture-book page withdrew
+it: four sparse lines of large serif type in the corner of a full-page illustration. Page
+segmentation of that kind assumes a page *of text*. Finding four words inside artwork is a
+different job from reading them, and closing the gap would have meant a growing pile of layout
+heuristics owned by this project.
 
 PP-OCR separates the two jobs by construction. A DBNet **detector** emits a text-probability
 map over the page, and only the regions it finds are handed to a CTC **recognizer**. That also
-fixes a product-policy defect Tesseract could not: it returns a running head and its folio as
-**two** lines, so `repeatsAcrossPages` can match the head — where Tesseract merged them into
-`FIELD-GUIDE TO HARBOURS 293`, whose text changes every page, so the head was narrated forever
-(OCR_EXPERIMENT.md, Result 3).
+fixes a product-policy defect the single-pass approach could not: it returns a running head and
+its folio as **two** lines, so `repeatsAcrossPages` can match the head. Merged into one line
+— `FIELD-GUIDE TO HARBOURS 293` — the text changes every page, nothing ever repeats, and the head
+is narrated forever. `test/furniture.test.ts` pins both halves of that.
 
 ## The boundary, and why it is here
 
-The extension used to run Tesseract.js in a worker — ~17 MiB of wasm and language data in the
-package, a `wasm-unsafe-eval` CSP allowance, and an engine re-warmed every browser session.
+The extension used to run its own OCR engine in a worker — ~17 MiB of wasm and language data in
+the package, a `wasm-unsafe-eval` CSP allowance, and an engine re-warmed every browser session.
 This crate is that recognition moved to the host, reached over one authenticated loopback
 endpoint (`POST /ocr`, in [`kokoro-host/src/webserve.rs`](../kokoro-host/src/webserve.rs)).
 
 What did **not** move, and must not:
 
-| stays in `src/content/ocr.ts` | lives here |
+| stays in the extension's `src/ocr/` | lives here |
 |---|---|
-| dark-page detection, gutter detection, column split | image decode, the model-specific resize and normalization |
-| missed-gutter retry (`looksInterleaved` → re-split) | session lifetime, detection, recognition, reading order |
-| furniture suppression + its cross-page memory | request bounds, scheduling, cancellation, engine health |
-| text cleanup, character offsets, reflow relocation | model assets, pinning, integrity |
+| dark-page detection, gutter detection, column split (`layout.ts`) | image decode, the model-specific resize and normalization |
+| missed-gutter retry — `looksInterleaved` (`lines.ts`) → re-split | session lifetime, detection, recognition, reading order |
+| furniture suppression + its cross-page memory (`furniture.ts`) | request bounds, scheduling, cancellation, engine health |
+| text cleanup, character offsets, reflow relocation (`index.ts`) | model assets, pinning, integrity |
 
 Those left-hand rules can silently remove a line of the book, and they were paid for in four
 separate content losses. Swapping the engine underneath them is already the whole change;
@@ -59,7 +73,7 @@ reuse. That is a separate, reviewed change.
 ## Things that are the way they are for a reason
 
 - **The public API is target-neutral.** No HTTP, browser, Windows-UI, named-pipe or synthesis
-  types appear in it, so the Linux blueprint reuses the crate unchanged and everything that
+  types appear in it, so a non-Windows port reuses the crate unchanged and everything that
   knows about the transport stays in `webserve.rs`.
 - **It does not initialize ONNX Runtime, and must not.** `ort`'s own guidance is that a library
   crate lets the application create the environment. The host does it in `main`, **before
@@ -71,21 +85,24 @@ reuse. That is a separate, reviewed change.
   `load-dynamic`, same `default-features = false`. Two `ort` versions in one process would be
   two `OrtApi` tables against one library, and ort's defaults include *downloading* a runtime,
   which a host that stages its own must never do.
-- **There is no feature switch and no stub engine.** Tesseract needed one: the FFI was a link
-  dependency, so the crate could not build at all on a machine without a 9 MB native stack.
-  These models are loaded at run time, so `cargo test` runs here with nothing provisioned and a
-  host with nothing staged reports `missing`.
-- **The image arrives in colour and is neither flattened nor inverted.** That is a reversal of
-  the Tesseract path, which wanted dark ink on a light ground. A detector whose job is to find
-  four words inside an illustration needs that contrast, and the models are trained on scenes
-  rather than scans. Checked on a rendered dark-theme fixture: light-on-dark reads perfectly
+- **There is no feature switch and no stub engine, and nothing here should grow one.** An engine
+  reached through FFI needs both, because linking it is a *build* dependency: the crate cannot
+  compile at all on a machine without a 9 MB native stack, let alone test its pure logic. These
+  models are loaded at RUN time, so `cargo test` runs here with nothing provisioned and a host
+  with nothing staged reports `missing`.
+- **The image arrives in colour and is neither flattened nor inverted.** That reverses what the
+  extension used to do, and the reversal is the point: a general-purpose OCR engine asks for dark
+  ink on a light ground, so the page was flattened and sometimes inverted before it was posted. A
+  detector whose job is to find four words inside an illustration needs every bit of that
+  discarded contrast, and these models are trained on scenes rather than scans. Checked on a rendered dark-theme fixture: light-on-dark reads perfectly
   with no inversion. A real dark-theme Cloud Reader capture is still on the corpus gate.
-- **There is no page-wide upscaling, and its absence is deliberate.** Under Tesseract, scale was
-  the dominant accuracy lever — 16.19 % word error to 0.95 % from doubling the input alone —
-  because Tesseract reads whatever resolution it is handed. The recognizer here resizes every
-  detected line to a fixed 48 px height from the **source** pixels, so small type is upsampled
-  for free, per line. A 2x in front of that would resample twice and quadruple the detector's
-  input for nothing.
+- **There is no page-wide upscaling, and its absence is deliberate.** The recognizer here resizes
+  every detected line to a fixed 48 px height from the **source** pixels, so small type is
+  upsampled for free, per line. A 2x in front of that would resample twice and quadruple the
+  detector's input for nothing. This **inverts** the previous engine's strongest accuracy lever:
+  an engine that reads whatever resolution it is handed gains a great deal from a page-wide
+  upscale, and one that normalizes every line to a fixed height gains nothing from it. Do not port
+  that reasoning across.
 - **The detector's post-processing is a documented simplification.** Upstream takes contours,
   fits a minimum-area rectangle and offsets the polygon with a Vatti clip; this takes connected
   components and axis-aligned boxes with the equivalent offset for a rectangle. For horizontal
@@ -104,8 +121,10 @@ reuse. That is a separate, reviewed change.
 - **Word boxes come from CTC timesteps.** Detection returns *line* boxes, but `hasOutlierGap`
   measures the gap between consecutive *words* — so an engine that could not produce word boxes
   could not drive the extension's policy at all. The timestep at which a character fires is its
-  x-position, and the space class is what splits words. Measured against Tesseract's
-  pixel-exact boxes for 170 words: x0 out by a mean of 1.78 px, x1 by 3.00 px.
+  x-position, and the space class is what splits words. Checked against an independent engine's
+  pixel-exact boxes over a page of book text: the disagreement is sub-character on both edges.
+  `recognize.rs`'s `a_words_box_spans_the_timesteps_that_produced_it` is what holds the mapping in
+  place from here on.
 - **The dictionary's leading empty sentinel is dropped and a space class is appended.** The
   first is the upstream file's own placeholder for the blank, which this decoder supplies at
   class 0 — keeping it would shift the entire alphabet by one and decode every character as its
@@ -169,12 +188,15 @@ fetch script. Both sources are Apache-2.0 ONNX conversions of PaddleOCR models.
 | `rec.onnx` | `ppu-paddle-ocr-models` · `.../en/v5/en_PP-OCRv5_mobile_rec_infer.onnx` | 7.49 MiB |
 | `en_dict.txt` | `ppu-paddle-ocr-models` · `.../en/v5/ppocrv5_en_dict.txt` | 1,417 bytes |
 
-CPU, by measurement: WebGPU was **2.27x slower** for warm recognition on this pair and returned
-identical text and boxes. Recognition is still unbatched, so if that changes the provider has to
-be measured again rather than inferred.
+CPU, by measurement: WebGPU came out slower for warm recognition on this pair and returned
+identical text and boxes — the expected shape, since detection is one small convolutional pass and
+recognition one inference per line, so neither amortizes a GPU upload. Recognition is still
+unbatched, which is the assumption most likely to change; if it does, measure again rather than
+inferring.
 
 English only. Adding a language is a different recognizer, a different dictionary and a
-different class count — not the file drop Tesseract made cheap.
+different class count — three pinned files and a re-measured fixture set, not a language pack
+dropped into a directory.
 
 ## Building and testing
 

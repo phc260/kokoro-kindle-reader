@@ -17,6 +17,8 @@ export type Gender = 'female' | 'male';
 export interface VoiceDescription {
   /** The name alone: "Fenrir". Suitable as the <option> text inside an accent/gender group. */
   name: string;
+  /** Kokoro's published grade for this voice ("A", "C+"), when it has one. See `KOKORO_GRADE`. */
+  quality?: string;
   /** "American English" - absent when it cannot be told. */
   accent?: string;
   /** "American" - the same thing at the width a narrow dropdown affords. */
@@ -71,6 +73,66 @@ const BY_LANG: Record<string, Omit<Accent, 'lang'>> = {
 /** `<lang><gender>_<name>`. Deliberately strict, so no platform voice can accidentally match. */
 const KOKORO_ID = /^([a-z])([fm])_([a-z][a-z0-9]*)$/;
 
+/**
+ * Kokoro-82M's own overall grade per voice, from the model card's `VOICES.md`.
+ *
+ * These are not opinions formed here and they are not measured here either: they are the
+ * publisher's, and they combine how good the voice is meant to be with how much audio it was
+ * actually trained on. That second half is why the spread is so wide - `af_heart` is an A and
+ * `am_adam` an F+ in the same download - and why an alphabetical list is actively misleading:
+ * `af_alloy` sits first in the American female group at a C, three rows above the A.
+ *
+ * It is a lookup, deliberately, rather than anything derived from the id. Nothing in
+ * `af_bella` says A-. A voice that is not in this table simply has no grade: every platform
+ * voice, and any voice someone drops into the model directory later. Those keep the alphabetical
+ * order they always had, at the end of their bucket - an unknown voice must not be ranked as
+ * though it were the worst one, only as the one nothing is known about.
+ */
+const KOKORO_GRADE: Record<string, string> = {
+  af_heart: 'A',
+  af_bella: 'A-',
+  af_nicole: 'B-',
+  bf_emma: 'B-',
+  af_aoede: 'C+',
+  af_kore: 'C+',
+  af_sarah: 'C+',
+  am_fenrir: 'C+',
+  am_michael: 'C+',
+  am_puck: 'C+',
+  af_alloy: 'C',
+  af_nova: 'C',
+  bf_isabella: 'C',
+  bm_fable: 'C',
+  bm_george: 'C',
+  af_sky: 'C-',
+  bm_lewis: 'D+',
+  af_jessica: 'D',
+  af_river: 'D',
+  am_echo: 'D',
+  am_eric: 'D',
+  am_liam: 'D',
+  am_onyx: 'D',
+  bf_alice: 'D',
+  bf_lily: 'D',
+  bm_daniel: 'D',
+  am_santa: 'D-',
+  am_adam: 'F+',
+};
+
+/** Best first. Written out rather than computed from the letter, so the order IS the list. */
+const GRADE_ORDER = ['A', 'A-', 'B+', 'B', 'B-', 'C+', 'C', 'C-', 'D+', 'D', 'D-', 'F+', 'F'];
+
+/** The published grade for a voice id, if it has one. */
+export function qualityOf(name: string): string | undefined {
+  return KOKORO_GRADE[name];
+}
+
+/** Where a voice sorts. Ungraded voices share the last rank and fall back to their name. */
+const qualityRank = (name: string): number => {
+  const i = GRADE_ORDER.indexOf(KOKORO_GRADE[name] ?? '');
+  return i >= 0 ? i : GRADE_ORDER.length;
+};
+
 /** BCP-47 tag for a voice id, when the id says. Lets the Kokoro narrators stop claiming en-US
  *  for the British voices. */
 export function langOf(name: string): string | undefined {
@@ -83,12 +145,15 @@ export function describeVoice(name: string, lang?: string): VoiceDescription {
   if (id) {
     const accent = BY_PREFIX[id[1]!];
     const bare = id[3]!;
-    return format(
-      bare.charAt(0).toUpperCase() + bare.slice(1),
-      accent,
-      id[2] === 'f' ? 'female' : 'male',
-      accent?.lang ?? lang,
-    );
+    return {
+      ...format(
+        bare.charAt(0).toUpperCase() + bare.slice(1),
+        accent,
+        id[2] === 'f' ? 'female' : 'male',
+        accent?.lang ?? lang,
+      ),
+      quality: qualityOf(name),
+    };
   }
 
   const tag = lang?.toLowerCase();
@@ -195,7 +260,15 @@ const genderRank = (label: string): number => {
  * them, so a gender with nothing under it cannot be selected and no combination is a dead end.
  *
  * Order: accent by preference (American, British, other, network last), then Female, Male, Any,
- * then name.
+ * then QUALITY - Kokoro's published grade, best first - and only then name.
+ *
+ * Quality rather than the alphabet because the name carries no information at all: nothing about
+ * `af_alloy` says it is a C and nothing about `af_heart` says it is the A, so an alphabetical
+ * list put the best voice in the download four rows below a mediocre one and made the first entry
+ * of each group - which is what an unset preference lands on - an accident of spelling. Names
+ * only break ties, and a voice whose id is not in the table keeps the alphabetical order it always
+ * had (which is every platform voice in practice - but the lookup reads the id, so it is the id
+ * that decides).
  */
 export function buildVoiceTree(vs: readonly VoiceInfo[]): AccentBucket[] {
   // The bucket a voice lands in is decided FIRST, because it is not always its own accent:
@@ -222,7 +295,11 @@ export function buildVoiceTree(vs: readonly VoiceInfo[]): AccentBucket[] {
       const byLabel = a.label.localeCompare(b.label);
       if (byLabel) return byLabel;
     }
-    return genderRank(a.gender) - genderRank(b.gender) || a.voice.desc.name.localeCompare(b.voice.desc.name);
+    return (
+      genderRank(a.gender) - genderRank(b.gender) ||
+      qualityRank(a.voice.name) - qualityRank(b.voice.name) ||
+      a.voice.desc.name.localeCompare(b.voice.desc.name)
+    );
   });
 
   // Keyed lookup, never adjacency. Sorting on one key and then merging neighbours on a

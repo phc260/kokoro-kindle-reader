@@ -238,8 +238,10 @@ fn commit_voice(ui: &AppWindow, voices: &[Voice], controls: &Arc<Mutex<Controls>
 // "Synthesize on GPU" asks the user to answer a question they have no way to answer:
 // on one laptop the integrated GPU runs at half the CPU's rate, on the next machine
 // it's several times faster, and the hardware name doesn't tell you which. So the panel
-// measures it — kokoro-bench, which settled the same question during development, but
-// wired to a dialog and run against the engine the user actually has installed.
+// measures it, against the engine the user actually has installed. A standalone timing crate
+// answered the same question during development and has since been removed; this is the only
+// place the comparison is made now, which is the right place for it - it is the user's own
+// machine that decides.
 
 /// A measured engine, as the results row shows it.
 fn speed_text(s: Option<benchmark::Speed>) -> String {
@@ -304,7 +306,7 @@ fn run_speed_test(
     // paints an empty line before this thread gets going).
     //
     // Known skew, accepted: on a laptop where the iGPU and the CPU cores share one
-    // package power budget (see kokoro-bench), the CPU is measured on a warmer package
+    // package power budget, the CPU is measured on a warmer package
     // than the GPU was, so a near-tie can tilt toward whichever runs first. Every remedy
     // costs more than it buys — a cooldown adds dead time to a modal the user is already
     // waiting at, and reversing or shuffling the order just moves the bias. The tie band

@@ -29,7 +29,6 @@ commit, tag, or push (those are deliberate, separate steps).
    - `kokoro-hook/Cargo.toml`
    - `kokoro-inject/Cargo.toml`
    - `kokoro-sapi-smoke/Cargo.toml`
-   - `kokoro-bench/Cargo.toml`
    - `kokoro-ocr/Cargo.toml`
 
    In `packaging/installer.nsi` — **both** the three-part define and the four-part

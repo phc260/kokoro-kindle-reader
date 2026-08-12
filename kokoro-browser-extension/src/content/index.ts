@@ -6,7 +6,7 @@
 // "top") to "Kokoro Kindle Reader" - the extension's manifest name - first.
 
 import * as capture from './capture';
-import * as ocr from './ocr';
+import * as ocr from '../ocr';
 import { recognizePage, recognizeColumnOf } from './ocr-client';
 import { sentenceEnd, type TextPart } from '../speak';
 import * as narrate from './narrate';
@@ -29,7 +29,7 @@ let markOwner = 0;
 /**
  * Furniture is the only way a line of the book can go unread, and it is invisible by
  * construction: the dropped text OCR'd perfectly, so no confidence or accuracy check can point
- * at it. `ocr.ts` has always collected the reasons; nothing ever showed them, which made "a line
+ * at it. `src/ocr/` has always collected the reasons; nothing ever showed them, which made "a line
  * was skipped" a bug with no evidence anywhere.
  */
 function logDropped(furniture: { text: string; reason: string }[]): void {
@@ -330,6 +330,17 @@ const api = {
     }
   },
 
+  /**
+   * Speak one sentence in a voice, so it can be heard before a book is committed to.
+   *
+   * Deliberately the plain `narrate` path and not a page: no capture, no OCR, no highlight and no
+   * page turn, which is what makes it work on the library where none of those exist. It goes to
+   * the same engine the book will, so what is heard here is what will be read.
+   */
+  previewVoice(text: string, options?: Parameters<typeof narrate.narrate>[1]): Promise<void> {
+    return narrate.narrate(text, options);
+  },
+
   /** Probe the native backend and report exactly what happened. */
   kokoro(): Promise<unknown> {
     return narrate.kokoroStatus();
@@ -342,21 +353,27 @@ const api = {
     console.log('[kwr] stopped');
   },
 
-  /** Show/hide the control panel by hand; it also mounts itself when a book is open. */
+  /** Show/hide the control panel by hand; it also mounts itself on the reader and the library. */
   panel: {
     show(): void {
       panel?.destroy();
-      panel = mountPanel({
-        readBook: (o) => api.readBook(o),
-        stop: () => api.stop(),
-        pause: () => narrate.pause(),
-        resume: () => narrate.resume(),
-        retune: (rate) => narrate.retune(rate),
-        voices: () => narrate.voices(),
-        engine: () => narrate.engineKind(),
-        engineError: () => narrate.engineError(),
-        position: () => capture.position(),
-      });
+      panel = mountPanel(
+        {
+          readBook: (o) => api.readBook(o),
+          stop: () => api.stop(),
+          preview: (text, o) => api.previewVoice(text, o),
+          narrating: () => narrate.narrating(),
+          hasBook: () => capture.isReaderActive(),
+          pause: () => narrate.pause(),
+          resume: () => narrate.resume(),
+          retune: (rate) => narrate.retune(rate),
+          voices: () => narrate.voices(),
+          engine: () => narrate.engineKind(),
+          engineError: () => narrate.engineError(),
+          position: () => capture.position(),
+        },
+        { bookOpen: capture.isReaderActive() },
+      );
     },
     hide(): void {
       panel?.destroy();
@@ -365,10 +382,22 @@ const api = {
   },
 };
 
-/** Tear down the in-page UI. The highlight goes with the panel - both belong to an open book. */
+/** Tear down the in-page UI. Called when the tab leaves the Cloud Reader altogether. */
 function unmountUi(): void {
   panel?.destroy();
   panel = null;
+  unmountHighlight();
+}
+
+/**
+ * Drop the word mark.
+ *
+ * Separate from the panel now that the two have different lifetimes: the panel belongs to the
+ * Cloud Reader, the highlight belongs to the *book*. Without a book it has nothing to point at
+ * and its measurements describe a page that is gone, so closing one back to the library takes it
+ * down even though the panel stays.
+ */
+function unmountHighlight(): void {
   highlight?.destroy();
   highlight = null;
 }
@@ -433,7 +462,7 @@ addEventListener('message', async (e: MessageEvent) => {
 const r = capture.route();
 console.log(
   `[kwr] loaded on ${r.href}\n` +
-    `      onReader=${r.onReader} asin=${r.asin}\n` +
+    `      onReader=${r.onReader} onLibrary=${r.onLibrary} asin=${r.asin}\n` +
     `      try: await kwr.selftest() | await kwr.readPage() | await kwr.speakPage() | kwr.stop()\n` +
     `           await kwr.dumpCapture() | await kwr.net()`,
 );
@@ -444,13 +473,30 @@ capture.onRouteChange((next) => {
   console.log('[kwr] route change', next);
 });
 
-// Mount the panel only when a book is actually open and rendered - not on the library, not on a
-// loading state. Unmounts again when the reader goes away.
-capture.onReaderActive((active) => {
-  if (active && !panel) {
-    api.panel.show();
-    console.log('[kwr] reader detected - panel mounted');
-  } else if (!active && panel) {
+// Where the panel belongs: the whole Cloud Reader, the library included.
+//
+// It used to appear only once a book was open and rendered, which meant everything the panel
+// settles BEFORE reading - the voice, the speed, and whether Kokoro is reachable at all or the
+// browser is about to fall back to a platform voice - was unreachable until the reader had already
+// been opened. The library is where a session starts and where it comes back between books, so it
+// is exactly where those belong.
+//
+// Two states, not one. The panel's presence follows the site; its transport follows the book,
+// because Play still has to capture a rendered page. A loading state is neither: no page image
+// yet, so `reader` is false and Play stays disabled until there is something to capture.
+capture.onSurfaceChange(({ reader, library }) => {
+  if (!reader && !library) {
     unmountUi();
+    return;
   }
+
+  if (!panel) {
+    api.panel.show();
+    console.log(`[kwr] ${reader ? 'reader' : 'library'} detected - panel mounted`);
+  }
+  panel?.setBookOpen(reader);
+
+  // The mark measured a page that no longer exists; the panel it used to be torn down with is
+  // still on screen.
+  if (!reader) unmountHighlight();
 });

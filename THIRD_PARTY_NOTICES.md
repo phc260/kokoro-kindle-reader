@@ -117,6 +117,25 @@ into `kokoro-panel/ui/` as SVG and compiled into `kokoro-panel.exe`: `play-arrow
 is lengthened past the play triangle; the rest are used unmodified apart from being
 recoloured at runtime.
 
+### PP-OCR models (Cloud Reader OCR) — Apache-2.0
+
+Two ONNX models and a character dictionary, **installed with the application** into
+`ocr\` beside the executables, where `kokoro-host` loads them to recognize Kindle Cloud
+Reader pages. They are PP-OCR models originating with PaddleOCR
+(<https://github.com/PaddlePaddle/PaddleOCR>) and are redistributed here unmodified,
+pinned by SHA-256 and fetched at build time by
+[`native-deps/fetch-ocr-models.ps1`](https://github.com/phc260/kokoro-kindle-reader/blob/main/native-deps/fetch-ocr-models.ps1)
+— no copy of the weights is checked into this repository.
+
+- **`det.onnx`** — the PP-OCRv3 English text *detector*, taken from
+  <https://huggingface.co/SWHL/RapidOCR>.
+- **`rec.onnx`** and **`en_dict.txt`** — the PP-OCRv5 English mobile text *recognizer* and
+  its character dictionary, taken from
+  <https://github.com/PT-Perkasa-Pilar-Utama/ppu-paddle-ocr-models>.
+
+All three are licensed under the Apache License, Version 2.0
+(<https://www.apache.org/licenses/LICENSE-2.0>), as are both redistributing projects.
+
 ### Rust crates — MIT OR Apache-2.0
 
 The two executables and the three x86 libraries statically link a number of crates from

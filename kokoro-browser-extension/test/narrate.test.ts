@@ -54,7 +54,15 @@ beforeEach(() => {
   };
 });
 
-const { PortNarrator, narrateStream, engineKind, engineError, useEngine } = await import('../src/content/narrate');
+const { PortNarrator, narrateStream, narrating, stop, engineKind, engineError, useEngine } = await import(
+  '../src/content/narrate'
+);
+
+/** One part, as `speakPage` yields them. */
+const onePart = (text = 'a page') =>
+  (async function* () {
+    yield { text, base: 0 };
+  })();
 
 test('a reply resolves speak, and the listener is cleaned up after', async () => {
   const n = new PortNarrator();
@@ -257,4 +265,122 @@ test('a disconnect caused by the reload itself still rejects, instead of hanging
   p.disconnect();
 
   await expect(speaking).rejects.toThrow(/reloaded.*refresh this page/i);
+});
+
+// --- "is anything being spoken?" -------------------------------------------------------------
+//
+// Play-as-preview (the library action) asks this before it starts a sample, because a second
+// utterance does
+// not play alongside the first - the worker bumps its generation and calls `closeAll()`, so the
+// preview would END the book. The panel's own `reading` flag cannot answer it: `kwr.readBook()`
+// from the console or the page-world bridge never touches it.
+
+test('an utterance in flight counts as narration, and a finished one stops counting', async () => {
+  useEngine('chrome-tts');
+  expect(narrating()).toBe(false);
+
+  const page = narrateStream(onePart(), { rate: 1 });
+  expect(narrating()).toBe(true); // true BEFORE the first await, or a same-tick press misses it
+
+  await Bun.sleep(0);
+  const p = FakePort.live[0]!;
+  p.reply({ t: 'end', id: (p.sent[0] as { id: string }).id });
+  await page;
+  expect(narrating()).toBe(false);
+});
+
+test('a stopped utterance stops counting even when the worker never answers', async () => {
+  // The failure this guards: `speakParts` has no reply deadline, and the worker sends `end` only
+  // after its own `speakStream` returns - which can be parked on an offscreen request that never
+  // comes back (a closed offscreen document leaves the PORT healthy, so nothing rejects). Waiting
+  // for the promise to settle would leave this stuck true for the life of the page, and the only
+  // symptom would be Preview refusing every press, citing a book stopped long ago.
+  useEngine('chrome-tts');
+  const page = narrateStream(onePart(), { rate: 1 });
+  await Bun.sleep(0);
+  expect(narrating()).toBe(true);
+
+  stop(); // the worker is never going to answer this one
+  expect(narrating()).toBe(false);
+
+  // And the abandoned promise settling late must not push the count below zero, which would make
+  // the NEXT utterance invisible - the same bug pointing the other way.
+  const p = FakePort.live[0]!;
+  p.reply({ t: 'end', id: (p.sent[0] as { id: string }).id });
+  await page;
+  expect(narrating()).toBe(false);
+
+  const next = narrateStream(onePart('the next one'), { rate: 1 });
+  await Bun.sleep(0);
+  expect(narrating()).toBe(true);
+
+  const p2 = FakePort.live.at(-1)!;
+  p2.reply({ t: 'end', id: (p2.sent.at(-1) as { id: string }).id });
+  await next;
+  expect(narrating()).toBe(false);
+});
+
+test('Stop reaches the narrator a mid-page fallback displaced, not just the fallback', async () => {
+  // The fallback swaps the module narrator to speechSynthesis so Stop can reach the engine now
+  // speaking. That left Stop unable to reach the one it replaced - and when the fallback was caused
+  // by ONE FAILED CHUNK rather than a dead worker, that narrator's port, worker and offscreen
+  // document are all still alive, holding up to MAX_LEAD_S of already-rendered book audio. Stop
+  // silenced the system voice, cleared `narrating()`, and left the book playing under a panel
+  // reporting idle.
+  //
+  // The Stop has to land WHILE the fallback is in flight. `runStream`'s `finally` puts the
+  // displaced narrator back as the module one, so a Stop after the page ends reaches it anyway and
+  // proves nothing - which is what the first version of this test did.
+  let finishUtterance: (() => void) | null = null;
+  (globalThis as Record<string, unknown>).speechSynthesis = {
+    getVoices: () => [],
+    speak(u: { onend?: () => void }) {
+      finishUtterance = () => u.onend?.();
+    },
+    cancel() {},
+    pause() {},
+    resume() {},
+  };
+  (globalThis as Record<string, unknown>).SpeechSynthesisUtterance = class {
+    onend: (() => void) | null = null;
+    onerror: unknown = null;
+    onboundary: unknown = null;
+    constructor(public text: string) {}
+  };
+
+  // The page must still have text left when the chunk fails, or the fallback has nothing to say
+  // and never reaches `speak` - `parts` is a stream and the fallback resumes from where the failed
+  // attempt left it. So the source is gated: one part goes out over the port, the next is withheld
+  // until the failure has landed.
+  let openGate: () => void;
+  const gate = new Promise<void>((r) => (openGate = r));
+  const parts = (async function* () {
+    yield { text: 'The first part, which the host accepted.', base: 0 };
+    await gate;
+    yield { text: 'The part in flight when the chunk failed.', base: 40 };
+    yield { text: 'The part the fallback still has to read.', base: 80 };
+  })();
+
+  useEngine('chrome-tts');
+  const page = narrateStream(parts, { rate: 1 });
+  await Bun.sleep(0);
+  const p = FakePort.live[0]!;
+  // A live worker reporting a failed chunk - NOT a disconnect. The port stays usable, and its
+  // offscreen document keeps whatever it had already rendered.
+  p.reply({ t: 'error', id: (p.sent[0] as { id: string }).id, message: 'synth 500: synthesis failed' });
+  await Bun.sleep(0);
+  openGate!();
+  // The fallback has to get through chunking and reach `speak` before Stop means anything.
+  for (let i = 0; i < 100 && !finishUtterance; i++) await Bun.sleep(1);
+  expect(finishUtterance).not.toBeNull(); // the fallback is mid-page, holding the utterance
+
+  const before = p.sent.length;
+  stop();
+  // The displaced PortNarrator was told to stop over its still-live port. Without that, only
+  // speechSynthesis is cancelled and the book audio plays on.
+  expect(p.sent.slice(before)).toContainEqual({ t: 'stop' });
+  expect(narrating()).toBe(false);
+
+  finishUtterance!();
+  await page;
 });

@@ -113,9 +113,9 @@ normalize/segment → `espeak.rs` phonemize (espeak-ng FFI) → tokenize → the
 model on the ORT `ort` crate (load-dynamic against the staged `onnxruntime.dll`), on
 either the **Dawn WebGPU** EP (the default) or the plain **CPU** EP — a manual
 `gpu_synth` flag in `controls.json` (the panel's "Synthesize on GPU" checkbox, on by
-default), since an integrated GPU can badly lose to CPU (the standalone
-`kokoro-bench` tool found 0.50x realtime on WebGPU vs. 1.07x on CPU fp32 on an Intel
-UHD 620; no auto-detection between the two yet). espeak keeps global
+default), since an integrated GPU can badly lose to plain CPU — measured, on a real
+laptop, by enough of a margin to matter. There is no auto-detection between the two;
+the panel's "Test speed" dialog is how a user answers it. espeak keeps global
 state and isn't thread-safe (and
 the `ort` session lives here), so all synthesis is **serialized onto one dedicated
 worker thread** that owns the session for the process lifetime; requests arrive over an
@@ -193,8 +193,8 @@ measure the pacing, not the engine, and everything faster than realtime would ti
 ~1.0x. The measurement runs on the same serialized worker as real synthesis — so the panel
 declines to start one while the host reports it is speaking (best-effort: nothing reserves
 the worker), and the host itself runs at most one measurement at a time, refusing rather
-than queueing a second. It is the same comparison `kokoro-bench` makes offline, run against
-the engine the user actually has installed.
+than queueing a second. It is the only place this comparison is made now, and it is made
+against the engine the user actually has installed.
 
 ## Layout
 
@@ -202,7 +202,6 @@ the engine the user actually has installed.
 |---|---|
 | `kokoro-host/` | The windowless tray host (x64): `main.rs` (tao event loop + tray + `auto-launch` + Kindle-watcher tick), `pipe.rs` (named-pipe server; owns chunking + prefetch + pacing), `native_synth.rs` (serialized Rust synth, GPU or CPU EP + `controls.json` reader) + `text.rs`/`espeak.rs` (kokoro-js text normalizer + espeak-ng FFI), `split_text.rs` (the sentence-chunk splitter), `model_patch.rs` (the 273-byte in-memory ONNX graph edit that exposes the model's per-token durations), `state.rs` (`HostState` — the shared lock-free cell: audio clocks, live pause, Kindle belief), `kindle_ctl.rs` (the Kindle-control thread: hands-free Ctrl+A toggle of Read Aloud + `WM_CLOSE`, via raw Win32/Toolhelp32 — UI Automation only to find Kindle's window and dismiss an open flyout, never to read the reader's state back), `kindle_watch.rs` (polls for Kindle, spawns the injector). `build.rs` links the espeak-ng import lib and stages the runtime DLLs + `espeak-ng-data`. |
 | `kokoro-panel/` | The native settings panel (Slint/Fluent): `ui/panel.slint` + `src/main.rs` (incl. the 1 Hz host heartbeat), and the framework-agnostic `download.rs` / `preview.rs` (`CMD_PREVIEW`) / `benchmark.rs` (the GPU-vs-CPU speed test's `CMD_BENCH` client) / `hostlink.rs` (the `CMD_KINDLE` client — the panel's entire relationship with Kindle). Writes `controls.json`. Has no Win32 or UI Automation dependency, and must not grow one: the host owns Kindle. |
-| `kokoro-bench/` | Standalone GPU-vs-CPU synth timing tool, not part of the shipping app: reuses `kokoro-host/src/{text,espeak}.rs` via `#[path]` includes (`kokoro-host` is bin-only, no lib target). |
 | `kokoro-hook/` | x86 `cdylib` injected into Kindle 18632+: `DllMain` patches the shared `ISpVoice::SetVoice` vtable slot (index 18) → Kokoro token. `selftest` bin proves it Kindle-free. |
 | `kokoro-inject/` | x86 exe the host spawns: `LoadLibrary`-injects `kokoro_hook.dll` into `Kindle.exe`. |
 | `native-deps/` | Synth **dependency provisioning** only (no source): `fetch-deps.ps1` populates the gitignored dep folders alongside itself (`native-deps/runtime/` + `espeak-ng-src/`) — the Dawn/WebGPU runtime DLLs (from the `onnxruntime-webgpu` wheel) + espeak-ng (x64 build + import lib + `espeak-ng-data`). |

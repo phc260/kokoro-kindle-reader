@@ -35,8 +35,7 @@ because every finding gets hand-verified downstream.
 
 - **Never run benchmarks, stress tests, or sustained-load builds.** Real performance numbers
   are measured on designated target hardware; a figure taken from a review checkout is noise
-  either way. That means no `kokoro-bench` / `bench_synth`, no `cargo bench`, no repeated
-  release builds.
+  either way. That means no `cargo bench`, no timing harnesses, and no repeated release builds.
 - **Don't try to run the app.** `kokoro-host` must be running for any audio path to work,
   Kindle must be installed and injected, and the SAPI DLL must be registered (elevated).
   Verification here is by reading code, plus at most `cargo check`.
@@ -53,6 +52,11 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
   standing local-EoP concern; flag any path that reintroduces it.
 - **Bitness is fixed.** `kokoro-sapi`, `kokoro-hook`, `kokoro-inject` must stay x86 (Kindle
   is 32-bit); the host is x64 and spawns the injector rather than injecting itself.
+- **Don't call a `windows` crate feature unused because no import names it.** The bindings gate
+  individual functions on the features their *parameter* types need, so `Win32_Security` is what
+  makes `RegCreateKeyExW` and `CreateRemoteThread` exist and `Win32_System_IO` is what makes
+  `WriteFile` exist — none of them via a path anyone writes. Both were removed on that reasoning
+  and both broke the x86 build.
 - **`kokoro-host` is the sole authority for Kindle reading and health.** `kokoro-panel` has
   no UI Automation, no Win32 dependency, and no Kindle poll: Play/Stop/Pause/Resume/Close go
   over the pipe as `CMD_KINDLE` intent and it renders what the host reports back, health
@@ -170,8 +174,13 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
   leaves focus inside this extension's own panel), that ties the pending window to `TURN_WAIT_MS`
   rather than to the wait actually performed, or that starts a read without `settleTurn()` (Stop
   cannot unsend a keypress already dispatched, and its render lands under whatever reads next).
-- **In `ocr.ts`, a rule that can silently remove or reorder text must act on EVIDENCE, not on
-  appearance.** Four content losses came from thresholds encoding what a page was assumed to look
+- **In `src/ocr/`, a rule that can silently remove or reorder text must act on EVIDENCE, not on
+  appearance.** (The directory is five modules: `backend.ts` is the `POST /ocr` transport,
+  `layout.ts` the pixel-side column split, `lines.ts` the shared line geometry, `furniture.ts` the
+  only rule that drops a line, and `index.ts` assembles the page — it owns the re-split, the
+  checkpoint around it and the `trial` flag. It runs in the **offscreen document** — `furniture.ts` keeps
+  cross-page state, so a copy loaded in another context has a memory nothing writes to.)
+  Four content losses came from thresholds encoding what a page was assumed to look
   like. Appearance may pick candidates; only evidence may act — text no book has in its body, the
   same thing seen on another page, or a decision verified after the fact and redone. **Flag any
   new threshold whose failure is silent.** Specifically flag: dropping a line on a first sighting;
@@ -184,6 +193,14 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
   or removing the per-page log of what was withheld — furniture OCRs perfectly, so nothing else
   can detect the mistake. A constant that only degrades quality (`PLAYBACK_RAMP`, `PAD`, the
   word-timing weights) is not covered by this.
+- **Test fixtures must be public-domain or invented, never the book under test.** **Flag any
+  fixture, ground truth, doc example or code comment that reads as if it were pasted from a real
+  copyrighted work** — quoted prose, a real running head or section heading, a publisher's name, a
+  real ASIN (`B0` + 8 alphanumerics). Public domain is fine (`test/ocr-fixture.html`'s ground truth
+  is *Moby-Dick*) and so is invented prose (the furniture fixtures are an invented harbour book;
+  `BENCH_TEXT` is an invented lighthouse sentence). This has happened once and reached six files
+  including a page image, so it is worth a look whenever fixtures change: a fixture needs the
+  shape — word count, ink width, punctuation — never the content.
 - **The browser's word highlight runs on ESTIMATED boundaries.** `/synth` returns PCM and the
   browser path does not use the aligned pipe command (it doesn't use the pipe at all) - the
   durations exist, `/synth` just doesn't carry them - so `word-timing.ts` splits each chunk's

@@ -3,7 +3,7 @@
 // The reader renders the book to a bitmap (see capture.ts), so there is no text node to wrap and
 // no selection to set - the word being spoken exists on screen only as pixels. What there IS is
 // the OCR word list: every word carries a bbox in ORIGINAL IMAGE pixels, which is the whole
-// reason ocr.ts adds the column offset back and does its inversion without touching geometry.
+// reason `src/ocr/` adds the column offset back without touching geometry.
 //
 // So the mark is an absolutely-positioned box floated over the page image, and the chain is:
 //
@@ -23,7 +23,7 @@
 // turning it.
 
 import { findPageImage } from './capture';
-import type { OcrWord } from './ocr';
+import type { OcrWord } from '../ocr';
 
 /** The page a set of word boxes was measured on. */
 export interface HighlightPage {
@@ -105,7 +105,7 @@ const CSS = `
  * are an estimate to begin with. Silently drawing nothing there would read as the highlight
  * dying mid-sentence.
  *
- * `words` is in reading order and its `charStart`s are non-decreasing (ocr.ts walks the kept
+ * `words` is in reading order and its `charStart`s are non-decreasing (`src/ocr/index.ts` walks the kept
  * lines with a single cursor), so a binary search is valid.
  */
 export function wordIndexAt(words: OcrWord[], charIndex: number): number {

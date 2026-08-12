@@ -7,9 +7,9 @@
 
 import { test, expect } from 'bun:test';
 import { markRect, relocate, wordAt, wordIndexAt } from '../src/content/highlight';
-import type { OcrWord } from '../src/content/ocr';
+import type { OcrWord } from '../src/ocr';
 
-/** OCR words for `text`, laid out the way ocr.ts emits them. */
+/** OCR words for `text`, laid out the way `src/ocr/` emits them. */
 function words(text: string): OcrWord[] {
   return [...text.matchAll(/\S+/g)].map((m, i) => ({
     text: m[0],

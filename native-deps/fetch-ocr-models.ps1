@@ -4,8 +4,8 @@
 #   native-deps/ocr/rec.onnx      en_PP-OCRv5_mobile_rec     (text RECOGNITION, CTC)
 #   native-deps/ocr/en_dict.txt   ppocrv5_en_dict            (that recognizer's alphabet)
 #
-# 9.80 MiB together. Both sources are Apache-2.0 ONNX conversions of PaddleOCR models; the
-# comparison that picked this pair is in OCR_EXPERIMENT.md.
+# 9.80 MiB together. Both sources are Apache-2.0 ONNX conversions of PaddleOCR models; why this
+# pair, and why two models rather than one engine, is in kokoro-ocr/README.md.
 #
 # THE DIGESTS ARE THE PIN, and they are checked here AND at run time. `kokoro-ocr` carries the
 # same three constants and re-verifies them on every /status probe, so a file swapped after

@@ -46,7 +46,7 @@ material) — don't pad.
   self-elevating registration flow, the ProgramData ACL staging rationale (local EoP), and
   the uninstall behavior.
 - **Per-crate READMEs** — `kokoro-host/`, `kokoro-panel/`, `kokoro-protocol/`, `kokoro-sapi/`,
-  `kokoro-sapi-smoke/`, `kokoro-hook/`, `kokoro-inject/`, `kokoro-bench/`, `native-deps/`.
+  `kokoro-sapi-smoke/`, `kokoro-hook/`, `kokoro-inject/`, `native-deps/`.
   These are deliberately *thin pointers* (orient + the load-bearing gotcha + a link to
   `CLAUDE.md`/`ARCHITECTURE.md`), so keep them thin: check their Layout tables list the files
   that actually exist, their build/run snippets still run, and any invariant they restate
@@ -110,7 +110,7 @@ side is wrong:
 ## Constraints
 
 - **Never run the app, benchmarks, or any sustained-load command.** Verification is by reading
-  code and, at most, `cargo check`. Do not run `bench_synth`, `cargo bench`, or repeated
+  code and, at most, `cargo check`. Do not run `cargo bench`, timing harnesses, or repeated
   release builds.
 - Keep `.ps1` files and `packaging/installer.nsi` **ASCII** — PowerShell 5.1 and `makensis`
   both misread UTF-8 em-dashes/ellipses. Use `-` and `...` there. (Rust and `.slint` are fine

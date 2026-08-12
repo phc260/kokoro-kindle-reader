@@ -30,7 +30,7 @@ commit subject/scope, not a literal message.
      `git log --oneline -8`).
    - A body explaining the **why** when the change isn't self-evident, wrapped ~72 cols.
    - End with the trailer exactly:
-     `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`
+     `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>`
    - **If Codex reviewed this change** (`/codex-review` ran and its findings shaped what
      landed), add a `Reviewed-by: OpenAI Codex (<model>)` line *above* the
      `Co-Authored-By:` trailer, naming the model actually used — check `model` in

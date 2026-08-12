@@ -29,6 +29,18 @@ Follow "Building from source" in [ARCHITECTURE.md](ARCHITECTURE.md#building-from
 The one ordering rule: `native-deps\fetch-deps.ps1` must run before building
 `kokoro-host` (its `build.rs` panics without the provisioned deps).
 
+## Testing
+
+```powershell
+bun test test/                                        # from kokoro-browser-extension/ - 145 tests
+cargo test --manifest-path kokoro-ocr\Cargo.toml      # 54 - needs no models
+cargo test --manifest-path kokoro-host\Cargo.toml     # 46
+```
+
+All three run in seconds and need no host, no Kindle, no models and no network. **No CI workflow
+runs any of them** — see [TESTS.md](TESTS.md) for the full inventory, what each suite pins, the
+seven by-hand harnesses, and the known gaps.
+
 ## Code review
 
 Two models work this repo in different roles, and the split is deliberate: the model that
@@ -62,7 +74,7 @@ naming the model actually used, above the co-author trailer:
 
 ```
 Reviewed-by: OpenAI Codex (gpt-5.6-terra)
-Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 ```
 
 `Reviewed-by:` is the standard git trailer for this and keeps the history honest about who

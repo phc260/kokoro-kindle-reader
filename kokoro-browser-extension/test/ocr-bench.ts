@@ -1,6 +1,6 @@
-// ROADMAP Phase 0 - the OCR gate.
+// The OCR gate.
 //
-// Runs the real src/content/ocr.ts over rendered book pages with known ground truth, across
+// Runs the real src/ocr/ over rendered book pages with known ground truth, across
 // the matrix that produces SILENT failures: two-column vs single, light vs dark, default vs
 // non-default font. Reports word error rate and per-page time.
 //

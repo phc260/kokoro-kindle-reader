@@ -51,7 +51,7 @@ export interface Narrator {
    * through `speak()` is correct but not continuous for them: each chunk's synthesis becomes a
    * silence, measured at 85 SECONDS across a five-minute page (backend/test-pipeline.ts). The
    * platform engines have nothing to overlap - they own their own audio - so they leave it
-   * undefined and `speakChunked` drives them the plain way.
+   * undefined and `speakStream` drives them the plain way, one `speak()` per chunk.
    *
    * A STREAM of chunks, not an array, because a page's text does not all exist at once: a
    * two-column page is OCR'd a column at a time so the first word can be heard while the second
@@ -202,18 +202,6 @@ export class WebSpeechNarrator implements Narrator {
   resume(): void {
     speechSynthesis.resume();
   }
-}
-
-// ----------------------------------------------------------------------------- factory
-
-/**
- * Best narrator available in THIS context. A content script gets Web Speech (chrome.tts is not
- * exposed there); the service worker gets chrome.tts.
- */
-export function createNarrator(): Narrator {
-  if (ChromeTtsNarrator.available()) return new ChromeTtsNarrator();
-  if (WebSpeechNarrator.available()) return new WebSpeechNarrator();
-  throw new Error('no TTS engine available in this context');
 }
 
 /**
@@ -484,14 +472,4 @@ export async function speakStream(
     const at = i++;
     await n.speak(piece, opts, (b) => onWord?.(plan.remap(b, at)));
   }
-}
-
-/** Speak a page whose text is all in hand. */
-export function speakChunked(
-  n: Narrator,
-  text: string,
-  opts?: SpeakOptions,
-  onWord?: (b: WordBoundary) => void,
-): Promise<void> {
-  return speakStream(n, only({ text, base: 0 }), opts, onWord);
 }

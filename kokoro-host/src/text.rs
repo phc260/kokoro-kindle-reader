@@ -789,11 +789,12 @@ pub fn normalize_spans(utf8: &[u8]) -> Normalized {
     Normalized { text, spans }
 }
 
-// Unused inside the host now that the span-carrying variants have consumers, but NOT
-// dead: `kokoro-bench` includes this file with `#[path]` and calls it (kokoro-host is
-// bin-only, so there is no lib target to share instead).
-/// (Kept for `kokoro-bench`, which includes this file via `#[path]`; the host itself goes
-/// through [`normalize_spans`].)
+/// [`normalize_spans`] without the span map.
+///
+/// The host itself always wants the spans, so nothing in the binary calls this — the golden
+/// normalization tests below do, and they are the reason it stays. Testing through
+/// `normalize_spans().text` would work and would read worse: these tests are about the STRING,
+/// and the span map is a separate property with its own tests.
 #[allow(dead_code)]
 pub fn normalize(utf8: &[u8]) -> Vec<u8> {
     normalize_spans(utf8).text
@@ -967,11 +968,8 @@ pub fn post_process_spans(phon: &[u8], spans: &[Span]) -> (Vec<u8>, Vec<Span>) {
     trim_spans(&s, &m)
 }
 
-// Unused inside the host now that the span-carrying variants have consumers, but NOT
-// dead: `kokoro-bench` includes this file with `#[path]` and calls it (kokoro-host is
-// bin-only, so there is no lib target to share instead).
-/// (Kept for `kokoro-bench`, which includes this file via `#[path]`; the host itself goes
-/// through [`post_process_spans`].)
+/// [`post_process_spans`] without the span map. Called only by the golden tests below — see
+/// [`normalize`] for why that is worth an `allow`.
 #[allow(dead_code)]
 pub fn post_process(phon: &[u8]) -> Vec<u8> {
     post_process_spans(phon, &identity_spans(phon.len())).0

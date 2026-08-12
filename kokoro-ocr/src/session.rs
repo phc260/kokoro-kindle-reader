@@ -1,12 +1,11 @@
 // The two ONNX sessions and the dictionary that decodes what the second one emits.
 //
 // Built once, on the worker thread, and kept for as long as the process lives. Building them
-// reads ~10 MiB of model and costs about a third of a second (measured: 321 ms for this pair,
-// OCR_EXPERIMENT.md Result 4), which is the whole reason `probe()` answers `/status` from the
-// file system instead.
+// reads ~10 MiB of model and costs roughly a third of a second, which is the whole reason
+// `probe()` answers `/status` from the file system instead.
 //
-// CPU, by measurement. WebGPU was 2.27x slower for warm recognition on this pair and returned
-// identical text and boxes. There is no live provider switch here and there should not be one:
+// CPU, by measurement — see `PROVIDER` in lib.rs. There is no live provider switch here and
+// there should not be one:
 // unlike the synth, where the user picks an engine in the panel and a page of narration is
 // seconds of audio, OCR is a few hundred milliseconds behind a page turn and the answer is
 // already known.

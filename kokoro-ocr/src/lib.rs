@@ -1,32 +1,31 @@
 // PP-OCR detection + recognition for the Kindle Cloud Reader path.
 //
-// WHAT THIS CRATE IS FOR. The extension used to run Tesseract.js in a worker: ~17 MiB of
-// wasm and language data in the package, a `wasm-unsafe-eval` CSP allowance, and an engine
-// that had to be re-warmed per browser session. This is recognition on the host instead,
-// reached over one authenticated loopback endpoint.
+// WHAT THIS CRATE IS FOR. Recognition on the host, reached over one authenticated loopback
+// endpoint, so the extension ships no engine, no wasm, no language data and no CSP relaxation
+// to run any of it.
 //
-// WHY TWO MODELS AND NOT ONE ENGINE. A real Cloud Reader picture-book page — four sparse
-// lines of large serif type in the corner of a full-page illustration — is what withdrew
-// native Tesseract (OCR_EXPERIMENT.md). Tesseract's page segmentation expects a page of
-// text; finding text among artwork is a different job from reading it, and the fix would have
-// been a growing pile of layout heuristics. PP-OCR separates the two by construction: a DBNet
-// detector emits a text-probability map, and only the regions it finds are handed to a CTC
-// recognizer. Detection is also what makes the running head and the folio arrive as TWO lines
-// instead of one, which the extension's furniture policy needs and Tesseract could not give
-// it.
+// WHY TWO MODELS AND NOT ONE ENGINE. Finding text among artwork is a different job from
+// reading it, and a real Cloud Reader picture-book page — four sparse lines of large serif type
+// in the corner of a full-page illustration — is the first job, not the second. PP-OCR
+// separates them by construction: a DBNet detector emits a text-probability map, and only the
+// regions it finds are handed to a CTC recognizer. That separation is also what makes the
+// running head and the folio arrive as TWO lines instead of one, which the extension's
+// furniture policy requires to work at all. The rules below were arrived at by measuring this
+// pair against the alternatives, and several of them INVERT what a general-purpose OCR engine
+// would want — so read what each one says rather than reasoning from such an engine's
+// properties. `../README.md` is where the argument lives.
 //
 // WHAT IT DELIBERATELY DOES NOT DO. Nothing in here decides what gets narrated. The dark-page
 // check, the gutter split, the missed-gutter retry, evidence-based furniture suppression and
-// its cross-page memory, text cleanup and character offsets all stay in
-// `kokoro-browser-extension/src/content/ocr.ts`, unchanged. Those rules can silently remove
-// a line of the book, they were paid for four content losses at a time, and swapping the
-// engine underneath them is already the whole change — moving them at the same time would
-// make any regression impossible to attribute. This crate returns the RAW structure those
-// rules consume: lines in reading order, each a list of words with text, confidence and a
-// rectangle.
+// its cross-page memory, text cleanup and character offsets all stay in the extension's
+// `src/ocr/`, unchanged. Those rules can silently remove a line of the book, they were paid
+// for four content losses at a time, and swapping the engine underneath them is already the
+// whole change — moving them at the same time would make any regression impossible to
+// attribute. This crate returns the RAW structure those rules consume: lines in reading order,
+// each a list of words with text, confidence and a rectangle.
 //
 // THE PUBLIC API IS TARGET-NEUTRAL. No HTTP, browser, Windows-UI, named-pipe or synthesis
-// types appear in it, so the Linux blueprint reuses this crate as-is and everything that
+// types appear in it, so a non-Windows port reuses this crate as-is and everything that
 // knows about the transport lives in `kokoro-host/src/webserve.rs`.
 //
 // IT DOES NOT INITIALIZE ONNX RUNTIME EITHER. `ort`'s own guidance is that a library crate
@@ -43,7 +42,7 @@ mod session;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
 
 pub use engine::{JobHandle, Ocr};
@@ -60,16 +59,15 @@ pub const DETECTOR_NAME: &str = "en-PP-OCRv3-det";
 pub const RECOGNIZER_NAME: &str = "en-PP-OCRv5-mobile-rec";
 
 /// English only for this release. Adding a language is a different recognizer, a different
-/// dictionary and a different class count — not a file drop, which is the one thing Tesseract
-/// made cheap and this pair does not.
+/// dictionary and a different class count — three pinned files and a re-measured fixture set,
+/// not a language pack dropped into a directory.
 pub const LANGUAGE: &str = "eng";
 
-/// The execution provider, measured rather than assumed: for this pair WebGPU came in
-/// **2.27x slower** than CPU for warm recognition, with identical text and boxes
-/// (OCR_EXPERIMENT.md, Result 4). Detection is one small convolutional pass and recognition is
-/// one inference per line; neither is the shape a GPU upload pays for. Recognition is also
-/// still unbatched, so if that changes the provider has to be measured again rather than
-/// inferred from these numbers.
+/// The execution provider, measured rather than assumed: WebGPU was slower than CPU here for
+/// warm recognition, and returned identical text and boxes. That is the expected shape —
+/// detection is one small convolutional pass and recognition is one inference per line, so
+/// neither amortizes a GPU upload. Recognition is also still unbatched, which is the assumption
+/// most likely to change: if it does, measure again rather than inferring.
 pub const PROVIDER: &str = "cpu";
 
 // ------------------------------------------------------------------------------ geometry
@@ -207,8 +205,8 @@ impl Default for Limits {
 
 /// Every way one request can fail, kept distinguishable on purpose.
 ///
-/// "OCR failed" is the answer that made the browser engine hard to live with: a missing
-/// language file, a timeout and a page the engine could not read all arrived as the same
+/// "OCR failed" is the answer that made the browser engine hard to live with: a model that
+/// would not load, a timeout and a page the engine could not read all arrived as the same
 /// string, so the user was told to retry the one thing retrying could not fix. Each of these
 /// maps to a different thing for the reader to do.
 #[derive(Clone, Debug)]
@@ -287,9 +285,6 @@ impl Cancel {
     }
 }
 
-/// A handle to the shared cancel flag, so a caller can hold one without holding the job.
-pub type CancelHandle = Arc<Cancel>;
-
 // ------------------------------------------------------------------------------- assets
 
 /// The three files this engine is, and what they are supposed to be.
@@ -301,9 +296,10 @@ pub const DET_FILE: &str = "det.onnx";
 pub const REC_FILE: &str = "rec.onnx";
 pub const DICT_FILE: &str = "en_dict.txt";
 
-/// The pinned SHA-256 of each, recorded in OCR_EXPERIMENT.md along with the upstream source
-/// and revision. Both model sources are Apache-2.0 ONNX conversions of PaddleOCR models: the
-/// detector from RapidOCR, the recognizer and its dictionary from ppu-paddle-ocr-models.
+/// The pinned SHA-256 of each. The upstream source and the pinned revision for every file are
+/// in `native-deps/fetch-ocr-models.ps1`, which is what downloads them. Both sources are
+/// Apache-2.0 ONNX conversions of PaddleOCR models: the detector from RapidOCR, the recognizer
+/// and its dictionary from ppu-paddle-ocr-models.
 ///
 /// Checked on every probe rather than only at install. The models are data reachable from a
 /// network-facing endpoint, and a digest that is only verified by an installer is a digest

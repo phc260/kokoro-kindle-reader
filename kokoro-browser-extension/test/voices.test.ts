@@ -4,7 +4,15 @@
 // hides among the local ones.
 
 import { test, expect } from 'bun:test';
-import { describeVoice, buildVoiceTree, locateVoice, langOf, NETWORK_GROUP, ANY_GENDER } from '../src/voices';
+import {
+  describeVoice,
+  buildVoiceTree,
+  locateVoice,
+  langOf,
+  qualityOf,
+  NETWORK_GROUP,
+  ANY_GENDER,
+} from '../src/voices';
 import type { VoiceInfo } from '../src/speak';
 
 /** The voices the daemon actually reports, as seen in the panel. */
@@ -88,16 +96,66 @@ test('the tree comes out in reading order: American before British, female befor
   expect(tree[0]!.label).toBe('American English'); // full name still available for the tooltip
 });
 
-test('the tree loses no voice and keeps names sorted inside a bucket', () => {
+test('the tree loses no voice', () => {
   const tree = buildVoiceTree(local(KOKORO));
   const flat = tree.flatMap((a) => a.genders.flatMap((g) => g.voices.map((v) => v.name)));
   expect(flat.slice().sort()).toEqual(KOKORO.slice().sort());
+});
+
+test('a bucket is ordered by quality, best first - not alphabetically', () => {
+  // The whole point: `af_alloy` sorts first by name and is a C; `af_heart` is the A in the
+  // download. An unset preference lands on the first entry, so this decides which voice a reader
+  // hears before they have chosen one.
+  const tree = buildVoiceTree(local(KOKORO));
+  const bucket = (accent: string, gender: string) =>
+    tree.find((a) => a.label === accent)!.genders.find((g) => g.label === gender)!.voices.map((v) => v.name);
+
+  expect(bucket('American English', 'Female')[0]).toBe('af_heart');
+  expect(bucket('American English', 'Female').slice(0, 3)).toEqual(['af_heart', 'af_bella', 'af_nicole']);
+  expect(bucket('British English', 'Female')[0]).toBe('bf_emma');
+  // Equal grades fall back to the name, which is what keeps the order stable between sessions.
+  expect(bucket('American English', 'Male').slice(0, 3)).toEqual(['am_fenrir', 'am_michael', 'am_puck']);
+  // The bottom of the list is where an alphabetical order hurt least and hid most.
+  expect(bucket('American English', 'Male').at(-1)).toBe('am_adam');
+});
+
+test('every bucket is in non-increasing grade order, with the ungraded last', () => {
+  const rank = (name: string) => {
+    const q = qualityOf(name);
+    return q ? ['A', 'A-', 'B+', 'B', 'B-', 'C+', 'C', 'C-', 'D+', 'D', 'D-', 'F+', 'F'].indexOf(q) : 99;
+  };
+  const tree = buildVoiceTree([...local(KOKORO), { name: 'Microsoft David', lang: 'en-US' }]);
   for (const a of tree) {
     for (const g of a.genders) {
-      const names = g.voices.map((v) => v.desc.name);
-      expect(names).toEqual(names.slice().sort((x, y) => x.localeCompare(y)));
+      const ranks = g.voices.map((v) => rank(v.name));
+      expect(ranks).toEqual(ranks.slice().sort((x, y) => x - y));
     }
   }
+});
+
+test('a voice with no published grade is not ranked as the worst one', () => {
+  // An ungraded voice is unknown, not bad - but it cannot jump the graded ones either, so it
+  // sorts after them and keeps its alphabetical order among its own kind.
+  expect(qualityOf('af_heart')).toBe('A');
+  expect(qualityOf('Microsoft David')).toBeUndefined();
+  expect(describeVoice('Microsoft David', 'en-US').quality).toBeUndefined();
+
+  const tree = buildVoiceTree([
+    { name: 'Zoe Platform', lang: 'en-US' },
+    { name: 'Aaron Platform', lang: 'en-US' },
+  ]);
+  expect(tree[0]!.genders[0]!.voices.map((v) => v.name)).toEqual(['Aaron Platform', 'Zoe Platform']);
+});
+
+test('the grade travels with the description, so the picker can show it', () => {
+  expect(describeVoice('af_bella')).toMatchObject({ name: 'Bella', quality: 'A-' });
+  expect(describeVoice('am_adam').quality).toBe('F+');
+});
+
+test('every shipped voice has a grade', () => {
+  // A voice added to the model dir without one degrades gracefully (it sorts last), but every
+  // voice in the shipped set is in the published table and should stay listed here.
+  for (const id of KOKORO) expect(qualityOf(id)).toBeDefined();
 });
 
 test('no bucket is empty, so no filter combination is a dead end', () => {

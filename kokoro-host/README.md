@@ -89,9 +89,7 @@ cargo run   # windowless tray daemon; right-click the tray → Settings for the 
   and enough queued measurements would starve Kindle past the silent gap its narrator
   tolerates.
 
-The pipe wire format is the shared **`kokoro-protocol`** crate. The sibling
-**`../kokoro-bench`** crate reuses `text.rs`/`espeak.rs` (via `#[path]`, since this
-crate has no lib target) to benchmark WebGPU vs. CPU synthesis — see its README.
+The pipe wire format is the shared **`kokoro-protocol`** crate.
 
 See the repo-root [`CLAUDE.md`](../CLAUDE.md) and [`ARCHITECTURE.md`](../ARCHITECTURE.md)
 for the full engine chain and gotchas.

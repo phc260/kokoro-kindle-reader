@@ -55,10 +55,17 @@ and by `../kokoro-sapi-smoke` — a no-Kindle / no-registration / no-elevation h
 - With no host, `Speak` returns `E_FAIL` and no audio (the correct "no pipe, no
   fallback" behavior).
 
+There is no root workspace, so `-p` cannot reach a sibling crate — each command names its
+own manifest. From the **repo root**:
+
 ```powershell
-cargo build -p kokoro-sapi   --release --target i686-pc-windows-msvc
-cargo run  -p kokoro-sapi-smoke --release --target i686-pc-windows-msvc
+cargo build --release --target i686-pc-windows-msvc --manifest-path kokoro-sapi\Cargo.toml
+cargo run   --release --target i686-pc-windows-msvc --manifest-path kokoro-sapi-smoke\Cargo.toml -- `
+    kokoro-sapi\target\i686-pc-windows-msvc\release\KokoroSapi.dll
 ```
+
+The DLL path is passed explicitly because the harness's default (`..\kokoro-sapi\target\…`)
+is relative to the *working directory*, not to the manifest.
 
 The smoke harness also has a `Speak`-path test: with a running host it supplies a fake
 `ISpTTSEngineSite` that captures the PCM the engine writes through the real pipe. One

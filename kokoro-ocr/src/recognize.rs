@@ -12,8 +12,8 @@
 //     already in the model's output; they were only being thrown away. (Same move as
 //     `model_patch.rs` on the Kokoro graph.)
 //
-// Measured against Tesseract's pixel-exact boxes for the same 170 words: x0 out by a mean of
-// 1.78 px, x1 by 3.00 px — sub-character (OCR_EXPERIMENT.md, Result 2).
+// Sub-character accurate against an independent engine's own boxes, and measured rather than
+// assumed. `a_words_box_spans_the_timesteps_that_produced_it` is what holds the mapping in place.
 //
 // Every word gets its LINE's vertical extent rather than a tight per-glyph box. Deliberate,
 // and if anything the better shape for a highlight drawn over a page image: nothing in the

@@ -1,19 +1,19 @@
 // Bytes on the wire -> the RGB buffer both models are fed from.
 //
-// COLOUR, not grayscale, and no inversion. That is a deliberate reversal of what the
-// Tesseract path did. Tesseract's own quality guide asks for dark ink on a light ground, so
-// the extension flattened and inverted the page before posting it; a detector that has to
-// find four words inside an illustration needs every bit of that thrown-away contrast, and it
-// was trained on ordinary photographs of the world rather than on scans. What arrives here is
-// what the reader rendered.
+// COLOUR, not grayscale, and no inversion. What arrives here is what the reader rendered. A
+// detector that has to find four words inside an illustration needs every bit of the contrast a
+// flatten throws away, and these models were trained on ordinary photographs of the world rather
+// than on scans. Do not add a flatten or an inversion; if a real dark-theme capture ever fails,
+// the fix is a model-side one and belongs below this line, not in the extension.
 //
-// There is no upscaling step either, and its absence is the point. Under Tesseract, scale was
-// the dominant accuracy lever — 16.19 % word error to 0.95 % on the hard fixture from
-// doubling the input alone — because Tesseract reads whatever resolution it is handed and
-// degrades below roughly a 20 px x-height. PP-OCR resizes every detected line to a fixed
-// 48 px height itself (see `recognize.rs`), so small type is upsampled for free, per line,
-// from the source pixels. Adding a page-wide 2x in front of that would resample twice and
-// quadruple the detector's input for nothing.
+// There is no upscaling step either, and its absence is the point: `recognize.rs` resizes every
+// detected line to a fixed 48 px height from the SOURCE pixels, so small type is upsampled for
+// free, per line. A page-wide 2x in front of that would resample twice and quadruple the
+// detector's input for nothing.
+//
+// Both of those INVERT what the engine this replaced wanted, which makes them the two rules most
+// likely to be "restored" by someone reasoning from a general-purpose OCR engine's needs. They
+// were measured, not assumed. See ../README.md.
 
 use std::io::Cursor;
 

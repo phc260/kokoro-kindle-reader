@@ -331,6 +331,17 @@ class SourceError extends Error {
 }
 
 let narrator: Narrator | null = null;
+/**
+ * The narrator a mid-page fallback displaced, while it is still displaced.
+ *
+ * Module-level so `stop()` can reach it. The swap exists so Stop reaches the FALLBACK (see
+ * `runStream`) - and it left Stop unable to reach the one it replaced, which is the same bug
+ * pointing the other way. That one can still be holding audio: the fallback is triggered by a
+ * failed chunk as well as by a dead worker, and in the failed-chunk case the port, the worker and
+ * the offscreen document are all alive with up to `MAX_LEAD_S` of already-rendered book audio
+ * scheduled. Stopping only the fallback left that playing, under a panel reporting idle.
+ */
+let displacedNarrator: Narrator | null = null;
 let lastEngineError: string | null = null;
 
 /** Why the native backend was not used, if it wasn't. */
@@ -392,13 +403,56 @@ export function useEngine(which: 'chrome-tts' | 'web-speech'): string {
 let stopped = false;
 
 /**
+ * Utterances in flight, as identity tokens rather than a count. See `narrating()`.
+ *
+ * A SET, because `stop()` has to be able to forget them all at once and a stale settle must then
+ * be a no-op - `delete` on a token that is already gone does nothing, where a decrement would run
+ * the count negative and make the next utterance invisible.
+ */
+const inFlight = new Set<object>();
+
+/**
+ * Is anything being spoken that the user has not stopped?
+ *
+ * The one honest answer to that question, because `narrateStream` is the single funnel every
+ * utterance goes through - the panel's Play, the panel's Preview, and `kwr.readBook()` /
+ * `kwr.speakPage()` from the console or the page-world bridge. A UI flag can only know about the
+ * presses it saw, and starting a second utterance is not additive: the worker bumps its
+ * generation and calls `closeAll()`, so the new one ENDS the old one rather than playing over it.
+ *
+ * "That the user has not stopped" is the load-bearing half, and it is why `stop()` clears the set
+ * rather than waiting for the promises to settle. **An utterance is not guaranteed to settle.**
+ * `speakParts` has no reply deadline; the worker answers `{t:'end'}` only after its own
+ * `speakStream` returns, and that can be parked on an offscreen request that never comes back
+ * (a closed or crashed offscreen document leaves the port itself perfectly healthy, so nothing
+ * rejects). Waiting for the count to fall would then leave this stuck true for the life of the
+ * page, and the only symptom would be Preview refusing every press with a sentence about a book
+ * that stopped long ago.
+ */
+export function narrating(): boolean {
+  return inFlight.size > 0;
+}
+
+/**
  * Speak a page whose text arrives in parts - a two-column page, a column at a time, so the first
  * word is heard while the second column is still being recognized.
  *
  * Every part carries its own `base`, so `onWord` reports offsets into the WHOLE page's text
  * whichever part the word came from. That is what the highlight keys on.
  */
-export async function narrateStream(
+export function narrateStream(
+  parts: AsyncIterable<TextPart>,
+  options?: SpeakOptions,
+  onWord?: (charIndex: number, charLength: number | undefined) => void,
+): Promise<void> {
+  // Registered around the whole thing rather than inside it: it has to be visible before the
+  // first await, or a caller checking `narrating()` in the same tick sees nothing speaking.
+  const token = {};
+  inFlight.add(token);
+  return runStream(parts, options, onWord).finally(() => inFlight.delete(token));
+}
+
+async function runStream(
   parts: AsyncIterable<TextPart>,
   options?: SpeakOptions,
   onWord?: (charIndex: number, charLength: number | undefined) => void,
@@ -432,6 +486,7 @@ export async function narrateStream(
       console.warn('[kwr] narration failed, finishing this page on speechSynthesis:', String(e));
       lastEngineError = String(e);
       displaced = engine;
+      displacedNarrator = engine;
       narrator = new WebSpeechNarrator();
     }
   }
@@ -458,6 +513,7 @@ export async function narrateStream(
     // However this page ended, the next one starts by asking the worker again. Guarded on
     // identity so a `useEngine` call made during the page is not undone by it.
     if (displaced && narrator instanceof WebSpeechNarrator) narrator = displaced;
+    if (displacedNarrator === displaced) displacedNarrator = null;
   }
 }
 
@@ -481,7 +537,20 @@ export function narrate(
 
 export function stop(): void {
   stopped = true;
+  // Nothing is being narrated on the user's behalf from here, whatever the outstanding promises
+  // do about it. See `narrating()`: one of them may never settle, and this is the only thing that
+  // guarantees the flag comes back down.
+  inFlight.clear();
   getNarrator().stop();
+  // BOTH, or clearing the flag above is a lie: a page that fell back mid-way is being read by the
+  // fallback while the narrator it displaced may still have audio scheduled. Silencing one of the
+  // two and reporting idle is how a Stop leaves a book still talking.
+  //
+  // Cheap and safe to call on either: `PortNarrator.stop` is a fire-and-forget signal that
+  // returns immediately when its port has gone, which is exactly the case that caused the
+  // fallback. It reaches the audio in the case that matters - a live worker that failed one
+  // chunk, whose offscreen document is still holding the lead.
+  displacedNarrator?.stop();
 }
 
 export function pause(): void {

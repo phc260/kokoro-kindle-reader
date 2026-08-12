@@ -52,6 +52,7 @@ Load the detail on demand:
 |---|---|
 | The engine chain end to end, streaming/pacing model, repo layout table, build-from-source | [`ARCHITECTURE.md`](ARCHITECTURE.md) |
 | Contributor workflow, the two-model review split + `Reviewed-by:` convention, CI table, release/tagging steps | [`DEVELOPMENT.md`](DEVELOPMENT.md) |
+| Every test and harness, what each pins, and the gaps | [`TESTS.md`](TESTS.md) |
 | Installer internals: NSIS build, elevation flow, ACL staging, uninstall | [`packaging/README.md`](packaging/README.md) |
 | Tray host + synth core internals (per-file layout) | [`kokoro-host/README.md`](kokoro-host/README.md) |
 | Settings panel internals | [`kokoro-panel/README.md`](kokoro-panel/README.md) |
@@ -62,7 +63,6 @@ Load the detail on demand:
 | Browser path: the loopback HTTP endpoint and its four security checks | [`kokoro-host/src/webserve.rs`](kokoro-host/src/webserve.rs) |
 | Browser path: Cloud Reader OCR — the two models, the boundary, the post-processing | [`kokoro-ocr/README.md`](kokoro-ocr/README.md) |
 | Dep provisioning (ORT/Dawn DLLs, espeak-ng, OCR models) | [`native-deps/README.md`](native-deps/README.md) |
-| GPU-vs-CPU synth timings + settled perf dead ends | [`kokoro-bench/README.md`](kokoro-bench/README.md) |
 | User-facing install/usage | [`README.md`](README.md) |
 | Codex's copy of these instructions (reviewer role + constraints) | [`AGENTS.md`](AGENTS.md) — keep its invariant list in sync with this file |
 
@@ -124,8 +124,11 @@ cargo run --release --target i686-pc-windows-msvc --manifest-path kokoro-sapi-sm
 C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe -File kokoro-sapi\test-speak.ps1
 ```
 
-No Rust test suites except `text.rs`'s golden normalization tests; "testing" is Preview in
-the panel and Read Aloud in Kindle (or `test-speak.ps1`).
+**245 automated tests** — 145 in the extension (`bun test test/`), 54 in `kokoro-ocr` and 46 in
+`kokoro-host`, all of which run in seconds and need no host, no Kindle, no models and no network.
+Every other crate has none, and the x86 ones have smoke binaries instead. What is *not* covered
+that way is still the audible half: Preview in the panel and Read Aloud in Kindle (or
+`test-speak.ps1`). Full inventory, per-suite verdicts and the known gaps: [`TESTS.md`](TESTS.md).
 
 ## Gotchas / invariants (do not rediscover these)
 
@@ -137,6 +140,20 @@ the panel and Read Aloud in Kindle (or `test-speak.ps1`).
   **fast-scrolling** when the host is gone mid-Read-Aloud: a mid-session pipe disconnect
   makes each per-page `Speak` fail instantly, which Kindle reads as "page done" and races
   through the book — so keep the host alive.
+- **Two synth performance questions are SETTLED. Don't re-open either without different
+  hardware.** The standalone timing crate that measured them is gone (it produced figures, which
+  this repo does not keep, and it could not be run here anyway); what it concluded is load-bearing
+  and stays:
+  - **Raising ORT's intra-op thread count above the physical core count made synthesis *slower***
+    on the reference laptop — not flat, slower — because hyperthreads add contention rather than
+    throughput on a power/FMA-limited part. That is why `native_synth.rs` ships ORT's default and
+    has no thread-count override. Don't add one back for a chip in the same class.
+  - **The hybrid GPU+CPU dispatcher gate FAILED.** Alternating chunks between both engines was
+    measured *worse than CPU alone* on an integrated-GPU laptop: the active iGPU starves the CPU
+    cores of the shared package power budget, so the combined rate lands below the CPU's solo
+    rate. Machines that would need a hybrid can't benefit from one and machines with a real GPU
+    don't need one, so it was never built. Sequential measurements overstate it — anything
+    re-proposing this has to measure the two running *concurrently*, at thermal steady state.
 - **Native synth is serialized.** espeak has global state + isn't thread-safe (and the
   `ort` session is owned by the worker), so ONE dedicated thread owns the synth; never
   call espeak / run the session from multiple threads.
@@ -358,6 +375,65 @@ the panel and Read Aloud in Kindle (or `test-speak.ps1`).
   `describeProbe(await probeDaemon())` — the three sentences that already existed for the unpaired
   case and never ran for a paired one. A bare `TypeError` reaching the panel is the bug, not the
   diagnosis.
+- **The panel follows the SITE; its transport follows the BOOK.** It mounts on the library
+  (`/kindle-library`) as well as on an open book, because everything it settles — voice, speed,
+  and whether Kokoro is reachable or the browser is about to fall back to a platform voice —
+  happens before reading, and mounting only on a rendered page made all of it invisible until it
+  was too late to act on. **Play is two actions, chosen at press time by whether a book is open**:
+  a read on the reader, and on the library a *sample of the selected voice* — there is no page
+  image to capture there, so a read could only end in an error message, and a fifth control that
+  is dead on one of the two surfaces is worse than four that always mean something. The glyph is
+  shared, so `title`/`aria-label` are the only things that say which it is. The sample must
+  never start on top of a narration, since a second utterance tears the running stream down (the
+  worker bumps its generation and calls `closeAll()`) — it would end the book rather than play
+  over it. That needs **two** checks: the enable-gate covers what the panel started, and the press
+  asks `narrate.narrating()` about `kwr.readBook()`/`speakPage()` from the console or the debug
+  bridge, which the panel never sees. It is also gated on the voice list having arrived, or the
+  sample announces itself as "Loading" in whatever voice the engine defaults to.
+  **`narrating()` means "not stopped", not "not finished", and `stop()` CLEARS it** instead of
+  waiting for the promises to settle — an utterance is not guaranteed to settle. `speakParts` has
+  no reply deadline and the worker answers `end` only after its own `speakStream` returns, which
+  can park on an offscreen request that never comes back; a dead offscreen document leaves the
+  *port* healthy, so nothing rejects and nothing times out. Counting instead of clearing left
+  Preview refusing every press for the life of the page, over a book stopped long ago. Clearing is
+  only honest if Stop really silences everything, so **`stop()` stops the current narrator AND the
+  one a mid-page fallback displaced**: the fallback swap exists so Stop can reach the *fallback*,
+  and it left Stop unable to reach the narrator it replaced — which, when the fallback was caused
+  by one failed chunk rather than a dead worker, is still holding up to `MAX_LEAD_S` of rendered
+  book audio in a live offscreen document.
+  **A stopped action's continuation must not clear a newer one's state**: Stop signals the engine
+  and returns without settling the promise the press is awaiting, so Preview→Stop→Preview left the
+  first press to wake up, call the panel idle and disable Stop while the second was still audible.
+  The handlers compare an `epoch` token rather than trusting a flag the newer press has already
+  re-set — Play had the same shape before any of this and now shares the token.
+  Two facts, one poll (`onSurfaceChange`),
+  and the highlight stays tied to the book: without a page its measurements describe something
+  that is gone.
+- **The voice list is ordered by Kokoro's published grades, not the alphabet.** The grade itself
+  is only in the row's tooltip — the order is what it was there to say, and a "(C+)" on every row
+  is a second thing to read in a 260 px panel.
+  The grades are in the model card's `VOICES.md` and the spread inside one download is A to F+;
+  nothing in a voice's *name* carries any of it, so alphabetical put `af_alloy` (C) above
+  `af_heart` (A) and made the default selection — the first row of a group — an accident of
+  spelling. It is a lookup table (`KOKORO_GRADE` in `voices.ts`), never derived from the id.
+  A voice whose **id** is not in the table sorts after the graded ones and keeps its alphabetical
+  order among its own kind — unknown is not the same as worst. That is every platform voice in
+  practice, but the lookup reads the id and nothing else, so it is the id that decides and not
+  where the voice came from.
+- **The reader's own Layout setting must NOT drive the column split.** It is readable —
+  `KWR_Display_Settings.maxNumberColumns` in `read.amazon.com`'s localStorage, with the Aa menu
+  closed, no English labels — and it was built, plumbed through to `preprocess` and reverted, so
+  don't rediscover it. Two facts kill it, and the second is the one that costs a book:
+  the field is a **ceiling**, not an outcome (a narrow window or a large font renders one column
+  with it set to `2`), so only `1` could ever have acted; and the value is **global, persistent
+  and applies to reflowable books only**. Picture books are fixed-layout, the Layout control is
+  not even shown for them, and the key keeps whatever the last reflowable book left in it —
+  measured: a picture book reporting `2`. So a reader who sets Single Column and then opens a
+  picture book arrives with a stale `1` that would veto the gutter split on a spread with text in
+  two places, merge the columns, and — because a veto has to survive the missed-gutter retry to be
+  worth anything — disable `looksInterleaved`, the one thing that could have caught it. That is
+  strictly worse than measuring, on exactly the pages `v0.4.x` exists for. A stale global
+  preference for a different book is weaker evidence than the pixels, which is the whole rule.
 - **The extension's manifest `key` is load-bearing** even with no native messaging: an unpacked
   extension's id derives from its path, and the endpoint allowlists that id as an **origin**.
   Unpinned, the id changes whenever the folder moves and every request 403s.
@@ -468,7 +544,7 @@ the panel and Read Aloud in Kindle (or `test-speak.ps1`).
   image's *live* rect (never a cached one) and refuses to draw unless the displayed `blob:` URL is
   still the one that was OCR'd. It is the second and last shadow host this extension adds.
 - **A rule that can silently remove or reorder text must act on EVIDENCE, not on appearance.**
-  This is the governing rule for `ocr.ts` and it was earned: four content losses, every one from a
+  This is the governing rule for `src/ocr/` and it was earned: four content losses, every one from a
   threshold that encoded what a page was assumed to look like. Appearance is still allowed to
   decide what is a *candidate*; only evidence may act. In practice that means one of three shapes —
   text no book has in its body (`FURNITURE_PATTERN`, now two branches), the same thing seen on
@@ -481,8 +557,8 @@ the panel and Read Aloud in Kindle (or `test-speak.ps1`).
   no closing punctuation. Every attempt to separate them by appearance lost real content (three
   rounds of it: a mid-sentence continuation line, a full-measure opening line at a larger font,
   then four section headings on a chapter-per-page layout), and every loss was silent, because
-  furniture OCRs *perfectly* — no confidence or accuracy check can see the mistake. So `ocr.ts`
-  drops a line only when `FURNITURE_PATTERN` matches it (folio, `[293]`, copyright) or it has
+  furniture OCRs *perfectly* — no confidence or accuracy check can see the mistake. So
+  `src/ocr/furniture.ts` drops a line only when `FURNITURE_PATTERN` matches it (folio, `[293]`, copyright) or it has
   already appeared in a band on **another page**. A running head is therefore read once per
   session and never again; that is the intended trade, and it is the cheap mistake — audible,
   over, and it removes none of the book.
@@ -516,6 +592,21 @@ the panel and Read Aloud in Kindle (or `test-speak.ps1`).
   other.
 - **Every page logs what it withheld** (`[kwr] not narrated: …`). Keep it: it is the only evidence
   that exists when a line goes missing.
+- **Fixtures are PUBLIC-DOMAIN or INVENTED — never the book being tested against.** The furniture
+  rules and the OCR ground truth both need realistic book prose, so the nearest real book is the
+  path of least resistance and it is the wrong one. One commentary read on the Cloud Reader reached
+  six files before anyone looked: the running head, four section headings, ~20 lines of quoted
+  prose, the publisher's name — rendered into `ocr-fixture.html`'s page *image*, not just its
+  source — and a real ASIN in `route.test.ts`. **A real ASIN identifies a book as precisely as its
+  title.** Nothing downstream can catch any of it, because a fixture built from a real book passes
+  every test there is; it is the furniture problem one level up, and the same rule applies — the
+  check has to happen where the text is *written*, since afterwards it is indistinguishable from
+  work. What is allowed: public domain (`ocr-fixture.html`'s ground truth is *Moby-Dick*) or
+  invented (the furniture fixtures are an invented harbour book; `BENCH_TEXT` is an invented
+  lighthouse sentence). Inventing costs nothing, because a fixture needs the **shape** — word count,
+  ink width, punctuation, whether the line ends a sentence — and never the content. That is exactly
+  why the 41 replacements could be verified by preserving word counts alone. **The tell that you are
+  doing it wrong is that you are pasting rather than writing.**
 - **A resize re-renders the page, and the highlight has to be re-OCR'd to survive it.** The reader
   renders to the viewport, so any resize or zoom produces a new `blob:` URL with the text reflowed
   onto different lines — at which point the boxes are stale and the refusal above fires *for the
@@ -544,32 +635,37 @@ the panel and Read Aloud in Kindle (or `test-speak.ps1`).
   report, not a reason to run a second engine nobody has measured against these fixtures. The
   package therefore also carries no wasm, no language data and no `wasm-unsafe-eval` — a CSP
   relaxation kept for an engine that left is a standing invitation with nothing behind it.
-- **PP-OCR, not Tesseract, and one real page decided it.** A Cloud Reader picture-book page — four
-  sparse lines of serif type in the corner of a full-page illustration — is a *detection* problem,
-  and Tesseract's page segmentation expects a page of text. Two models: a DBNet detector emits a
-  text-probability map, and only the regions it finds reach the CTC recognizer. That separation
-  also returns a running head and its folio as **two lines**, which is what lets
-  `repeatsAcrossPages` match the head; Tesseract merged them into one line whose text changes
-  every page, so the head was narrated forever. Full comparison in `OCR_EXPERIMENT.md`.
-- **The extension posts the page in ORIGINAL COLOUR** — not flattened, not inverted. It used to
-  send grayscale-and-maybe-inverted because Tesseract wanted dark ink on a light ground; a
-  detector looking for four words inside an illustration needs that contrast, and
-  engine-specific preprocessing belongs next to the engine. `preprocess` still computes the
-  luminance mode, but only to know which way ink runs for the gutter search. **Do not put an
-  inversion back in the extension**: a rendered dark-theme fixture reads perfectly through the
-  backend with none, and if a real dark capture ever fails, the fix goes in the backend.
-- **There is no page-wide upscale any more, and its absence is deliberate.** Scale was
-  Tesseract's dominant accuracy lever (16.19 % → 0.95 % from a 2x, with no engine change) because
-  it reads whatever resolution it is handed. The recognizer resizes every detected line to a
-  fixed 48 px height *from the source pixels*, so small type is upsampled per line for free; a
-  2x in front of that resamples twice and quadruples the detector's input for nothing.
+- **Detection and recognition are SEPARATE, and the separation is load-bearing.** A DBNet detector
+  emits a text-probability map and only the regions it finds reach the CTC recognizer — which is
+  what makes a Cloud Reader picture-book page (four sparse lines of serif type in the corner of a
+  full-page illustration) a solvable problem at all, since that is a detection problem and not a
+  segmentation one. It also decides a **product** behaviour: a running head and its folio come back
+  as **two lines**, which is the only reason `repeatsAcrossPages` can match the head. An engine
+  that merges them yields one line whose text changes every page, and the head is then narrated
+  forever. Any replacement must return line boxes, per-word boxes, and those two separately.
+- **The extension posts the page in ORIGINAL COLOUR** — not flattened, not inverted. Engine-specific
+  preprocessing belongs next to the engine, and a detector looking for four words inside an
+  illustration needs the contrast a flatten throws away. `preprocess` still computes the luminance
+  mode, but only to know which way ink runs for the gutter search. **Do not put an inversion back in
+  the extension**: a rendered dark-theme fixture reads perfectly through the backend with none, and
+  if a real dark capture ever fails, the fix goes in the backend.
+- **There is no page-wide upscale, and its absence is deliberate.** The recognizer resizes every
+  detected line to a fixed 48 px height *from the source pixels*, so small type is upsampled per
+  line for free; a 2x in front of that resamples twice and quadruples the detector's input for
+  nothing. Scale was the dominant accuracy lever for the engine this replaced, which read whatever
+  resolution it was handed — **do not port that reasoning across.**
 - **Word boxes come from CTC timesteps, and the space class is what splits words.** Detection
-  returns *line* boxes; `hasOutlierGap` measures the gap between consecutive *words*, so an
-  engine without word boxes cannot drive the furniture policy at all. The timestep a character
-  fires at is its x-position (mean 1.78 px from Tesseract's own boxes on 170 words). The
-  dictionary's leading empty sentinel must be dropped and a trailing space class appended —
-  keeping the sentinel shifts the whole alphabet by one, and losing the space class leaves one
-  run-together string with nothing to split.
+  returns *line* boxes; `hasOutlierGap` measures the gap between consecutive *words*, so an engine
+  without word boxes cannot drive the furniture policy at all. The timestep a character fires at is
+  its x-position. The dictionary's leading empty sentinel must be dropped and a trailing space class
+  appended — keeping the sentinel shifts the whole alphabet by one, and losing the space class
+  leaves one run-together string with nothing to split.
+- **The engine argument lives in ONE place and is not summarized again here.**
+  [`kokoro-ocr/README.md`](kokoro-ocr/README.md) carries it; the bullets above are the *rules that
+  follow*. Every one of them was measured against alternatives before it was written down, but the
+  **figures are deliberately not in this repo** — they date, they are machine-specific, and nothing
+  here can reproduce them. Don't quote benchmark numbers into the tree, and don't re-derive a rule
+  from what a general-purpose OCR engine would want: several of them invert it.
 - **The models are pinned by SHA-256, and the digests gate the LOAD as well as `/status`.**
   Checking them in `probe()` alone left the pin decorative where it mattered: `/status` would
   answer `corrupt` while `/ocr` recognized with whatever was on disk, and a recognizer that
@@ -765,9 +861,11 @@ the panel and Read Aloud in Kindle (or `test-speak.ps1`).
 
 ### Where shared files live
 - The synth core (`native_synth.rs` + `text.rs` + `espeak.rs` + `split_text.rs` +
-  `model_patch.rs`) is in `kokoro-host/src/` — **not** in the engine crate. `text.rs`/`espeak.rs` must stay
-  pure/self-contained (no `kokoro-host`-specific state) because `kokoro-bench` reuses them
-  via `#[path]` includes (`kokoro-host` is bin-only, no lib target).
+  `model_patch.rs`) is in `kokoro-host/src/` — **not** in the engine crate. `text.rs`/`espeak.rs`
+  are still written to be pure and self-contained (no `kokoro-host`-specific state); the standalone
+  bench crate that consumed them through `#[path]` includes is gone, so nothing outside the host
+  depends on that now — but the golden normalization tests do, and purity is what keeps them
+  cheap.
 - `model-manifest.json` + `icons/` are at the repo root (the panel embeds the manifest; the
   exes, the installer **and the browser extension** use the icons — `build.ts` copies
   `32x32.png`/`128x128.png` into each `dist/<target>/icons/` rather than keeping a second copy,
@@ -777,7 +875,7 @@ the panel and Read Aloud in Kindle (or `test-speak.ps1`).
 - The Kindle-18632 hook + injector are standalone root crates (`kokoro-hook/`,
   `kokoro-inject/`), built x86 and staged into the installer's `resources\`.
 - Cloud Reader OCR is `kokoro-ocr/` — a path dep of `kokoro-host` with a **target-neutral**
-  public API (no HTTP, browser, Windows-UI, pipe or synthesis types), so the Linux blueprint
+  public API (no HTTP, browser, Windows-UI, pipe or synthesis types), so a non-Windows port
   reuses it unchanged and `webserve.rs` stays the only file that knows both halves. Its models
   are staged into the installer's `ocr\`, beside the exe.
 - There is **no root workspace**; each crate builds standalone with its own target dir.
@@ -821,5 +919,13 @@ the panel and Read Aloud in Kindle (or `test-speak.ps1`).
   them first. Port lingers after a crashed session.
 - **Slint `step`** on a `Slider` only affects keyboard/scroll, **not** mouse drag — snap
   the dragged value manually (see `SliderRow` in `panel.slint`).
+- **A `windows` crate feature cannot be audited by grepping imports.** The bindings gate
+  individual *functions* on the features their PARAMETER types need, so a feature is load-bearing
+  with its module path appearing nowhere: `Win32_Security` is what makes `RegCreateKeyExW`
+  (`kokoro-sapi`) and `CreateRemoteThread` (`kokoro-inject`) exist, via `SECURITY_ATTRIBUTES` in
+  a signature nobody names, and `Win32_System_IO` is what makes `WriteFile` exist, via
+  `OVERLAPPED`. Both read as unused and both were removed and put straight back. **Compile every
+  removal** — and note the x86 crates are the ones this bites, where a `cargo check` on the
+  default target proves nothing.
 - Registering/unregistering the voice and editing the MSIX hive need elevation
   (`Start-Process -Verb RunAs`).

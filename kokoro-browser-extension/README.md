@@ -169,6 +169,72 @@ The retune fires on the slider's `change`, not `input`: a drag emits dozens of `
 each committed value costs a real re-synthesis on the one synth worker Kindle also queues behind.
 The readout follows the drag; the audio changes when you let go.
 
+## Choosing a narrator
+
+**The panel is on the library too**, not only on an open book — `read.amazon.com/kindle-library`
+is where a session starts and where it comes back between books, and everything the panel settles
+happens *before* reading: which voice, how fast, and whether Kokoro is reachable at all or the
+browser is about to fall back to a platform voice. Mounting only once a book was open meant none
+of that was visible until it was too late to act on.
+
+Two states, not one. The panel's presence follows the **site**; its transport follows the
+**book**.
+
+**Play is two actions, chosen by whether a book is open.** On the reader it reads from the page on
+screen onwards. On the library — where there is no page image to capture, so a read could only ever
+end in an error message — it plays a **sample of the selected voice** instead, which is what the
+panel is on the library for. The glyph is the same either way, so the tooltip ("Read from this page
+on" / "Hear the selected voice") and the accessible name (`Play` / `Preview voice`) are what
+distinguish them; a loading reader counts as no book, since there is no page image yet.
+
+Which of the two a press is gets read **live**, not from the polled surface flag — that is refreshed
+on a 500 ms tick, and opening a book and pressing Play inside that window would otherwise sample a
+voice instead of reading the page already on screen.
+
+One button rather than two, because it is one intention — *let me hear it* — and a fifth control
+that is dead on whichever surface you happen to be looking at is worse than four that always mean
+something.
+
+The sample is a plain utterance: no capture, no OCR, no highlight, no page turn, which is exactly
+why it works where none of those exist. Stop ends it like anything else.
+
+It must never start on top of a narration: a second utterance does not play alongside the first,
+it **ends** it (the worker bumps its generation and calls `closeAll()`). That takes two checks,
+because the panel's own `reading` flag only knows about presses the panel saw — `kwr.readBook()`
+from the console or the page-world debug bridge leaves it at rest. So the button is disabled while
+the panel is reading, *and* the press asks `narrate.narrating()`, which tracks utterances at the
+one funnel all of them go through. As a sample it also waits for the voice list — "Loading…" is a
+real option in that dropdown, and a press before the list lands samples no voice at all and has
+the narrator announce itself as "Loading". As a *read* it does not wait: `readBook` asks for the
+voices itself and reports what is wrong with them.
+
+`narrating()` means "not stopped", not "not finished", and **`stop()` clears it rather than waiting
+for the promises to settle** — because an utterance is not guaranteed to settle. `speakParts` has
+no reply deadline, and the worker answers `{t:'end'}` only after its own `speakStream` returns,
+which can be parked on an offscreen request that never comes back. A closed or crashed offscreen
+document leaves the *port* perfectly healthy, so nothing rejects and nothing times out. Waiting for
+the count to fall would have left Preview refusing every press for the life of the page, citing a
+book that stopped long ago.
+
+Clearing is only honest if Stop actually silences everything, so `stop()` stops **both** the current
+narrator and the one a mid-page fallback displaced. The swap exists so Stop can reach the fallback;
+it left Stop unable to reach what it replaced. That matters when the fallback was caused by a single
+failed chunk rather than a dead worker — the port, the worker and the offscreen document are all
+alive, holding up to `MAX_LEAD_S` of already-rendered book audio.
+
+**The voice list is in quality order, not alphabetical.** Kokoro publishes a grade per voice in
+its `VOICES.md` — partly how good the voice is meant to be, partly how much audio it was actually
+trained on — and the spread inside one download is A to F+. Nothing in the *name* carries any of
+that, so the alphabet put `af_alloy` (C) at the top of the American female group and `af_heart`
+(the A) four rows below it, which is also what an unset preference landed on. The grade is **not**
+printed beside the name — a column of "(A)"/"(C+)" is a second thing to read on every row of a
+260 px panel, and the order already says what it was there to say — but it is in each row's
+tooltip, so the ordering is explicable on hover. Names only break ties, and a voice whose **id** is not in the table
+keeps the alphabetical order it always had, after the graded ones: unknown is not the same as
+worst. In practice that is every platform voice and anything dropped into the model directory
+later — but the lookup is on the id alone, so it is the id that decides, not where the voice came
+from.
+
 ## Setup
 
 **1. Build.** `dist/` is not committed; regenerate it:
@@ -218,8 +284,10 @@ header) live in [`kokoro-host/src/webserve.rs`](../kokoro-host/src/webserve.rs).
 | `src/background.ts` | Service worker. Picks the engine (Kokoro if paired, else `chrome.tts`), owns the port to the page, and feeds a page's parts into one utterance |
 | `src/speak.ts` | The narration seam: chunk schedule, the part stream and its offset mapping, where a part may be cut |
 | `src/offscreen.ts` | Offscreen document: the extension-origin `fetch` (the host allowlists that origin and no other) **and** the AudioContext — a service worker has neither. Fires the word marks off the audio clock, and gives back the lead on a speed change |
+| `src/ocr/` | Everything the engine move left behind, as five modules: `backend.ts` (the `POST /ocr` transport — the whole of what recognition now costs), `layout.ts` (dark-page test, gutter, column split), `lines.ts` (line geometry, shared by the re-split check and the furniture rule), `furniture.ts` (the only rule that drops a line), and `index.ts` (assembling a page, with the offsets that hold). Runs in the **offscreen document**, not on the page — the host allowlists the extension origin alone |
 | `src/offscreen-client.ts` | The pacing rules: lead cap, throttle loop, epoch handling, word-mark subscription, and the waits a speed change has to be able to cut short |
 | `src/word-timing.ts` | Splits a chunk's known duration across its words. Kokoro's only source of boundaries |
+| `src/voices.ts` | Turns voice ids into something choosable: accent/gender/name, and Kokoro's published grade, which is what the list is sorted by |
 | `src/kokoro-http.ts` | The narrator, pairing storage, and the daemon probe |
 | `scripts/make-key.ts` | Regenerates the pinned extension identity. Read its header before running it |
 
@@ -269,8 +337,8 @@ an actual `/synth` request; everything else stubs the fetch out. Keep the mirror
   called out as do-not-touch in `.claude/commands/bump-version.md`.
 - **`kwr` is in the isolated world.** In DevTools, switch the console's context dropdown from
   "top" to "Kokoro Kindle Reader" or the global isn't there.
-- **A line missing from the narration is a furniture drop, not a synthesis bug.** `ocr.ts`
-  removes running heads and folios, and they OCR *perfectly* — so no confidence or accuracy check
+- **A line missing from the narration is a furniture drop, not a synthesis bug.**
+  `src/ocr/furniture.ts` removes running heads and folios, and they OCR *perfectly* — so no confidence or accuracy check
   can point at a mistake. Every page logs what it withheld (`[kwr] not narrated: …`) with the
   reason; that log is the first place to look.
 - **A running head is read once per session, then never again — and so is the first page number.**
@@ -278,13 +346,28 @@ an actual `/synth` request; everything else stubs the fetch out. Keep the mirror
   page — short, near the edge, no closing punctuation — so nothing is removed on a first sighting;
   it has to turn up on *another* page first. A folio is caught by its **slot** rather than its
   text, since the number changes every page. Guessing from appearance instead cost four real
-  section headings on a chapter-per-page layout, silently. Use `resetFurnitureMemory()` when
-  switching books.
+  section headings on a chapter-per-page layout, silently. **"Session" means the offscreen
+  document's lifetime** — the memory is module state in `src/ocr/furniture.ts`, which runs there, and
+  nothing closes that document, so it carries across page turns and across books until the
+  extension is reloaded. `resetFurnitureMemory()` is reachable from `bun test` and from nowhere
+  else — it is deliberately not re-exported through `src/ocr/index.ts`, because a console route to
+  it would clear the *content script's* copy of that memory, which no page ever writes to.
 - **A page read across a missed gutter is detected and read again.** `findGutter` needs a band
   free of ink over almost the whole page height, so one figure or rule crossing the gutter hides
   it — and the columns are then read line by line into sentences that are fluent and wrong,
   with every word real and the confidence high. `looksInterleaved` spots the huge mid-line gap
   that justification never produces and asks for a second look with the test relaxed.
+- **The reader's own Layout setting does not decide this, and that was tested rather than
+  assumed.** It is readable — `KWR_Display_Settings.maxNumberColumns`, in the reader's
+  localStorage, with the Aa menu closed and no English labels involved — and using it as a veto on
+  the gutter split was built and reverted. The field is a *ceiling*, not an outcome, so only `1`
+  could have acted; and the value is global, persistent, and meaningful for **reflowable books
+  only**. Picture books are fixed-layout — the Layout control is not even offered — and the key
+  keeps whatever the last reflowable book left there (measured: a picture book reporting `2`). So
+  set Single Column, open a picture book, and a stale `1` would suppress the split on a spread
+  with text in two places *and* disable `looksInterleaved`, which is the only thing that could
+  have noticed. A stale preference belonging to a different book is weaker evidence than the
+  pixels on this one.
 - **The highlight only draws on the page it was measured on.** The boxes belong to one specific
   render, and the reader swaps the whole bitmap on a page turn, so the captured `blob:` URL is
   checked before every draw. A mark that never appears usually means the page turned under the

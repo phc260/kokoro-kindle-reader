@@ -160,20 +160,12 @@ fn utf8_len(c: u8) -> usize {
     if c < 0x80 { 1 } else if (c >> 5) == 0x6 { 2 } else if (c >> 4) == 0xE { 3 } else if (c >> 3) == 0x1E { 4 } else { 1 }
 }
 
-/// espeak synth-trace phonemization of one punctuation-free UTF-8 segment.
-/// Mirrors PhonemizeSegment: trace to a temp FILE, then fold clause-per-line into
-/// a single space-joined string.
-/// (Kept for `kokoro-bench`, which includes this file via `#[path]` and has no use for the
-/// spans; the host itself now goes through [`phonemize_segment_spans`].)
-#[allow(dead_code)]
-pub fn phonemize_segment(text: &[u8]) -> Vec<u8> {
-    phonemize_segment_spans(text).text
-}
-
-/// [`phonemize_segment`] plus the phoneme-to-source mapping.
+/// espeak synth-trace phonemization of one punctuation-free UTF-8 segment, plus the
+/// phoneme-to-source mapping.
 ///
-/// The returned `text` is byte-for-byte what [`phonemize_segment`] has always produced —
-/// the trace decides the string, and nothing here can change it. `spans` is best-effort:
+/// Mirrors PhonemizeSegment: trace to a temp FILE, then fold clause-per-line into a single
+/// space-joined string. The trace decides that string and nothing here can change it — adding
+/// the spans did not move a byte of it. `spans` is best-effort:
 /// if the event stream cannot be aligned to the trace it degrades to one span covering the
 /// whole segment, which is the granularity the host had before any of this. Degrading is
 /// the right failure here because the alternative — attributing phonemes to whichever word

@@ -6,13 +6,13 @@ description = "PP-OCR detection + recognition for the Kindle Cloud Reader path"
 
 # Standalone crate with its own target dir (there is no root workspace), and deliberately
 # TARGET-NEUTRAL: no HTTP, browser, Windows-UI, named-pipe or synthesis types appear in the
-# public API. The Linux blueprint reuses this crate unchanged; anything that knows about the
+# public API. A non-Windows port reuses this crate unchanged; anything that knows about the
 # transport belongs in kokoro-host/src/webserve.rs instead.
 #
-# There is NO `native` feature and no stub engine. Under Tesseract there had to be one: the
-# FFI meant a link dependency, so a machine without a 9 MB native OCR stack could not build
-# the crate at all, let alone test its pure logic. ONNX Runtime is loaded at RUN time from a
-# path the host already stages, so `cargo test` builds and runs here with nothing provisioned
+# There is NO `native` feature and no stub engine, and nothing here should grow one. The engine
+# this replaced needed both: its FFI was a link dependency, so a machine without a 9 MB native
+# OCR stack could not build the crate at all, let alone test its pure logic. ONNX Runtime is
+# loaded at RUN time from a path the host already stages, so `cargo test` runs with nothing set up
 # — every test that needs a model skips itself, and a host with no models answers `missing`.
 
 [dependencies]

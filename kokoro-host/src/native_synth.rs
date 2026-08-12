@@ -70,12 +70,11 @@ const BENCH_WARMUP_RUNS: u32 = 1;
 const BENCH_TIMED_RUNS: u32 = 1;
 
 /// Which execution provider synthesizes: GPU (Dawn WebGPU, the default) or the plain
-/// ORT CPU EP. Benchmarked (the standalone `kokoro-bench` crate) on an Intel UHD 620
-/// laptop: WebGPU there ran at 0.50x realtime (behind), CPU fp32 at 1.07x (ahead) —
-/// an integrated GPU
-/// can lose to plain CPU badly enough to matter. No auto-detection yet; `gpu_synth` in
-/// controls.json (default `true`) is a manual escape hatch while real-world results
-/// come in — unticking the panel's "Synthesize on GPU" switches to CPU.
+/// ORT CPU EP. Both ship because an integrated GPU can lose to plain CPU by enough to put
+/// synthesis behind realtime — measured on a real laptop, where the GPU was the slower of
+/// the two. There is no auto-detection; `gpu_synth` in controls.json (default `true`) is the
+/// manual escape hatch, and the panel's "Test speed" dialog ([`bench`]) is how a user finds
+/// out which way their own machine falls.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Engine {
     Gpu,

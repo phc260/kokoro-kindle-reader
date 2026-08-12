@@ -26,6 +26,35 @@ export interface PanelActions {
   stop(): void;
   pause(): void;
   resume(): void;
+  /**
+   * Say one sample sentence in the selected voice.
+   *
+   * A single utterance, not a page: it is how a voice is chosen without opening a book, which is
+   * the whole reason the panel is on the library at all. Resolves when the sample finishes or is
+   * stopped, and rejects with something worth showing if it never speaks - a preview that fails
+   * silently is indistinguishable from a voice that is merely quiet.
+   */
+  preview(text: string, opts?: SpeakOptions): Promise<void>;
+  /**
+   * Is anything being spoken that the user has not stopped?
+   *
+   * Not the same question as the panel's own `reading` flag, which only knows about presses it
+   * saw. `kwr.readBook()` and `kwr.speakPage()` are reachable from the console and the
+   * page-world debug bridge without the panel hearing about it, and a Preview started on top of
+   * one would not play alongside it - the worker bumps its generation and calls `closeAll()`,
+   * ending the book. "That the user has not stopped" rather than "that has not finished",
+   * because an utterance is not guaranteed to finish - see `narrate.narrating()`.
+   */
+  narrating(): boolean;
+  /**
+   * Is a book open and rendered RIGHT NOW?
+   *
+   * Asked at press time, because the panel's own `bookOpen` is refreshed by a 500 ms poll and is
+   * therefore up to half a second stale - and Play is a different action on each side of it. Open
+   * a book and press Play before the next tick, and the cached flag would have played a voice
+   * sample instead of reading the page that is on screen.
+   */
+  hasBook(): boolean;
   /** Apply a new speed to the page already being read. See `narrate.retune`. */
   retune(rate: number): void;
   voices(): Promise<VoiceInfo[]>;
@@ -35,6 +64,15 @@ export interface PanelActions {
 export interface PanelHandle {
   destroy(): void;
   status(text: string, tone?: 'idle' | 'busy' | 'error'): void;
+  /**
+   * Whether a book is open and rendered under the panel.
+   *
+   * The panel outlives the book: it is mounted on the library too, so the voice, the speed and
+   * whether Kokoro is reachable can all be settled before a book is opened. What does not
+   * outlive the book is the transport - Play would capture a page that is not there - so it is
+   * disabled until there is one.
+   */
+  setBookOpen(open: boolean): void;
 }
 
 type Prefs = { folded: boolean; voice: string; rate: number };
@@ -71,6 +109,16 @@ function savePrefs(p: Prefs): void {
  * what it is. Only the label changes.
  */
 const fmtRate = (rate: number): string => `${Math.round(rate * 100)}%`;
+
+/**
+ * The preview sentence.
+ *
+ * It names the voice on purpose. Choosing between narrators is done by playing two of them a
+ * few seconds apart, and by the second one you no longer remember which row you were on - so the
+ * sample says. Kept to one sentence because every preview is a real synthesis on the one worker
+ * Kindle also queues behind.
+ */
+const sampleFor = (name: string): string => `Hello, I'm ${name}. This is how your book will sound.`;
 
 const CSS = `
 :host { all: initial; }
@@ -217,7 +265,7 @@ const HTML = `
   </div>
 </div>`;
 
-export function mountPanel(actions: PanelActions): PanelHandle {
+export function mountPanel(actions: PanelActions, initial: { bookOpen: boolean }): PanelHandle {
   document.getElementById(HOST_ID)?.remove(); // never mount twice
 
   const host = document.createElement('div');
@@ -234,6 +282,18 @@ export function mountPanel(actions: PanelActions): PanelHandle {
   // live transport message, and the voice list arrives asynchronously.
   let reading = false;
   let paused = false;
+  let previewing = false;
+  let bookOpen = initial.bookOpen;
+  /**
+   * Whether the voice list has arrived.
+   *
+   * Preview is gated on it, and it has to be: the picker holds a placeholder `Loading…` option
+   * until then, so a press in that window samples no voice at all and has the narrator announce
+   * itself as "Loading". That window is not small - answering `voices()` can mean starting the
+   * native host and loading the model. It also stays false when the list arrives empty or the
+   * request fails, which is right: there is nothing to preview.
+   */
+  let voicesReady = false;
   const $ = <T extends Element>(sel: string) => root.querySelector<T>(sel)!;
   const wrap = $<HTMLDivElement>('.wrap');
   const dot = $<HTMLSpanElement>('.dot');
@@ -278,11 +338,15 @@ export function mountPanel(actions: PanelActions): PanelHandle {
    *
    * Kokoro vs the platform voice is the difference the whole backend exists for, and it was
    * previously only discoverable in the service worker console.
+   *
+   * On the library the same line says why the transport is greyed out. That matters more here
+   * than in the reader: a panel whose buttons are all dim and which says nothing about it looks
+   * broken, and "the host is down" and "no book is open" are the same picture otherwise.
    */
   const showEngine = () => {
     const err = actions.engineError();
     if (err) status(`${actions.engine()} - Kokoro unavailable: ${err}`, 'error');
-    else status(`Ready - ${actions.engine()}`);
+    else status(`${bookOpen ? 'Ready' : 'Open a book to read'} - ${actions.engine()}`);
   };
 
   /**
@@ -294,7 +358,7 @@ export function mountPanel(actions: PanelActions): PanelHandle {
    */
   const noteVoice = () => {
     if (remote) status('Network voice: page text is sent to the provider.', 'error');
-    else if (!reading) showEngine();
+    else if (!reading && !previewing) showEngine();
   };
 
   /**
@@ -312,15 +376,41 @@ export function mountPanel(actions: PanelActions): PanelHandle {
 
     accentEl.innerHTML = tree.map((a) => opt(a.label, a.short, a === accent, a.label)).join('');
     genderEl.innerHTML = accent.genders.map((g) => opt(g.label, g.label, g === gender)).join('');
-    // The id stays reachable as the tooltip - it is what the daemon and the console want.
-    voiceEl.innerHTML = gender.voices.map((v) => opt(v.name, v.desc.name, v === voice, v.name)).join('');
+    // The row is the NAME alone. The list is in quality order (see `voices.ts`), but the grade is
+    // not printed beside it: a column of "(A)"/"(C+)" is a second thing to read on every row of a
+    // 260 px panel, and the order already puts the best one at the top, which is what the grade
+    // was there to say.
+    // The tooltip keeps the id - it is what the daemon and the console want - and the grade with
+    // it, so the ordering is still explicable on hover without being in the way.
+    voiceEl.innerHTML = gender.voices
+      .map((v) =>
+        opt(
+          v.name,
+          v.desc.name,
+          v === voice,
+          v.desc.quality ? `${v.name} - Kokoro grade ${v.desc.quality}` : v.name,
+        ),
+      )
+      .join('');
 
     remote = voice.remote ?? false;
     prefs.voice = voice.name;
     savePrefs(prefs);
   };
 
-  void (async () => {
+  /**
+   * Fetch the voice list and build the picker.
+   *
+   * A function rather than a one-shot, because failing here used to be permanent: `voicesReady`
+   * stayed false, and with Play doubling as the library's preview that left the only control on
+   * that surface disabled for the life of the panel - over a host that may have come back seconds
+   * later. Retried on every surface change (see the handle's `setBookOpen`), which is the cheapest
+   * honest trigger: it is the user having done something.
+   */
+  let loadingVoices = false;
+  const loadVoices = async (): Promise<void> => {
+    if (loadingVoices || voicesReady) return;
+    loadingVoices = true;
     try {
       const vs = await actions.voices();
       if (!vs.length) {
@@ -337,13 +427,19 @@ export function mountPanel(actions: PanelActions): PanelHandle {
       const at = locateVoice(tree, prefs.voice);
       render({ ...(at ?? {}), name: at ? prefs.voice : undefined });
 
-      showEngine();
+      voicesReady = true;
+      syncTransport();
+      // `noteVoice` alone, not `showEngine()` first: this can land while a preview is playing,
+      // and it is the one place that knows the resting line must not overwrite a live one.
       noteVoice();
     } catch (e) {
       voiceEl.innerHTML = '<option value="">unavailable</option>';
       status(`Voices: ${String(e)}`, 'error');
+    } finally {
+      loadingVoices = false;
     }
-  })();
+  };
+  void loadVoices();
 
   for (const el of [accentEl, genderEl]) {
     el.addEventListener('change', () => {
@@ -400,12 +496,45 @@ export function mountPanel(actions: PanelActions): PanelHandle {
   // Play and Resume are separate buttons, and their icons are near-identical by nature, so the
   // ENABLED state is what tells them apart: exactly one of the four is ever the obvious thing to
   // press. Play only while stopped, Pause only while speaking, Resume only while paused.
-  const syncTransport = () => {
-    btn('play').disabled = reading;
+  //
+  // PLAY IS TWO ACTIONS, chosen by whether a book is open. On the reader it reads from this page
+  // on. On the library - where there is no page image to capture, so a read could only ever end in
+  // an error message - it plays a sample of the selected voice instead, which is what the panel is
+  // on the library FOR. One button rather than two, because it is one intention ("let me hear
+  // it"), and because a fifth control that is dead on whichever surface you are looking at is
+  // worse than four that always mean something.
+  //
+  // The glyph is the same for both, so `title`/`aria-label` are the only things that distinguish
+  // reading a book from sampling a voice. They have to be kept accurate here.
+  //
+  // As a sample it needs a voice, so it waits for the list: "Loading…" is a real option in that
+  // dropdown, and a press before the list lands samples no voice at all and has the narrator
+  // announce itself as "Loading". As a read it does NOT wait - `readBook` asks for the voices
+  // itself and reports what is wrong with them.
+  //
+  // Stop stays reachable whenever anything is speaking - a sample, or a book that has been closed
+  // out from under the reader - because that is the one control that must never become unavailable
+  // while audio is playing.
+  //
+  // A hoisted `function`, not the `const` arrow the other helpers here are: the voice list
+  // resolving has to re-run this to release Play-as-preview, and that block is written above this
+  // one.
+  function syncTransport(): void {
+    const play = btn('play');
+    play.disabled = reading || previewing || (!bookOpen && !voicesReady);
+    // Not "Loading voices…" for the waiting case: the same gate covers the list arriving EMPTY and
+    // the request failing, and in both of those it has finished loading and there is still nothing
+    // to play. The status line carries which of the three it is.
+    play.title = bookOpen
+      ? 'Read from this page on'
+      : voicesReady
+        ? 'Hear the selected voice'
+        : 'No voice to preview yet';
+    play.setAttribute('aria-label', bookOpen ? 'Play' : 'Preview voice');
     btn('pause').disabled = !reading || paused;
     btn('resume').disabled = !reading || !paused;
-    btn('stop').disabled = !reading;
-  };
+    btn('stop').disabled = !reading && !previewing;
+  }
 
   const setReading = (on: boolean) => {
     reading = on;
@@ -413,20 +542,108 @@ export function mountPanel(actions: PanelActions): PanelHandle {
     syncTransport();
   };
 
+  /**
+   * Adopt a new surface. Shared by the 500 ms poll and by a press that found the cache stale, so
+   * the two cannot drift into doing different things with the same fact.
+   *
+   * Also the retry point for a voice list that failed: a surface change is the user having done
+   * something, and it is the cheapest honest trigger there is. Without it, one failed `voices()`
+   * left the library's only control disabled for the life of the panel.
+   */
+  function applyBookOpen(open: boolean): void {
+    if (open === bookOpen) return;
+    bookOpen = open;
+    syncTransport();
+    void loadVoices();
+    // Never over-write a live transport message ("Reading…", "Previewing…") or the network-voice
+    // warning: closing a book says nothing about any of them. `noteVoice` owns that precedence.
+    if (!reading && !previewing) noteVoice();
+  }
+
+  /**
+   * Which press owns the panel.
+   *
+   * Stop does not settle the promise the press is awaiting - it signals the engine and returns -
+   * so a stopped action's continuation arrives whenever the engine gets round to it, by which
+   * time a NEW press may own the transport. Without this, that stale continuation clears the new
+   * action's state: buttons back to idle, "Stopped."/resting line over the live one, and Stop
+   * disabled while audio is still playing. Compare the token, don't trust the flag - the flag is
+   * exactly what the newer press has already re-set for its own reasons.
+   *
+   * One counter for both actions, because either can supersede either: Stop mid-sample then a
+   * book, or Stop mid-book then a sample.
+   */
+  let epoch = 0;
+
+  /** Read from the page on screen onwards. Play, on the reader. */
+  const runRead = async (): Promise<void> => {
+    const mine = ++epoch;
+    setReading(true);
+    const pos = actions.position();
+    status(`Reading${pos.page ? ` from page ${pos.page}` : ''}… (capturing + OCR)`, 'busy');
+    try {
+      await actions.readBook(opts());
+      if (mine !== epoch) return;
+      status(reading ? 'Finished.' : 'Stopped.');
+    } catch (e) {
+      if (mine !== epoch) return;
+      status(String(e), 'error');
+    } finally {
+      if (mine === epoch) setReading(false);
+    }
+  };
+
+  // The name shown in the dropdown, which is also what the sample says. Read at press time rather
+  // than kept in a variable, so it is the voice on screen and not the one that was there when the
+  // list was last rebuilt. Taken verbatim: the row is the name and nothing else, and a platform
+  // voice can legitimately carry parentheses ("Microsoft David (Natural)") that are part of it.
+  const selectedVoiceName = (): string => voiceEl.selectedOptions[0]?.textContent?.trim() || 'this voice';
+
+  /** Say one sentence in the selected voice. Play, on the library. */
+  const runPreview = async (): Promise<void> => {
+    // The enable-gate cannot see an utterance the panel did not start - `kwr.readBook()` from the
+    // console leaves every flag here at rest, and a sample started on top of one would not play
+    // alongside it, it would end it. Asked at press time because nothing repaints the panel when
+    // the console speaks, so this is a refusal rather than a dimmed button.
+    if (actions.narrating()) {
+      status('Something is already being read. Stop it first.', 'error');
+      return;
+    }
+
+    const mine = ++epoch;
+    const name = selectedVoiceName();
+    previewing = true;
+    syncTransport();
+    status(`Previewing ${name}…`, 'busy');
+    try {
+      await actions.preview(sampleFor(name), opts());
+      if (mine !== epoch) return;
+      // Stop clears `previewing` before this resolves and puts its own message up. Cleared here
+      // BEFORE `noteVoice`, which is what decides the resting line and refuses to overwrite a
+      // sample in progress.
+      const cancelled = !previewing;
+      previewing = false;
+      syncTransport();
+      if (!cancelled) noteVoice();
+    } catch (e) {
+      if (mine !== epoch) return;
+      previewing = false;
+      syncTransport();
+      status(String(e), 'error');
+    }
+  };
+
+  // Which of the two this press is, decided at press time rather than latched at mount: the panel
+  // outlives the book, so the same button is a preview on the library and a read once one is open.
+  //
+  // From a LIVE read, not the polled flag. `bookOpen` is refreshed on a 500 ms tick, so opening a
+  // book and pressing Play inside that window would have sampled a voice instead of reading the
+  // page already on screen - and then relabelled itself mid-action when the tick caught up. The
+  // cache is brought forward first, so the label the press leaves behind describes what it did.
   btn('play').addEventListener('click', () => {
-    void (async () => {
-      setReading(true);
-      const pos = actions.position();
-      status(`Reading${pos.page ? ` from page ${pos.page}` : ''}… (capturing + OCR)`, 'busy');
-      try {
-        await actions.readBook(opts());
-        status(reading ? 'Finished.' : 'Stopped.');
-      } catch (e) {
-        status(String(e), 'error');
-      } finally {
-        setReading(false);
-      }
-    })();
+    const open = actions.hasBook();
+    if (open !== bookOpen) applyBookOpen(open);
+    void (open ? runRead() : runPreview());
   });
 
   btn('pause').addEventListener('click', () => {
@@ -445,14 +662,17 @@ export function mountPanel(actions: PanelActions): PanelHandle {
 
   btn('stop').addEventListener('click', () => {
     actions.stop();
-    setReading(false);
+    previewing = false;
+    setReading(false); // syncs the transport, so it runs after `previewing` is cleared
     status('Stopped.');
   });
 
-  status('Ready.');
+  syncTransport();
+  status(bookOpen ? 'Ready.' : 'Open a book to read.');
 
   return {
     destroy: () => host.remove(),
     status,
+    setBookOpen: applyBookOpen,
   };
 }

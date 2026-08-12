@@ -11,8 +11,8 @@
 // equivalent offset for a rectangle. For horizontal book text set on a page the two agree —
 // the fitted rectangle IS the axis-aligned one when nothing is rotated. A skewed capture is
 // where they part company, and that is the first thing to revisit if a real page comes back
-// wrong. It is also why the full v5 detector scored badly in the probe (OCR_EXPERIMENT.md,
-// Result 4): that was evidence about this post-processing, not about the model.
+// wrong — including a detector that reads worse than expected, since the shortcut is here and
+// not in the weights.
 
 use std::borrow::Cow;
 use std::time::Instant;

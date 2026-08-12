@@ -8,8 +8,8 @@ description = "No-Kindle, no-elevation COM smoke test for the Rust SAPI DLL"
 name = "smoke"
 path = "src/main.rs"
 
-# Must match the DLL's bitness (32-bit):
-#   cargo run --release --target i686-pc-windows-msvc -p kokoro-sapi-smoke -- <path-to-dll>
+# Must match the DLL's bitness (32-bit). No root workspace, so name the manifest, not `-p`:
+#   cargo run --release --target i686-pc-windows-msvc --manifest-path kokoro-sapi-smoke\Cargo.toml -- <path-to-dll>
 
 [dependencies]
 windows-core = "0.62"

@@ -13,11 +13,18 @@ Read Aloud. Run in CI on every `kokoro-sapi` change (`.github/workflows/sapi.yml
 `DllCanUnloadNow` returns `S_FALSE`. With no host, `Speak` returns `E_FAIL` (the correct
 "no pipe, no fallback" behavior).
 
+There is no root workspace, so `-p` cannot reach a sibling crate — each command names its
+own manifest. From the **repo root** (the same two commands CI runs):
+
 ```powershell
-cargo build -p kokoro-sapi      --release --target i686-pc-windows-msvc
-cargo run  -p kokoro-sapi-smoke --release --target i686-pc-windows-msvc -- `
-    ..\kokoro-sapi\target\i686-pc-windows-msvc\release\KokoroSapi.dll
+cargo build --release --target i686-pc-windows-msvc --manifest-path kokoro-sapi\Cargo.toml
+cargo run   --release --target i686-pc-windows-msvc --manifest-path kokoro-sapi-smoke\Cargo.toml -- `
+    kokoro-sapi\target\i686-pc-windows-msvc\release\KokoroSapi.dll
 ```
+
+Pass the DLL path: the built-in default (`..\kokoro-sapi\target\…`) is relative to the
+**working directory**, not to the manifest, so it only resolves from inside this crate or
+`kokoro-sapi\`.
 
 ## The Speak-path test (needs a running host)
 

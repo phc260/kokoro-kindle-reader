@@ -11,16 +11,18 @@
 // an unambiguous pattern (a folio, a copyright line) or verbatim repetition on another page will
 // remove anything.
 
+// Imported from the modules that own them rather than through `../src/ocr`, so a rule moving
+// between them cannot go unnoticed here: `looksInterleaved`/`measureOf` are line GEOMETRY (they
+// measure, they remove nothing), and only `furniture.ts` may drop a line.
 import { test, expect, beforeEach } from 'bun:test';
+import type { RawWord } from '../src/ocr/backend';
+import { looksInterleaved, measureOf } from '../src/ocr/lines';
 import {
   furnitureCheckpoint,
   furnitureReason,
-  looksInterleaved,
-  measureOf,
   pageToken,
   resetFurnitureMemory,
-  type RawWord,
-} from '../src/content/ocr';
+} from '../src/ocr/furniture';
 
 const PAGE_H = 1000;
 /** Width of a full line of body text in the test column. */
@@ -133,14 +135,14 @@ test('body text in the middle of the page is never furniture', () => {
 });
 
 test('a long line in the band is body text, however near the edge it sits', () => {
-  const long = 'see, on the one hand, the living the harbour should have, and, on the other hand,';
+  const long = 'see, on the one hand, the shelter the harbour should give, and, on the other hand,';
   expect(furnitureReason(line(long, 25), on('p1'))).toBeNull();
 });
 
 test('a short body line at the top of a column survives being read again', () => {
   // Ends a paragraph, so it reaches nothing like the column measure; the sentence-end escape is
   // what keeps it, and it must not enter the running-head memory on the way past.
-  const body = 'the responsibility the harbour should bear.';
+  const body = 'the responsibility the keeper should bear.';
   expect(furnitureReason(line(body, 55), on('p1'))).toBeNull();
   expect(furnitureReason(line(body, 55), on('p1'))).toBeNull();
   expect(furnitureReason(line(body, 55), on('p2'))).toBeNull();
@@ -170,7 +172,7 @@ test('the bottom band is treated exactly like the top one', () => {
 // however often the same sentence turns up in a band.
 
 test('a repeated full-measure line is body text, not a running head', () => {
-  const prose = justified('and this beacon is our lantern so we', 40);
+  const prose = justified('and this beacon is our warning so we', 40);
   expect(furnitureReason(prose, on('p1'))).toBeNull();
   expect(furnitureReason(prose, on('p2'))).toBeNull();
   expect(furnitureReason(prose, on('p3'))).toBeNull();
@@ -200,7 +202,7 @@ test('a justified line whose words the recognizer split still reads as body text
     ['d', false],
     ['lanter', true],
     ['ns', false],
-    ['of', false],
+    ['at', false],
     ['sea', false],
   ] as const;
   for (const [word, tight] of pieces) {
@@ -230,13 +232,13 @@ test('a reflowed page is the same page', () => {
   // A resize rewraps the text onto different lines and rehyphenates it. The token has to see
   // through all of that, or a re-render counts as a new page and the memory condemns a heading
   // that has only ever appeared once.
-  const wrapped = [line('To tend the lamp', 40), line('each night, to keep', 60), line('the proper light burning.', 80)];
+  const wrapped = [line('To tend the lamp', 40), line('each night, to keep', 60), line('the harbour light burning.', 80)];
   const rewrapped = [line('To tend the lamp each', 40), line('night, to keep the harbour', 60), line('light burning.', 80)];
   expect(pageToken(rewrapped)).toBe(pageToken(wrapped));
 });
 
 test('a different page is a different page', () => {
-  expect(pageToken([line('Keeping the lantern', 40)])).not.toBe(pageToken([line('A changing coastline', 40)]));
+  expect(pageToken([line('Keeping the lamps', 40)])).not.toBe(pageToken([line('A changing coastline', 40)]));
 });
 
 // --- reading across a missed gutter ----------------------------------------------------------
@@ -257,20 +259,20 @@ function twoGroups(left: string, right: string, y: number, gap: number): RawWord
 
 test('a page read across a gutter is detected', () => {
   const lines = [
-    twoGroups('the harbour should have', 'the lamp is lit', 100, 120),
-    twoGroups('and on the other hand', 'even the harbour light', 140, 120),
-    twoGroups('the responsibility of it', 'realized as the life', 180, 120),
-    twoGroups('in the turning beam of', 'giving beacon and this', 220, 120),
+    twoGroups('the shelter it gives', 'the lamp is lit', 100, 120),
+    twoGroups('and on the far side', 'above the black water', 140, 120),
+    twoGroups('the keeper of it', 'steady as the tide', 180, 120),
+    twoGroups('in the turning beam of', 'warning ships and this', 220, 120),
   ];
   expect(looksInterleaved(lines)).toBe(true);
 });
 
 test('an ordinary justified page is not', () => {
   const lines = [
-    justified('the harbour should have and on the other hand', 100),
-    justified('the responsibility that the harbour should bear', 140),
+    justified('the shelter the harbour should give and on the', 100),
+    justified('the responsibility that the keeper should bear', 140),
     justified('in reminding the crews to watch closely for rocks', 180),
-    justified('he spoke from his status as a keeper on the point', 220),
+    justified('he wrote from his post as a keeper on the point', 220),
   ];
   expect(looksInterleaved(lines)).toBe(false);
 });

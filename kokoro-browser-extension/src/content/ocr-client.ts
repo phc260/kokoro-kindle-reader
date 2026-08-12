@@ -1,20 +1,21 @@
 // The content script's way of asking for a page to be recognized.
 //
 // ONE ROUTE: content script -> service worker -> offscreen document -> `POST /ocr` on the host.
-// The hop through the offscreen document is not ceremony left over from the old wasm engine.
+// The hop through the offscreen document is not ceremony left over from the engine that used to
+// live there.
 // Under MV3 a content script's `fetch` carries the PAGE's origin (`https://read.amazon.com`),
 // and the host's allowlist admits `chrome-extension://<id>` and nothing else - so the request
 // that looks like it should be the direct one is exactly the one that 403s. The offscreen
 // document is an extension-origin context, which is also why the PCM fetch already lives there.
 //
-// There is no fallback. The in-page route this file used to keep existed because Tesseract's
+// There is no fallback. The in-page route this file used to keep existed because the old engine's
 // worker had to be same-origin; with recognition on the host it would be the same fetch from
 // the wrong origin, and a "fallback" that cannot work is worse than none - it turns one legible
 // failure into two, and only ever runs in the case nobody can reproduce. A missing or unhealthy
 // host is reported and the page is left alone.
 
 import { assertAttached } from './alive';
-import type { ColumnOcr, OcrResult, RecognizeOptions } from './ocr';
+import type { ColumnOcr, OcrResult, RecognizeOptions } from '../ocr';
 
 /** A recognized result, or - for a column past the end of the page - just the column count. */
 interface OcrOk<T> {

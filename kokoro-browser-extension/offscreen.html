@@ -1,6 +1,14 @@
 <!doctype html>
 <meta charset="utf-8">
 <title>kwr offscreen OCR</title>
-<!-- Never rendered. Exists so Tesseract's Web Worker is created from an extension-origin
-     document rather than from a content script running under Amazon's origin. -->
+<!-- Never rendered. Exists because a service worker has neither an AudioContext nor an
+     extension-origin fetch, and this page has both.
+
+     The fetch is the load-bearing half: the host allowlists chrome-extension://<id> and no other
+     origin, so a content script's own fetch carries read.amazon.com and 403s. Both the PCM
+     requests and the OCR posts go through here.
+
+     (It was originally created to host an in-page OCR engine's Web Worker, which needed an
+     extension origin of its own. That engine is gone - recognition is POST /ocr on the host -
+     and the two reasons above are what keep this document.) -->
 <script src="offscreen.js"></script>

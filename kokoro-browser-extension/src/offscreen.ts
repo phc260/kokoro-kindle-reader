@@ -18,7 +18,7 @@ import {
   type ColumnOcr,
   type OcrResult,
   type Prepared,
-} from './content/ocr';
+} from './ocr';
 import { scheduleWords } from './word-timing';
 
 // --------------------------------------------------------------------------- audio out

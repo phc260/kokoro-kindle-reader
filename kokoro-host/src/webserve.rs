@@ -53,9 +53,8 @@
 // gets narrated and swapping the engine underneath them is already the entire change.
 //
 // The posted image is the page as the reader RENDERED it — original colour, not flattened and
-// not inverted. A detector that has to find four words inside an illustration needs the
-// contrast the old Tesseract-shaped preprocessing threw away, and the backend owns whatever
-// preprocessing its own models want.
+// not inverted. A detector that has to find four words inside an illustration needs contrast a
+// flatten throws away, and the backend owns whatever preprocessing its own models want.
 //
 // UNPACED. The extension schedules every frame onto its own AudioContext cursor and *depends*
 // on synthesis outrunning playback to build a lead that hides the next chunk's synthesis; pacing

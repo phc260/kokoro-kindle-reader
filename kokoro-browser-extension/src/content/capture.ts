@@ -11,6 +11,8 @@ import { assertAttached } from './alive';
 
 export interface Route {
   onReader: boolean;
+  /** The library shelf - the same SPA, no book requested. */
+  onLibrary: boolean;
   asin: string | null;
   href: string;
 }
@@ -51,16 +53,33 @@ const SETTLE_MS = 120;
 
 // ---------------------------------------------------------------------------- route
 
+/** The library is a PATH (`/kindle-library`), where the reader is a query param. */
+const LIBRARY_PATH = /^\/kindle-library(\/|$)/;
+
 /**
  * The reader is an SPA at `read.amazon.com/?asin=<ASIN>` - a query param, NOT a `/reader`
  * path. Opening a book does not reload the document, so route changes must be observed
  * through the History API rather than waited for as navigations.
+ *
+ * The library (`read.amazon.com/kindle-library`) is the same document: it is where a session
+ * starts and where it returns between books, so the panel lives there too even though nothing
+ * on it can be read.
  */
 export function route(): Route {
   const href = location.href;
-  const onAmazonReader = /(^|\.)read\.amazon\.[a-z.]+$/.test(location.hostname);
+  // The regional readers are read.amazon.co.uk / .com.br / .com.au / .de, so the suffix genuinely
+  // has one or two labels - but `[a-z.]+$` also accepted `read.amazon.com.evil.test`, where the
+  // reader's name is a PREFIX of somebody else's domain. The manifest is what actually decides
+  // where this script runs, so nothing shipped was reachable through it; this is the guard the
+  // console path and the panel mount read, and it should not describe a page it is not on.
+  const onAmazonReader = /(^|\.)read\.amazon\.[a-z]{2,3}(\.[a-z]{2,3})?$/.test(location.hostname);
   const asin = new URLSearchParams(location.search).get('asin');
-  return { onReader: onAmazonReader && !!asin, asin, href };
+  return {
+    onReader: onAmazonReader && !!asin,
+    onLibrary: onAmazonReader && LIBRARY_PATH.test(location.pathname),
+    asin,
+    href,
+  };
 }
 
 /**
@@ -180,15 +199,35 @@ export function isReaderActive(): boolean {
 }
 
 /**
- * Call `cb(true)` when a book becomes readable and `cb(false)` when it stops being readable,
- * including across SPA navigations. Returns an unsubscribe.
+ * Where in the Cloud Reader we are, as the two facts the UI is built on.
+ *
+ * They are reported together rather than as two watchers because they are not the same question
+ * and the panel needs both: `library` (and `reader`) decide whether the panel belongs on the page
+ * at all, `reader` alone decides whether there is anything to press Play on. One poll also means
+ * one `deepWalk` per tick - `isReaderActive` short-circuits on the route before it walks, so the
+ * library costs nothing.
  */
-export function onReaderActive(cb: (active: boolean) => void): () => void {
-  let last: boolean | null = null;
+export interface Surface {
+  /** A book is open and rendered: capture, OCR and narration can run. */
+  reader: boolean;
+  /** The library shelf. No book, but the panel belongs here too. */
+  library: boolean;
+}
+
+export function surface(): Surface {
+  return { reader: isReaderActive(), library: route().onLibrary };
+}
+
+/**
+ * Call `cb` whenever either fact changes, including across SPA navigations - opening a book from
+ * the library is one of those and not a document load. Returns an unsubscribe.
+ */
+export function onSurfaceChange(cb: (s: Surface) => void): () => void {
+  let last: Surface | null = null;
 
   const tick = () => {
-    const now = isReaderActive();
-    if (now === last) return;
+    const now = surface();
+    if (last && now.reader === last.reader && now.library === last.library) return;
     last = now;
     cb(now);
   };
@@ -709,7 +748,7 @@ export async function selftest(): Promise<Record<string, unknown>> {
 
 /**
  * Save the current page image to disk, so real captures can be fed to the offline OCR
- * matrix (ROADMAP Phase 0). Run it once per cell of the grid: two-column and single,
+ * matrix. Run it once per cell of the grid: two-column and single,
  * white and black, default font and not.
  */
 export async function dumpCapture(name?: string): Promise<string> {
