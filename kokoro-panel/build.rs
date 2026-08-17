@@ -37,9 +37,11 @@ fn embed_version_info() {
     res.set("FileVersion", &version);
     res.set("ProductVersion", &version);
     // This exe statically links Slint under its GPL-3.0-only option, so the binary is
-    // conveyed under GPLv3 even though the source is MIT. Don't shorten this back to
-    // "MIT licensed" - it's the string Windows shows in the file's Properties.
-    res.set("LegalCopyright", "MIT (app code); binary conveyed under GPLv3 - see THIRD_PARTY_NOTICES.md");
+    // conveyed under GPLv3. Don't put a bare license name here: the source it links
+    // against (kokoro-host's) is not uniformly one license either - see
+    // THIRD_PARTY_NOTICES.md. State the copyright holder and point at the notice instead
+    // of asserting a license in what Windows shows in the file's Properties.
+    res.set("LegalCopyright", "Copyright (c) 2026 Alan P.H. Chiu; binary conveyed under GPLv3 - see THIRD_PARTY_NOTICES.md");
     if let Err(e) = res.compile() {
         println!("cargo:warning=winresource (panel): {e}");
     }

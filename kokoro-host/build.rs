@@ -117,10 +117,13 @@ fn embed_version_info(manifest: &Path, description: &str) {
     res.set("ProductName", "Kokoro Kindle Reader");
     res.set("FileVersion", &version);
     res.set("ProductVersion", &version);
-    // This exe links espeak-ng (GPL-3.0-or-later), so the binary is conveyed under GPLv3
-    // even though the source is MIT. Don't shorten this back to "MIT licensed" - it's the
-    // string Windows shows in the file's Properties.
-    res.set("LegalCopyright", "MIT (app code); binary conveyed under GPLv3 - see THIRD_PARTY_NOTICES.md");
+    // This exe links espeak-ng (GPL-3.0-or-later), so the binary is conveyed under GPLv3.
+    // Don't put a bare license name here: the source itself is not uniformly one license
+    // (most of it is MIT, but text.rs/espeak.rs/native_synth.rs port Apache-2.0 code - see
+    // THIRD_PARTY_NOTICES.md), so a single-word claim in what Windows shows in the file's
+    // Properties would misstate it either way. State the copyright holder and point at the
+    // notice instead of asserting a license here.
+    res.set("LegalCopyright", "Copyright (c) 2026 Alan P.H. Chiu; binary conveyed under GPLv3 - see THIRD_PARTY_NOTICES.md");
     if let Err(e) = res.compile() {
         println!("cargo:warning=winresource (host): {e}");
     }

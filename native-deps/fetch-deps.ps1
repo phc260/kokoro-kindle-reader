@@ -68,9 +68,13 @@ if ($Force -or -not (Test-Path (Join-Path $runtime 'onnxruntime.dll')) -or
     # a version that is no longer the one being shipped. Named directory, not a wildcard.
     Remove-Item -Recurse -Force $notices -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force $notices | Out-Null
-    # NB: -Include takes the BARE directory here. Adding the conventional trailing \* -
-    # which is what makes -Include work when there is no -Recurse - silently matches
-    # NOTHING in this combination on PS 5.1. Measured, not assumed: 0 files vs 4.
+    # NB: on THIS wheel's layout - LICENSE, Privacy.md and ThirdPartyNotices.txt live one
+    # level down, under onnxruntime\, not at $wex's own root - -Include needs the BARE
+    # directory here. Adding the conventional trailing \* silently matches NOTHING in that
+    # specific one-level-deeper-plus-Recurse combination on PS 5.1 (measured against the
+    # real 1.27.0 wheel: 3 files vs 0). That is a property of the files not sitting
+    # directly under the passed path, not a general PS 5.1 -Include rule - the same two
+    # forms return identical results when they do.
     $found = @(Get-ChildItem $wex -Recurse -File `
                              -Include 'LICENSE*', 'NOTICE*', 'ThirdPartyNotices*', 'Privacy*')
     if ($found.Count -eq 0) {
@@ -80,10 +84,16 @@ if ($Force -or -not (Test-Path (Join-Path $runtime 'onnxruntime.dll')) -or
                "find where upstream moved them and widen the glob.")
     }
     foreach ($f in $found) {
-        # Plain names in the normal case; disambiguate only on a collision, so two
-        # different LICENSE files can never overwrite each other down to one.
-        $dest = Join-Path $notices $f.Name
-        if (Test-Path $dest) { $dest = Join-Path $notices ('{0}-{1}' -f $f.Directory.Name, $f.Name) }
+        # Preserve the file's path RELATIVE TO $wex, not just its basename. Two distinct
+        # files that share both a basename and their immediate parent directory's name
+        # (e.g. two different vendored sub-packages each carrying their own LICENSE, one
+        # nested another level deeper) would still collide under a basename-plus-one-level
+        # disambiguation scheme, and Copy-Item -Force would silently drop the second one.
+        # A full relative path cannot collide, because Expand-Archive already extracted
+        # every file in $wex to a distinct path.
+        $rel = $f.FullName.Substring($wex.Length).TrimStart('\', '/')
+        $dest = Join-Path $notices $rel
+        New-Item -ItemType Directory -Force (Split-Path $dest -Parent) | Out-Null
         Copy-Item $f.FullName $dest -Force
     }
 }

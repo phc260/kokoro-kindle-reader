@@ -32,10 +32,11 @@ VIProductVersion "0.4.0.0"
 VIAddVersionKey "ProductName" "${APPNAME}"
 VIAddVersionKey "FileVersion" "${VERSION}"
 VIAddVersionKey "CompanyName" "${COMPANY}"
-; The app's own code is MIT, but it links espeak-ng (GPL-3.0-or-later) and Slint under
-; its GPL-3.0-only option, so this BUNDLE is conveyed under GPLv3. Don't shorten this
-; back to "MIT License" - it would misstate the license of what we actually ship.
-VIAddVersionKey "LegalCopyright" "MIT (app code); bundle conveyed under GPLv3 - see THIRD_PARTY_NOTICES.md"
+; This bundle links espeak-ng (GPL-3.0-or-later) and Slint under its GPL-3.0-only option,
+; so it is conveyed under GPLv3. Don't put a bare license name here: the app's own source
+; isn't uniformly one license either (see THIRD_PARTY_NOTICES.md), so a single-word claim
+; in what Windows shows in the installer's Properties would misstate it either way.
+VIAddVersionKey "LegalCopyright" "Copyright (c) 2026 Alan P.H. Chiu; bundle conveyed under GPLv3 - see THIRD_PARTY_NOTICES.md"
 VIAddVersionKey "FileDescription" "${APPNAME} installer"
 
 !define MUI_ICON "${STAGING}\icon.ico"
