@@ -1,3 +1,10 @@
+// `load_charset` below follows PaddleOCR's own dictionary convention
+// (https://github.com/PaddlePaddle/PaddleOCR), licensed under the Apache License,
+// Version 2.0: the leading empty-sentinel line and the `use_space_char` trailing space
+// class it decodes are that project's dictionary format, not a general CTC-decoder
+// standard. Copyright (c) 2020 PaddlePaddle Authors. All Rights Reserved. Modified for
+// this project. See THIRD_PARTY_NOTICES.md.
+
 // The two ONNX sessions and the dictionary that decodes what the second one emits.
 //
 // Built once, on the worker thread, and kept for as long as the process lives. Building them

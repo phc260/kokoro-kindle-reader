@@ -1,3 +1,8 @@
+// One default below is taken from PaddleOCR (https://github.com/PaddlePaddle/PaddleOCR),
+// licensed under the Apache License, Version 2.0: the bilinear resize filter matches
+// PaddleOCR's own `cv2.resize` default. Copyright (c) 2020 PaddlePaddle Authors. All
+// Rights Reserved. See THIRD_PARTY_NOTICES.md.
+
 // Bytes on the wire -> the RGB buffer both models are fed from.
 //
 // COLOUR, not grayscale, and no inversion. What arrives here is what the reader rendered. A

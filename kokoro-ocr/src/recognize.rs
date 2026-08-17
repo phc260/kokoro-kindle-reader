@@ -1,3 +1,9 @@
+// Portions of this file are ported/derived from PaddleOCR's recognition
+// post-processing (https://github.com/PaddlePaddle/PaddleOCR), licensed under the
+// Apache License, Version 2.0: the normalization below and the no-batch-padding CTC
+// decode follow its convention. Copyright (c) 2020 PaddlePaddle Authors. All Rights
+// Reserved. Modified for this project. See THIRD_PARTY_NOTICES.md.
+
 // Stage two: what does that line say, and where is each word?
 //
 // The recognizer reads one line crop left to right and emits a character distribution per

@@ -1,3 +1,12 @@
+// Portions of this file are ported/derived from PaddleOCR's DBNet post-processing
+// (https://github.com/PaddlePaddle/PaddleOCR), licensed under the Apache License,
+// Version 2.0. Copyright (c) 2020 PaddlePaddle Authors. All Rights Reserved.
+//
+// Modified for Kokoro Kindle Reader: connected components and axis-aligned boxes replace
+// contour fitting and a Vatti polygon offset (see below for why the two agree on this
+// input). Full licence text: licenses/Apache-2.0.txt. See THIRD_PARTY_NOTICES.md for the
+// complete list of files this notice covers.
+
 // Stage one: where is there text?
 //
 // The detector is DBNet — a segmentation network that emits one probability per pixel of a
