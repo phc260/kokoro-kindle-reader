@@ -3,6 +3,7 @@ name = "kokoro-protocol"
 version = "0.4.0"
 edition = "2021"
 description = "Shared named-pipe wire protocol between kokoro-host and the SAPI engine"
+license = "MIT"
 
 # Pure constants, no deps — builds for both the x64 host and the x86 SAPI DLL.
 [lib]

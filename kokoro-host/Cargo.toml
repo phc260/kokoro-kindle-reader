@@ -3,6 +3,9 @@ name = "kokoro-host"
 version = "0.4.0"
 edition = "2021"
 description = "Synthesis host for Kokoro Kindle Reader"
+# MIT overall; text.rs, part of espeak.rs and part of native_synth.rs are ports of
+# kokoro-js (Apache-2.0) — see THIRD_PARTY_NOTICES.md.
+license = "MIT AND Apache-2.0"
 
 # Standalone crate (own target dir), not a workspace member. The synth core is pure
 # Rust: native_synth.rs (ort WebGPU) + text.rs / espeak.rs / split_text.rs in src/.

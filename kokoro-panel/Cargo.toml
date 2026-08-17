@@ -3,6 +3,7 @@ name = "kokoro-panel"
 version = "0.4.0"
 edition = "2021"
 description = "Native settings panel for Kokoro Kindle Reader (Slint)"
+license = "MIT"
 
 # Separate from the headless host so the GUI toolkit doesn't bloat the always-on
 # tray binary. The tray spawns this on demand; it reads/writes the same

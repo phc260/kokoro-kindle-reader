@@ -3,6 +3,9 @@ name = "kokoro-ocr"
 version = "0.4.0"
 edition = "2021"
 description = "PP-OCR detection + recognition for the Kindle Cloud Reader path"
+# MIT overall; detect.rs, prep.rs, recognize.rs and session.rs port/derive from
+# PaddleOCR (Apache-2.0) — see THIRD_PARTY_NOTICES.md.
+license = "MIT AND Apache-2.0"
 
 # Standalone crate with its own target dir (there is no root workspace), and deliberately
 # TARGET-NEUTRAL: no HTTP, browser, Windows-UI, named-pipe or synthesis types appear in the

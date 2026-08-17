@@ -1,0 +1,15 @@
+accepted = [
+    "MIT",
+    "Apache-2.0",
+    "Unicode-3.0",
+    "ISC",
+    "Zlib",
+    "BSL-1.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "CDLA-Permissive-2.0",
+    # Slint (kokoro-panel only) is offered under this OR that OR the other; this project
+    # uses it under the GPL-3.0-only option — see THIRD_PARTY_NOTICES.md. Its text already
+    # ships as licenses/GPL-3.0.txt.
+    "GPL-3.0-only",
+]

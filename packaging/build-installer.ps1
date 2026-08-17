@@ -103,7 +103,26 @@ if (-not (Test-Path (Join-Path $ortNotices '*'))) {
 }
 $ortStage = Join-Path $stage 'licenses\onnxruntime'
 New-Item -ItemType Directory -Force $ortStage | Out-Null
-Copy-Item (Join-Path $ortNotices '*') $ortStage -Force
+# -Recurse: fetch-deps.ps1 now preserves the wheel's own directory structure under
+# native-deps\runtime\notices\ (collision-proofing - see its comment), so a flat
+# wildcard copy would silently drop everything inside a subdirectory.
+Copy-Item (Join-Path $ortNotices '*') $ortStage -Force -Recurse
+
+#     The Rust dependency closure's own licence notices - generated fresh from the
+#     Cargo.lock files this build just compiled against, not a hand-maintained prose
+#     list (see generate-dependency-licenses.ps1 for why, and THIRD_PARTY_NOTICES.md's
+#     "Rust crates" section for the human-readable pointer to it). Regenerating on every
+#     build, rather than provisioning once like the ORT notices, is deliberate: this
+#     closure moves with ordinary `cargo update`s in a way the ORT wheel version does
+#     not, and a stale copy here is exactly the kind of drift this mechanism exists to
+#     catch instead of silently missing.
+Write-Host '==> Generating Rust dependency licence notices'
+& (Join-Path $root 'packaging\generate-dependency-licenses.ps1')
+if ($LASTEXITCODE) { throw 'generate-dependency-licenses.ps1 failed' }
+$depLicSrc = Join-Path $here 'dependency-licenses'
+$depLicStage = Join-Path $stage 'licenses\dependencies'
+New-Item -ItemType Directory -Force $depLicStage | Out-Null
+Copy-Item (Join-Path $depLicSrc '*') $depLicStage -Force
 
 $res = Join-Path $stage 'resources'
 Copy-Item $sapiDll $res

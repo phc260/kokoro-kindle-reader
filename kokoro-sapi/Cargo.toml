@@ -3,6 +3,7 @@ name = "kokoro-sapi"
 version = "0.4.0"
 edition = "2021"
 description = "Kokoro SAPI5 voice engine (x86 in-process COM shim, connect-only)"
+license = "MIT"
 
 # Native COM DLL Kindle loads in-process. MUST be built for i686 (Kindle is 32-bit):
 #   cargo build --release --target i686-pc-windows-msvc
