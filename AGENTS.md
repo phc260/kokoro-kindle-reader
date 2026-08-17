@@ -236,16 +236,25 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
   bookmark events at true audio offsets, or Kindle speaks one sentence per page and stops.
 - **The tree is not uniformly MIT.** `kokoro-host/src/text.rs` (+ `espeak.rs`'s
   `PhonemizeSegment` mirror, `native_synth.rs`'s style-row rule) is ported from **kokoro-js**
-  and `kokoro-ocr/src/detect.rs` (+ the `kokoro-ocr` constants) from **PaddleOCR** — both
-  Apache-2.0, both attributed file-by-file in `THIRD_PARTY_NOTICES.md`, with the text in
-  `licenses/Apache-2.0.txt`. Flag any new port of upstream code that doesn't add a row there.
+  and `kokoro-ocr/src/detect.rs`, `prep.rs`, `recognize.rs`, `session.rs` from **PaddleOCR** —
+  both Apache-2.0, both attributed file-by-file in `THIRD_PARTY_NOTICES.md`, with the text in
+  `licenses/Apache-2.0.txt`. Every PaddleOCR-derived file also carries its own source header
+  retaining `Copyright (c) 2020 PaddlePaddle Authors. All Rights Reserved.` — flag any new
+  port of upstream code that doesn't add both the notices-file row and the source header.
 - **The bundle is GPLv3 even though the source is permissive.** The app links espeak-ng
   (GPL-3.0-or-later, and *modified* by `native-deps/build-espeak.ps1`) and Slint under its
   GPL-3.0 option. So `LICENSE` + `THIRD_PARTY_NOTICES.md` + `licenses/` must stay staged
   by `build-installer.ps1` and installed by `installer.nsi`. No shipped artifact may claim
-  plain "MIT" in its version resource — that's `installer.nsi`'s `VIAddVersionKey` plus
-  `LegalCopyright` in `kokoro-host/build.rs` and `kokoro-panel/build.rs`. If the espeak
+  a bare licence name in its version resource — that's `installer.nsi`'s `VIAddVersionKey`
+  plus `LegalCopyright` in `kokoro-host/build.rs` and `kokoro-panel/build.rs`; all three
+  read a copyright holder plus a pointer to `THIRD_PARTY_NOTICES.md` instead. If the espeak
   patch changes, the notice of modification in `THIRD_PARTY_NOTICES.md` must change with it.
+- **The Rust dependency closure's own licence notices are generated, not hand-audited.**
+  `packaging/generate-dependency-licenses.ps1` runs `cargo about` against each shipped
+  crate's `Cargo.lock`, on every installer build, and fails the build if a dependency's
+  licence isn't on `packaging/about.toml`'s accepted list. Don't replace that with a
+  hand-written prose list of "the unusual crates" — that's what drifted and shipped four
+  sole-licensed crates as if MIT/Apache-2.0 already covered them.
 
 ## Encoding rules (real bugs, not style)
 

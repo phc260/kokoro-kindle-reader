@@ -901,24 +901,60 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   requires the text to accompany the binaries. `licenses/` is staged and installed
   **recursively**, so adding a text there needs no packaging edit.
 - **A licence that is NAMED but whose text isn't shipped is the bug.** Three were:
-  `dxcompiler.dll` shipped with no NCSA text at all, `unicode-ident`'s
-  `(MIT OR Apache-2.0) AND Unicode-3.0` had no Unicode text (the **`AND`** is why picking
-  Apache doesn't discharge it, and it's in 6 of the 8 lockfiles), and Dawn/Tint's
-  BSD-3-Clause was pointed at upstream. All three now have texts in `licenses/`.
+  `dxcompiler.dll` shipped with no NCSA text at all (that text also covers `dxil.dll`,
+  same redistributable package, per Microsoft's terms — no second file needed),
+  `unicode-ident`'s `(MIT OR Apache-2.0) AND Unicode-3.0` had no Unicode text (the
+  **`AND`** is why picking Apache doesn't discharge it, and it's in 6 of the **7** tracked
+  lockfiles — `kokoro-protocol` has none of its own), and Dawn/Tint's BSD-3-Clause was
+  pointed at upstream. All three now have texts in `licenses/`.
+- **A licence that is *misclassified* as already-covered is the same bug wearing a
+  different shape.** `THIRD_PARTY_NOTICES.md` once described `untrusted`, `slotmap`,
+  `foldhash` and `webpki-roots` (all reached through Slint) as `OR` alternatives the
+  shipped Apache-2.0/MIT text already covered. They're sole-licensed — ISC, Zlib, Zlib,
+  CDLA-Permissive-2.0 respectively — so the doc was affirmatively dismissing obligations
+  that weren't met, which is worse than the silence it replaced. Only `ryu`
+  (`Apache-2.0 OR BSL-1.0`) is a genuine `OR` case.
+- **The Rust dependency closure's licence notices are GENERATED, not hand-audited.**
+  A checked-in prose list is what produced the misclassification above, and a lockfile of
+  hundreds of transitive crates across two target triples was never going to stay accurate
+  by hand regardless. `packaging/generate-dependency-licenses.ps1` runs `cargo about`
+  against each shipped crate's own `Cargo.lock` and target triple
+  (`x86_64-pc-windows-msvc` for `kokoro-host`/`kokoro-panel`, `i686-pc-windows-msvc` for
+  `kokoro-sapi`/`kokoro-hook`/`kokoro-inject`) and `build-installer.ps1` runs it on every
+  build — not provisioned once, because this closure moves with ordinary `cargo update`s
+  in a way the ORT wheel doesn't. `packaging/about.toml`'s `accepted` list is what this
+  project has reviewed; a dependency whose licence isn't on it makes generation **fail the
+  build**, which is the mechanism for noticing a new licence category rather than someone
+  re-reading the whole tree. All eight crates now declare a `license` field in their own
+  `Cargo.toml` (mixed `MIT AND Apache-2.0` for `kokoro-host` and `kokoro-ocr`, which embed
+  the ported/derived files; plain `MIT` for the rest) — `cargo-about` treats an unset
+  `license` field as an error, and that field was simply missing everywhere before.
 - **ONNX Runtime's notices are PROVISIONED, not tracked** — `fetch-deps.ps1` keeps the
-  wheel's own `LICENSE`/`ThirdPartyNotices.txt` into `native-deps/runtime/notices/` and
-  `build-installer.ps1` stages them to `licenses/onnxruntime/`. That keeps them matched to
-  the exact wheel the DLLs came from; a hand copy goes stale at the next version bump. Both
-  ends **throw** when they're missing — and the fetch re-runs when the notices are absent
-  even if the DLLs are present, or an old provision would never acquire them. The glob is
-  `Get-ChildItem $wex -Recurse -File -Include …` on the **bare** directory: adding the
-  conventional trailing `\*` matches **nothing** in that combination on PS 5.1 (measured,
-  0 vs 4).
-- **No shipped artifact may claim plain "MIT" in its version resource.** Three places set
-  it and all three must stay accurate: `installer.nsi`'s `VIAddVersionKey`, and the
-  `LegalCopyright` in `kokoro-host/build.rs` + `kokoro-panel/build.rs` (Windows shows that
-  string in the exe's Properties). The x86 artifacts set no copyright field and are
-  genuinely MIT-only — the SAPI shim is connect-only with no GPL deps.
+  wheel's own `LICENSE`/`Privacy.md`/`ThirdPartyNotices.txt` into
+  `native-deps/runtime/notices/` and `build-installer.ps1` stages them to
+  `licenses/onnxruntime/`. That keeps them matched to the exact wheel the DLLs came from; a
+  hand copy goes stale at the next version bump. Both ends **throw** when they're missing —
+  and the fetch re-runs when the notices are absent even if the DLLs are present, or an old
+  provision would never acquire them. The glob is `Get-ChildItem $wex -Recurse -File
+  -Include …` on the **bare** directory: on the real 1.27.0 wheel, those three files sit one
+  level down under `onnxruntime\`, not at `$wex`'s own root, and adding the conventional
+  trailing `\*` matches **nothing** for files one level deeper than the passed path
+  (measured against the real wheel: 3 vs 0). That's a property of the files not sitting
+  directly under the passed path — not a general PS 5.1 `-Include` rule, and not "0 vs 4"
+  against a fixture that didn't match the real layout. Staging preserves each file's path
+  **relative to the wheel root**, not just its basename — a basename-plus-parent-directory
+  collision scheme can still lose a file when two distinct ones share both, and a full
+  relative path can't collide because extraction already gave every file a distinct path.
+- **No shipped artifact may claim a bare licence name in its version resource** — not "MIT
+  (app code)", which was the actual wording here until it was corrected, and which stopped
+  being true the moment this tree stopped being uniformly MIT. Three places set
+  `LegalCopyright`/`VIAddVersionKey`: `installer.nsi`, `kokoro-host/build.rs`,
+  `kokoro-panel/build.rs` (Windows shows that string in the exe's Properties). All three
+  now read `Copyright (c) 2026 Alan P.H. Chiu; ... conveyed under GPLv3 - see
+  THIRD_PARTY_NOTICES.md` — a copyright holder plus a pointer to the real breakdown, not a
+  license claim that has to stay perfectly in sync with the source tree to remain true. The
+  x86 artifacts set no such field at all and are genuinely MIT-only — the SAPI shim is
+  connect-only with no GPL deps.
 
 ## Environment quirks
 

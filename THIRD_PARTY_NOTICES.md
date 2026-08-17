@@ -63,7 +63,14 @@ connected components and axis-aligned boxes in place of contour fitting and a Va
 offset — and the threshold, normalization and geometry constants across `kokoro-ocr` are
 PaddleOCR's own defaults, which is the configuration the shipped weights were exported and
 evaluated under. Each is named against the upstream parameter it comes from in the source
-itself. The model files are a separate matter; see PP-OCR models below.
+itself. `session.rs`'s dictionary loader follows PaddleOCR's own convention for the
+leading empty-sentinel line and the trailing space class. The model files are a separate
+matter; see PP-OCR models below.
+
+Each of the four files listed above carries its own header retaining PaddleOCR's copyright
+notice (`Copyright (c) 2020 PaddlePaddle Authors. All Rights Reserved.`) and naming what
+was ported or modified — this section is the overview, not the notice of record; the
+notice of record is in the source.
 
 ## Components in the installed application
 
@@ -74,7 +81,7 @@ itself. The model files are a separate matter; see PP-OCR models below.
 | **ONNX Runtime** (WebGPU build) | `onnxruntime.dll`, `onnxruntime_providers_shared.dll` | MIT |
 | **Dawn / Tint** | statically linked into `onnxruntime.dll` | BSD-3-Clause |
 | **DirectX Shader Compiler** | `dxcompiler.dll`, `dxil.dll` | see below |
-| **Rust crates** | statically linked into both `.exe`s and the x86 `.dll`s | MIT OR Apache-2.0, **and** Unicode-3.0 |
+| **Rust crates** | statically linked into both `.exe`s and the x86 `.dll`s | mostly MIT OR Apache-2.0 — see below for the full generated closure |
 | **Kokoro-82M** model weights | *not shipped* — downloaded on first run | Apache-2.0 |
 
 ---
@@ -165,8 +172,11 @@ shaders. The DirectX Shader Compiler is published under the University of
 Illinois/NCSA Open Source License — full text, including the licences of the components it
 in turn bundles, in [`licenses/dxcompiler-NCSA.txt`](licenses/dxcompiler-NCSA.txt). That
 licence requires its notice accompany binary redistributions, which is why the text is here
-and not merely named. `dxil.dll` is a Microsoft-signed validator component redistributed
-under the terms accompanying its official binary release.
+and not merely named. `dxil.dll` is the DirectX Shader Compiler's validator binary from the
+same official redistributable package as `dxcompiler.dll`; Microsoft's terms for that
+package (the `Microsoft.Direct3D.DXC` redistributable) state that `LICENSE-LLVM.txt`
+applies to all other files in it, which covers `dxil.dll` too. It is therefore covered by
+the same `licenses/dxcompiler-NCSA.txt` text above, not a separate licence.
 
 ### Google Material Symbols — Apache-2.0
 
@@ -198,26 +208,53 @@ All three are licensed under the Apache License, Version 2.0
 ([`licenses/Apache-2.0.txt`](licenses/Apache-2.0.txt)), as are both redistributing projects
 and PaddleOCR itself.
 
-### Rust crates — MIT OR Apache-2.0
+### Rust crates — MIT OR Apache-2.0, plus a generated closure report
 
 The two executables and the three x86 libraries statically link a number of crates from
 crates.io — including `ort`, `windows`/`windows-sys`, `serde`, `tray-icon`, `cpal`, and
-their transitive dependencies. All are used unmodified, and those checked individually
-are permissively licensed (typically `MIT OR Apache-2.0`); the tree as a whole has not
-been audited crate by crate, and this notice does not assert a license for every
-transitive dependency. Each crate's `Cargo.lock` records the authoritative *list* of
-crates and versions — it does not record their licenses. To enumerate the licenses
-themselves, read the crates' own manifests, or run `cargo license` / `cargo about` in a
-crate directory.
+their transitive dependencies. Most are permissively licensed (typically
+`MIT OR Apache-2.0`), but a full lockfile is hundreds of transitive crates, and a
+hand-written list of "the unusual ones" is exactly what went stale in an earlier version
+of this section: four crates it described as already-covered `OR` alternatives turned out
+to be sole-licensed under terms this file shipped no text for. **This section no longer
+tries to enumerate the closure by hand.**
 
-One term in that closure is **not** an alternative you can decline, so its text ships:
-`unicode-ident` — a dependency of six of the eight crate lockfiles, and so of nearly every
-binary here — is `(MIT OR Apache-2.0) AND Unicode-3.0`. The `AND` is the point: choosing
-Apache-2.0 does not discharge the Unicode licence, whose text is in
-[`licenses/Unicode-3.0.txt`](licenses/Unicode-3.0.txt). The other unusual licences in the
-closure are all `OR` alternatives already covered by the Apache-2.0 or MIT text shipped
-here — `ryu` (BSL-1.0), `untrusted` (ISC), `slotmap` and `foldhash` (Zlib), `webpki-roots`
-(CDLA-Permissive-2.0), all reached through Slint.
+Instead, [`packaging/generate-dependency-licenses.ps1`](packaging/generate-dependency-licenses.ps1)
+runs [`cargo about`](https://github.com/EmbarkStudios/cargo-about) against the exact
+`Cargo.lock` each shipped binary was built from — `kokoro-host` and `kokoro-panel` for
+`x86_64-pc-windows-msvc`, `kokoro-sapi`/`kokoro-hook`/`kokoro-inject` for
+`i686-pc-windows-msvc` (`kokoro-ocr` and `kokoro-protocol` are path dependencies and so
+are covered by whichever binary links them) — and renders every crate's resolved licence
+text, grouped by licence, into one HTML notice per binary. `packaging/about.toml` is the
+list of licences this project has reviewed and accepts (`MIT`, `Apache-2.0`,
+`Unicode-3.0`, `ISC`, `Zlib`, `BSL-1.0`, `BSD-2-Clause`, `BSD-3-Clause`,
+`CDLA-Permissive-2.0`, and `GPL-3.0-only` for Slint under the option chosen above); a
+dependency whose licence isn't on that list makes generation **fail the build** rather
+than ship silently uncovered — that's the mechanism for "a new licence category showed
+up," not a person re-reading the whole tree by hand.
+
+`packaging/build-installer.ps1` runs the generator on every build (not once, provisioned —
+the Rust closure moves with ordinary `cargo update`s in a way a pinned wheel doesn't) and
+stages its output into `licenses\dependencies\` beside the installed application. That
+directory, like `licenses\onnxruntime\`, exists in an install and not in this source tree.
+To reproduce it yourself: `cargo install cargo-about --locked --features cli`, then
+`packaging\generate-dependency-licenses.ps1`.
+
+Two terms in that closure are **not** alternatives you can decline by picking MIT or
+Apache-2.0, so their text has to ship on its own:
+
+- `unicode-ident` — a dependency of six of the seven crate lockfiles, and so of nearly
+  every binary here — is `(MIT OR Apache-2.0) AND Unicode-3.0`. The `AND` is the point:
+  choosing Apache-2.0 does not discharge the Unicode licence, whose text is in
+  [`licenses/Unicode-3.0.txt`](licenses/Unicode-3.0.txt).
+- Several crates reached through Slint carry a **sole** licence with no MIT/Apache-2.0
+  alternative at all — despite an earlier version of this section describing them as
+  already-covered `OR` alternatives, which was wrong and has been corrected:
+  `untrusted` (**ISC**), `slotmap` and `foldhash` (**Zlib**), `webpki-roots`
+  (**CDLA-Permissive-2.0**). Their required notice text is part of the generated
+  dependency-licence material described above, not the hand-written text in this file.
+  `ryu` (`Apache-2.0 OR BSL-1.0`) is the one crate here that genuinely is a covered `OR`
+  alternative.
 
 Slint, listed separately above, is the one dependency in this set that is **not**
 permissively licensed.
