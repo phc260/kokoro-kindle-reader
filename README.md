@@ -31,9 +31,16 @@ runs entirely on your machine. kokoro-kindle-reader is two things in one app:
 
 ## Install
 
+> [!NOTE]
+> **Prebuilt installers are temporarily unavailable** while the third-party license
+> notices and corresponding-source archive are finalized for the next release. In the
+> meantime you can **[build from source](#how-it-works)** (see ARCHITECTURE.md). This page
+> will point to a new `-setup.exe` again once **v0.4.0** is published.
+
 1. Download the latest installer from the
    [**Releases**](https://github.com/phc260/kokoro-kindle-reader/releases) page (the
-   `-setup.exe` under the newest version).
+   `-setup.exe` under the newest version) — *available again once v0.4.0 ships; see the
+   note above*.
 2. Run it. It installs just for you (no machine-wide changes), then raises a single
    Windows UAC prompt to register the Kokoro voice. Kindle narration with Kokoro is
    on by default — the app enables it automatically the next time Kindle runs.
