@@ -50,8 +50,20 @@ jobs:
             kokoro-hook
             kokoro-inject
 
-      - name: Install NSIS
-        run: choco install nsis -y --no-progress
+      # NSIS is PINNED: the installer/uninstaller stub is NSIS, so its version is part of
+      # what we ship (its COPYING is staged into licenses\nsis\ from this exact toolchain -
+      # see build-installer.ps1). Bump this in lockstep when intentionally upgrading NSIS;
+      # the value must be a version the choco `nsis` package actually publishes.
+      - name: Install NSIS (pinned)
+        run: choco install nsis --version=3.11.0 -y --no-progress
+
+      # cargo-about generates the Rust dependency-licence notices and, via `--fail`, is the
+      # gate that refuses a dependency under a licence not in packaging\about.toml. Without
+      # it here, build-installer.ps1 -> generate-dependency-licenses.ps1 THROWS, so this is
+      # a build-breaking prerequisite, not only a compliance step. Pinned so the closure
+      # notices are reproducible; --features cli matches how the tool is normally installed.
+      - name: Install cargo-about (pinned)
+        run: cargo install cargo-about --version 0.9.1 --locked --features cli
 
       # Provision native-deps/: the Dawn runtime DLLs (from the
       # onnxruntime-webgpu wheel) + an espeak-ng x64 build. Downloads + a build;
@@ -72,6 +84,20 @@ jobs:
         shell: pwsh
         run: ./packaging/build-installer.ps1
 
+      # Prove the installer actually CONTAINS the licence/notice tree (GPLv3 requires the
+      # notices accompany the binaries). Extracts the produced -setup.exe and fails if any
+      # required notice is missing or empty - same "fail loudly" contract as the OCR digests.
+      - name: Verify installer notices
+        shell: pwsh
+        run: ./packaging/verify-installer-notices.ps1
+
+      # Complete corresponding source (GPLv3 section 6) for the GPL-covered binaries -
+      # attached beside the installer below and linked from the release body.
+      - name: Build corresponding source
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: ./packaging/build-corresponding-source.ps1
+
       - name: Upload installer
         uses: actions/upload-artifact@v7
         with:
@@ -87,12 +113,16 @@ jobs:
         shell: bash
         run: echo "title=kokoro-kindle-reader v${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
-      # On a v* tag, also publish a draft GitHub Release.
+      # On a v* tag, also publish a draft GitHub Release. Attach BOTH the installer and the
+      # corresponding-source archive: the GPL-covered binaries must be conveyed with their
+      # complete corresponding source from the same place (GPLv3 section 6(d)).
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v3
         with:
-          files: packaging/*-setup.exe
+          files: |
+            packaging/*-setup.exe
+            packaging/corresponding-source-*.zip
           draft: true
           name: ${{ steps.relname.outputs.title }}
           body: |
@@ -102,3 +132,10 @@ jobs:
 
             The Kokoro model downloads on first run (open Settings from the tray).
             The app must stay running (tray) for Kindle to speak.
+
+            ---
+            **Licensing.** The installed application is conveyed under **GPL-3.0-only**
+            (it links modified espeak-ng and Slint). Complete corresponding source for the
+            GPL-covered binaries is the `corresponding-source-*.zip` attached to this
+            release; the licence notices ship inside the installer. See `LICENSING.md` and
+            `THIRD_PARTY_NOTICES.md` in the source for the full breakdown.

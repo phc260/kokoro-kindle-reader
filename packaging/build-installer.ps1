@@ -108,6 +108,20 @@ New-Item -ItemType Directory -Force $ortStage | Out-Null
 # wildcard copy would silently drop everything inside a subdirectory.
 Copy-Item (Join-Path $ortNotices '*') $ortStage -Force -Recurse
 
+#     espeak-ng's own COPYING* set (GPLv3 + Apache + BSD2 + UCD), provisioned by
+#     fetch-deps.ps1 from the exact 1.52.0 clone we build. We ship a MODIFIED espeak-ng.dll
+#     + espeak-ng-data/, and COPYING.UCD in particular covers the Unicode data baked into
+#     espeak-ng-data/ and is a DIFFERENT document from licenses\Unicode-3.0.txt. Same
+#     fail-loud contract as the ORT notices: missing text looks complete and is not.
+$espkNotices = Join-Path $root 'native-deps\espeak-ng-notices'
+if (-not (Test-Path (Join-Path $espkNotices '*'))) {
+    throw ("No espeak-ng notices at $espkNotices - run native-deps\fetch-deps.ps1 " +
+           '(it provisions COPYING* alongside the espeak build).')
+}
+$espkStage = Join-Path $stage 'licenses\espeak-ng'
+New-Item -ItemType Directory -Force $espkStage | Out-Null
+Copy-Item (Join-Path $espkNotices '*') $espkStage -Force
+
 #     The Rust dependency closure's own licence notices - generated fresh from the
 #     Cargo.lock files this build just compiled against, not a hand-maintained prose
 #     list (see generate-dependency-licenses.ps1 for why, and THIRD_PARTY_NOTICES.md's
@@ -134,6 +148,22 @@ Copy-Item (Join-Path $sapiRs 'voice-setup.ps1') $res
 # 4. Compile the installer.
 $makensis = 'C:\Program Files (x86)\NSIS\makensis.exe'
 if (-not (Test-Path $makensis)) { throw "makensis not found at $makensis - install NSIS." }
+
+#     NSIS's own licence. The installer/uninstaller stub is NSIS, compressed with LZMA
+#     (installer.nsi: SetCompressor /SOLID lzma), so the shipped stub carries NSIS's
+#     zlib/libpng + bzip2 + CPL-1.0 (LZMA module, with its linking exception) terms. Ship
+#     NSIS's own COPYING verbatim from the installed toolchain, so it always matches the
+#     NSIS version this build used (pinned in CI) rather than a checked-in copy that goes
+#     stale on a version bump - same reasoning as the ORT/espeak notices.
+$nsisCopying = Join-Path (Split-Path $makensis -Parent) 'COPYING'
+if (-not (Test-Path $nsisCopying)) {
+    throw ("NSIS COPYING not found at $nsisCopying - the installed NSIS is missing its " +
+           'licence file; the LZMA-compressed stub must ship NSIS''s licence terms.')
+}
+$nsisStage = Join-Path $stage 'licenses\nsis'
+New-Item -ItemType Directory -Force $nsisStage | Out-Null
+Copy-Item $nsisCopying (Join-Path $nsisStage 'NSIS-COPYING.txt') -Force
+
 Write-Host '==> makensis'
 & $makensis (Join-Path $here 'installer.nsi')
 if ($LASTEXITCODE) { throw 'makensis failed' }

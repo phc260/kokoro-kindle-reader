@@ -1,3 +1,15 @@
+// SPDX-License-Identifier: MIT AND Apache-2.0
+//
+// Mixed licence: this file is MIT (see LICENSE) except for `phonemize_segment_spans`
+// below, whose structure is ported from kokoro-js's `PhonemizeSegment`
+// (https://github.com/hexgrad/kokoro, npm `kokoro-js`), licensed under the Apache
+// License, Version 2.0 — trace a segment to a file, fold clause-per-line into one
+// space-joined string. Modified for Kokoro Kindle Reader: reached over an FFI to
+// espeak-ng.dll and extended to collect PHONEME events for word timing (the timing
+// path is original and not derived from kokoro-js). Full licence text:
+// licenses/Apache-2.0.txt. See THIRD_PARTY_NOTICES.md for the complete list of files
+// this notice covers.
+//
 // espeak-ng FFI + one-segment phoneme trace (the phonemizer path kokoro-js uses via
 // espeak). espeak keeps global state and isn't thread-safe — single worker only. The
 // phoneme trace goes to a FILE*, so we FFI the CRT's fopen/fclose to feed it one.

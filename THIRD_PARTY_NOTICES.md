@@ -82,6 +82,7 @@ notice of record is in the source.
 | **Dawn / Tint** | statically linked into `onnxruntime.dll` | BSD-3-Clause |
 | **DirectX Shader Compiler** | `dxcompiler.dll`, `dxil.dll` | see below |
 | **Rust crates** | statically linked into both `.exe`s and the x86 `.dll`s | mostly MIT OR Apache-2.0 — see below for the full generated closure |
+| **NSIS** (installer/uninstaller stub) | the `-setup.exe` itself + the installed `Uninstall.exe` | NSIS license (zlib/libpng + bzip2 + CPL-1.0-w/-exception for the LZMA module) |
 | **Kokoro-82M** model weights | *not shipped* — downloaded on first run | Apache-2.0 |
 
 ---
@@ -93,7 +94,7 @@ Shipped as `espeak-ng.dll` and the `espeak-ng-data/` directory. Used for phonemi
 only (the Kokoro model produces all audio; espeak-ng synthesizes none of it).
 
 **Notice of modification, required by GPLv3 section 5(a):** this project distributes a
-*modified* espeak-ng. In July 2026, the phoneme definition `o@` in `phsource/ph_english_us`
+*modified* espeak-ng. On 2026-07-05, the phoneme definition `o@` in `phsource/ph_english_us`
 was changed from `ɔː` back to `oː`, reverting upstream's "horse-hoarse merger" (upstream
 commit `5b01dd86`). The Kokoro-82M model was trained on the output of a pre-merger
 espeak-ng, so the revert is required for correct pronunciation of "four", "hoarse",
@@ -112,9 +113,16 @@ See "Obtaining corresponding source" below.
 
 Parts of the espeak-ng tree carry additional licenses: the `getopt.c` Windows
 compatibility shim is 2-clause BSD
-([`licenses/espeak-ng-BSD-2-Clause.txt`](licenses/espeak-ng-BSD-2-Clause.txt)), and the
-tree also includes Apache-2.0 and Unicode (UCD) licensed data. See `COPYING*` in the
-upstream repository.
+([`licenses/espeak-ng-BSD-2-Clause.txt`](licenses/espeak-ng-BSD-2-Clause.txt)), the tree
+includes Apache-2.0 code, and the `espeak-ng-data/` directory this installer ships includes
+**Unicode Character Database (UCD)** data under the Unicode licence. espeak-ng's own
+`COPYING*` set — `COPYING` (GPLv3), `COPYING.APACHE`, `COPYING.BSD2` and `COPYING.UCD` —
+is provisioned from the exact `1.52.0` source by `native-deps/fetch-deps.ps1` and installed
+into **`licenses\espeak-ng\`** beside the application (like `licenses\onnxruntime\`, that
+directory exists in an install, not in this source tree). Note that `COPYING.UCD` is a
+*distinct* document from [`licenses/Unicode-3.0.txt`](licenses/Unicode-3.0.txt): the latter
+is the Unicode v3 licence covering the `unicode-ident` crate, while `COPYING.UCD` covers the
+UCD data in `espeak-ng-data/`. Both are required.
 
 ### Slint — GPL-3.0-only
 
@@ -247,11 +255,13 @@ Apache-2.0, so their text has to ship on its own:
   every binary here — is `(MIT OR Apache-2.0) AND Unicode-3.0`. The `AND` is the point:
   choosing Apache-2.0 does not discharge the Unicode licence, whose text is in
   [`licenses/Unicode-3.0.txt`](licenses/Unicode-3.0.txt).
-- Several crates reached through Slint carry a **sole** licence with no MIT/Apache-2.0
+- Several crates in the panel's closure carry a **sole** licence with no MIT/Apache-2.0
   alternative at all — despite an earlier version of this section describing them as
   already-covered `OR` alternatives, which was wrong and has been corrected:
-  `untrusted` (**ISC**), `slotmap` and `foldhash` (**Zlib**), `webpki-roots`
-  (**CDLA-Permissive-2.0**). Their required notice text is part of the generated
+  `slotmap` and `foldhash` (**Zlib**, reached through Slint), `untrusted` (**ISC**) and
+  `webpki-roots` (**CDLA-Permissive-2.0**), both reached through `reqwest`'s rustls TLS
+  stack (`ring`/`rustls-webpki`/`hyper-rustls`), which the panel uses to download and
+  verify the model. Their required notice text is part of the generated
   dependency-licence material described above, not the hand-written text in this file.
   `ryu` (`Apache-2.0 OR BSL-1.0`) is the one crate here that genuinely is a covered `OR`
   alternative.
@@ -270,19 +280,45 @@ They are licensed Apache-2.0 by their authors
 ([`licenses/Apache-2.0.txt`](licenses/Apache-2.0.txt)), and your use of them is governed by
 that license and by Hugging Face's terms.
 
+### NSIS — installer / uninstaller stub
+
+Upstream: <https://nsis.sourceforge.io>. The `-setup.exe` and the `Uninstall.exe` it
+writes are compiled by NSIS, and `installer.nsi` compresses the payload with LZMA
+(`SetCompressor /SOLID lzma`), so the shipped stub embeds NSIS's compression modules. NSIS
+is published under its own composite license: the zlib/libpng license for NSIS itself and
+the zlib module, the bzip2 license for the bzip2 module, and the **Common Public License,
+version 1.0 — with a special linking exception** for the LZMA compression module (the one
+this installer uses). NSIS's full `COPYING` text, including that CPL-1.0 exception, ships
+verbatim in **`licenses\nsis\NSIS-COPYING.txt`** beside the application, taken from the
+exact NSIS toolchain version the release was built with (pinned in CI); like the ORT and
+espeak notices it is provisioned at build time rather than checked into this tree.
+
 ---
 
 ## Obtaining corresponding source
 
-For the GPL-licensed components in any binary release, the complete corresponding source
-is available at no charge:
+For the GPL-licensed components in any binary release, the complete corresponding source is
+provided at no charge, from the same place as the binary (GPLv3 §6(d)): each release on
+<https://github.com/phc260/kokoro-kindle-reader/releases> carries a
+**`corresponding-source-vX.Y.Z.zip`** beside the installer. It contains the project source
+at that tag (with Git-LFS assets resolved), all lockfiles and build/install scripts, the
+**modified** espeak-ng 1.52.0 tree that was actually built (with a SHA-256 manifest), and a
+rebuild README with tool versions. It is produced by
+[`packaging/build-corresponding-source.ps1`](https://github.com/phc260/kokoro-kindle-reader/blob/main/packaging/build-corresponding-source.ps1).
+
+The individual upstreams, for reference:
 
 - **This application's source:** <https://github.com/phc260/kokoro-kindle-reader>, at the
-  tag matching the release version.
+  tag matching the release version (this is also the source in the archive).
 - **espeak-ng:** upstream tag `1.52.0` from <https://github.com/espeak-ng/espeak-ng>,
-  plus the modification and build flags in `native-deps/build-espeak.ps1` (see above).
-  `native-deps/fetch-deps.ps1` performs the whole provisioning step.
+  plus the modification and build flags in `native-deps/build-espeak.ps1` (see above). The
+  archive ships the built modified tree so this does not depend on the upstream tag
+  remaining reachable.
 - **Slint:** <https://github.com/slint-ui/slint>, at the version recorded in
   `kokoro-panel/Cargo.lock`. Used unmodified.
+- **Rust crates:** the immutable crates.io versions pinned in the committed `Cargo.lock`
+  files; `cargo build` against them fetches exactly the corresponding source.
 
-If you would prefer these on physical media, open an issue on the repository above.
+The download above satisfies the §6 obligation, so this project makes no separate standing
+written offer of source (§6(b)). If a release's source archive is ever missing or a link is
+broken, open an issue on the repository and it will be provided.

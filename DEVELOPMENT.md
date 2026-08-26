@@ -87,7 +87,8 @@ to co-author to work around it.
 
 | Workflow | Trigger | What it does |
 |---|---|---|
-| `installer.yml` | `v*` tag push, or manual dispatch | Full installer build (both exes + the 3 x86 artifacts + NSIS). On a tag it also **drafts** a GitHub Release with the setup.exe attached. |
+| `installer.yml` | `v*` tag push, or manual dispatch | Full installer build (both exes + the 3 x86 artifacts + NSIS, pinned). Installs `cargo-about` (pinned) so the licence gate runs; verifies the built installer's notice tree (`verify-installer-notices.ps1`). On a tag it drafts a GitHub Release with the setup.exe **and** `corresponding-source-*.zip` attached. |
+| `license-check.yml` | PRs touching `Cargo.*`, `about.toml`, `native-deps/**`, panel SVGs, or the notices | Runs the `cargo-about --fail` gate (`generate-dependency-licenses.ps1`) at review time — no full build. |
 | `sapi.yml` | `kokoro-sapi/**`, `kokoro-sapi-smoke/**`, or `kokoro-protocol/**` changes | Builds the x86 SAPI DLL + runs the no-Kindle COM smoke test (`kokoro-sapi-smoke`). |
 | `hook.yml` | `kokoro-hook/**` / `kokoro-inject/**` changes | Compile-checks the x86 hook + injector. |
 

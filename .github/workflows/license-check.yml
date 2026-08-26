@@ -1,0 +1,59 @@
+name: License check (cargo-about gate)
+
+# Runs the cargo-about --fail gate (the same one build-installer.ps1 runs) on pull requests
+# that could change the licence closure, so a dependency under a licence not in
+# packaging/about.toml's `accepted` list is caught at review time - not only on a release
+# tag. This does NOT build the installer or the native deps; it only resolves and renders
+# the Rust dependency-licence notices, which is what the gate needs.
+
+on:
+  pull_request:
+    paths:
+      - '**/Cargo.toml'
+      - '**/Cargo.lock'
+      - 'packaging/about.toml'
+      - 'packaging/about.hbs'
+      - 'packaging/generate-dependency-licenses.ps1'
+      - 'packaging/components.toml'
+      - 'THIRD_PARTY_NOTICES.md'
+      - 'LICENSING.md'
+      - 'native-deps/**'
+      - 'kokoro-panel/ui/*.svg'
+      - '.github/workflows/license-check.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cargo-about:
+    name: cargo-about gate
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: i686-pc-windows-msvc # the x86 crates resolve a different graph
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            kokoro-host
+            kokoro-panel
+            kokoro-sapi
+            kokoro-hook
+            kokoro-inject
+
+      # Pinned to match the release pipeline (installer.yml).
+      - name: Install cargo-about (pinned)
+        run: cargo install cargo-about --version 0.9.1 --locked --features cli
+
+      # Generates one report per shipped (crate, target) pair and, via --fail, refuses any
+      # crate whose resolved licence is not accepted for it in about.toml. A new licence
+      # category (or GPL arriving through anything other than Slint) fails this job.
+      - name: Run the licence gate
+        shell: pwsh
+        run: ./packaging/generate-dependency-licenses.ps1

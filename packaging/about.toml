@@ -8,8 +8,42 @@ accepted = [
     "BSD-2-Clause",
     "BSD-3-Clause",
     "CDLA-Permissive-2.0",
-    # Slint (kokoro-panel only) is offered under this OR that OR the other; this project
-    # uses it under the GPL-3.0-only option — see THIRD_PARTY_NOTICES.md. Its text already
-    # ships as licenses/GPL-3.0.txt.
-    "GPL-3.0-only",
 ]
+
+# GPL-3.0-only is accepted for the Slint crates ONLY, not globally, so a future GPL
+# dependency reaching the tree through anything other than Slint still fails the gate
+# (that is the whole point of --fail). Slint is offered under
+# `GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0`,
+# and this project chooses the GPL-3.0-only option (see THIRD_PARTY_NOTICES.md); the OR
+# is satisfied as soon as one alternative is accepted, so this per-crate grant is what
+# picks that option. Every Slint-family crate carries the same tri-licence; the list is
+# deliberately generous (naming a crate not present in a given build is harmless), so a
+# renamed or newly-pulled Slint sub-crate does not silently break the build.
+[slint]
+accepted = ["GPL-3.0-only"]
+[slint-build]
+accepted = ["GPL-3.0-only"]
+[slint-macros]
+accepted = ["GPL-3.0-only"]
+[i-slint-common]
+accepted = ["GPL-3.0-only"]
+[i-slint-compiler]
+accepted = ["GPL-3.0-only"]
+[i-slint-core]
+accepted = ["GPL-3.0-only"]
+[i-slint-core-macros]
+accepted = ["GPL-3.0-only"]
+[i-slint-backend-selector]
+accepted = ["GPL-3.0-only"]
+[i-slint-backend-winit]
+accepted = ["GPL-3.0-only"]
+[i-slint-backend-linuxkms]
+accepted = ["GPL-3.0-only"]
+[i-slint-backend-testing]
+accepted = ["GPL-3.0-only"]
+[i-slint-renderer-femtovg]
+accepted = ["GPL-3.0-only"]
+[i-slint-renderer-skia]
+accepted = ["GPL-3.0-only"]
+[i-slint-renderer-software]
+accepted = ["GPL-3.0-only"]

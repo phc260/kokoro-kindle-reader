@@ -1,0 +1,262 @@
+# Non-Rust shipped-component manifest (authoritative inventory)
+#
+# cargo-about (packaging/generate-dependency-licenses.ps1) enumerates the RUST closure
+# statically linked into the executables and the x86 DLLs. It cannot see the native DLLs,
+# the ONNX models, the SVG assets baked into the panel, or the NSIS installer stub. This
+# file is the checked-in record for exactly those non-Rust shipped files, so every byte the
+# installer places on disk has a recorded origin + licence somewhere: Rust in the generated
+# reports, everything else here.
+#
+# Per-artifact conveyed-licence reasoning (which binary is GPLv3, which stays MIT, and why)
+# lives in LICENSING.md; THIRD_PARTY_NOTICES.md carries the human-readable prose. This is
+# the machine-checkable inventory the installer-extraction CI test reads.
+#
+# Fields per [[component]]:
+#   name         - shipped filename or asset group
+#   shipped_as   - where it lands in an install (relative to the app dir)
+#   version      - upstream version / immutable revision, or "per-build" when not fixed
+#   sha256       - digest of the shipped file where it is stable/pinned; omitted for
+#                  build-variable outputs (see `sha256_note`)
+#   upstream     - canonical source URL
+#   spdx         - SPDX licence expression
+#   modified     - true if this project alters it (with `modification` describing how)
+#   notice       - the licence/notice file(s) shipped for it (install-relative)
+#   corresponding_source - where the complete source is, for copyleft components
+#   provisioned_by / staged_by - the scripts that fetch and package it
+
+# --- ONNX Runtime (WebGPU) wheel: four redistributed DLLs -------------------------------
+# All four come from the onnxruntime-webgpu 1.27.0 Python wheel (pinned in fetch-deps.ps1).
+# Their SHA-256 is fixed by that wheel version, not by our build; the wheel pin IS the pin.
+# The wheel's own LICENSE / ThirdPartyNotices.txt / Privacy.md ship in licenses/onnxruntime/.
+
+[[component]]
+name = "onnxruntime.dll"
+shipped_as = "onnxruntime.dll"
+version = "onnxruntime-webgpu 1.27.0 wheel"
+upstream = "https://github.com/microsoft/onnxruntime"
+spdx = "MIT"
+modified = false
+notice = ["licenses/onnxruntime/", "THIRD_PARTY_NOTICES.md"]
+provisioned_by = "native-deps/fetch-deps.ps1"
+staged_by = "packaging/build-installer.ps1"
+sha256_note = "fixed by the pinned wheel version; not recomputed here"
+
+[[component]]
+name = "onnxruntime_providers_shared.dll"
+shipped_as = "onnxruntime_providers_shared.dll"
+version = "onnxruntime-webgpu 1.27.0 wheel"
+upstream = "https://github.com/microsoft/onnxruntime"
+spdx = "MIT"
+modified = false
+notice = ["licenses/onnxruntime/", "THIRD_PARTY_NOTICES.md"]
+provisioned_by = "native-deps/fetch-deps.ps1"
+staged_by = "packaging/build-installer.ps1"
+sha256_note = "fixed by the pinned wheel version; not recomputed here"
+
+# Dawn / Tint are statically linked INSIDE onnxruntime.dll (no separate file), and implement
+# the WebGPU execution provider the synth runs on.
+[[component]]
+name = "Dawn / Tint (inside onnxruntime.dll)"
+shipped_as = "onnxruntime.dll (statically linked)"
+version = "as bundled in onnxruntime-webgpu 1.27.0"
+upstream = "https://dawn.googlesource.com/dawn"
+spdx = "BSD-3-Clause"
+modified = false
+notice = ["licenses/dawn-BSD-3-Clause.txt", "licenses/onnxruntime/"]
+provisioned_by = "native-deps/fetch-deps.ps1 (as part of onnxruntime.dll)"
+staged_by = "packaging/build-installer.ps1"
+
+[[component]]
+name = "dxcompiler.dll"
+shipped_as = "dxcompiler.dll"
+version = "as bundled in onnxruntime-webgpu 1.27.0 (Microsoft.Direct3D.DXC redistributable)"
+upstream = "https://github.com/microsoft/DirectXShaderCompiler"
+spdx = "NCSA"
+modified = false
+notice = ["licenses/dxcompiler-NCSA.txt", "THIRD_PARTY_NOTICES.md"]
+provisioned_by = "native-deps/fetch-deps.ps1"
+staged_by = "packaging/build-installer.ps1"
+sha256_note = "fixed by the pinned wheel version; not recomputed here"
+
+[[component]]
+name = "dxil.dll"
+shipped_as = "dxil.dll"
+version = "as bundled in onnxruntime-webgpu 1.27.0 (Microsoft.Direct3D.DXC redistributable)"
+upstream = "https://github.com/microsoft/DirectXShaderCompiler"
+spdx = "NCSA"
+modified = false
+# Same redistributable package as dxcompiler.dll; Microsoft's terms state LICENSE-LLVM.txt
+# (the NCSA text in dxcompiler-NCSA.txt) covers all other files in it, dxil.dll included.
+notice = ["licenses/dxcompiler-NCSA.txt", "THIRD_PARTY_NOTICES.md"]
+provisioned_by = "native-deps/fetch-deps.ps1"
+staged_by = "packaging/build-installer.ps1"
+sha256_note = "fixed by the pinned wheel version; not recomputed here"
+
+# --- espeak-ng: MODIFIED GPL component (the whole reason binaries are GPLv3) -------------
+[[component]]
+name = "espeak-ng.dll"
+shipped_as = "espeak-ng.dll"
+version = "1.52.0 + horse-hoarse revert"
+upstream = "https://github.com/espeak-ng/espeak-ng (tag 1.52.0)"
+spdx = "GPL-3.0-or-later"
+modified = true
+modification = "phsource/ph_english_us: phoneme o@ reverted from horse-hoarse merger (upstream 5b01dd86), 2026-07-05; see build-espeak.ps1 and THIRD_PARTY_NOTICES.md section 5(a) notice"
+notice = ["licenses/espeak-ng/COPYING", "licenses/espeak-ng/COPYING.APACHE", "licenses/espeak-ng/COPYING.BSD2", "licenses/espeak-ng/COPYING.UCD", "licenses/GPL-3.0.txt"]
+corresponding_source = "native-deps/build-espeak.ps1 (patch + build recipe); corresponding-source-vX.Y.Z.zip carries the built modified tree"
+provisioned_by = "native-deps/fetch-deps.ps1 -> build-espeak.ps1"
+staged_by = "packaging/build-installer.ps1"
+sha256_note = "per-build (built with whatever MSVC vswhere -latest finds; not hash-pinned by design)"
+
+[[component]]
+name = "espeak-ng-data/"
+shipped_as = "espeak-ng-data/"
+version = "1.52.0 + horse-hoarse revert (compiled from the modified phsource)"
+upstream = "https://github.com/espeak-ng/espeak-ng (tag 1.52.0)"
+spdx = "GPL-3.0-or-later AND Unicode-DFS-2016"
+modified = true
+modification = "derived from the modified phsource above (the o@ revert affects the compiled dictionary data)"
+# COPYING.UCD covers the Unicode Character Database data baked into this directory; it is a
+# DIFFERENT document from licenses/Unicode-3.0.txt (which is for the unicode-ident crate).
+notice = ["licenses/espeak-ng/COPYING", "licenses/espeak-ng/COPYING.UCD", "licenses/GPL-3.0.txt"]
+corresponding_source = "native-deps/build-espeak.ps1; corresponding-source-vX.Y.Z.zip"
+provisioned_by = "native-deps/fetch-deps.ps1 -> build-espeak.ps1"
+staged_by = "packaging/build-installer.ps1"
+
+# --- Cloud Reader OCR models: pinned by SHA-256, redistributed unmodified ----------------
+[[component]]
+name = "det.onnx"
+shipped_as = "ocr/det.onnx"
+version = "en_PP-OCRv3_det_infer"
+sha256 = "f139598bc2af4e4b6fe98dec11574e30edfdd91fc94ac1425c18ace3bd5a866b"
+upstream = "https://huggingface.co/SWHL/RapidOCR (rev 1cfba2e90fc938db55889873735088de210cc173, PP-OCRv4/en_PP-OCRv3_det_infer.onnx)"
+spdx = "Apache-2.0"
+modified = false
+notice = ["licenses/Apache-2.0.txt", "THIRD_PARTY_NOTICES.md"]
+provisioned_by = "native-deps/fetch-ocr-models.ps1"
+staged_by = "packaging/build-installer.ps1"
+
+[[component]]
+name = "rec.onnx"
+shipped_as = "ocr/rec.onnx"
+version = "en_PP-OCRv5_mobile_rec_infer"
+sha256 = "1081b104a3c44d103511f150763d997a846994431c5775a800c802254c1124bf"
+upstream = "https://github.com/PT-Perkasa-Pilar-Utama/ppu-paddle-ocr-models (rev 3a180da5b1a3bab3371d970f4da42cb9b354a9a7, recognition/multi/en/v5)"
+spdx = "Apache-2.0"
+modified = false
+notice = ["licenses/Apache-2.0.txt", "THIRD_PARTY_NOTICES.md"]
+provisioned_by = "native-deps/fetch-ocr-models.ps1"
+staged_by = "packaging/build-installer.ps1"
+
+[[component]]
+name = "en_dict.txt"
+shipped_as = "ocr/en_dict.txt"
+version = "ppocrv5_en_dict"
+sha256 = "c60d46e9e01d500ed6388fe8681051eac9cf6692e0d57238315be171927a0a1b"
+upstream = "https://github.com/PT-Perkasa-Pilar-Utama/ppu-paddle-ocr-models (rev 3a180da5b1a3bab3371d970f4da42cb9b354a9a7)"
+spdx = "Apache-2.0"
+modified = false
+notice = ["licenses/Apache-2.0.txt", "THIRD_PARTY_NOTICES.md"]
+provisioned_by = "native-deps/fetch-ocr-models.ps1"
+staged_by = "packaging/build-installer.ps1"
+
+# --- Google Material Symbols: compiled INTO kokoro-panel.exe (no separate file) ----------
+# Checked into kokoro-panel/ui/ as SVG and compiled by slint-build. Upstream does not
+# version individual glyphs; the checked-in SHA-256 is the immutable identifier of what
+# ships. Set: Material Symbols (Rounded).
+[[component]]
+name = "play-arrow.svg (Material Symbols)"
+shipped_as = "compiled into kokoro-panel.exe"
+version = "Material Symbols Rounded (upstream glyph revision not recorded at download; pinned by sha256)"
+sha256 = "6b54a9f7ec6750b667eac040a5bd3b54a2c8ea172c89a327ab70deaeadaddadd"
+upstream = "https://github.com/google/material-design-icons"
+spdx = "Apache-2.0"
+modified = false
+notice = ["licenses/Apache-2.0.txt", "THIRD_PARTY_NOTICES.md"]
+staged_by = "compiled by slint-build into kokoro-panel.exe"
+
+[[component]]
+name = "pause.svg (Material Symbols)"
+shipped_as = "compiled into kokoro-panel.exe"
+version = "Material Symbols Rounded (pinned by sha256)"
+sha256 = "291bd435d0751390433cf450fbfa60440bb380ead50e65737e7404dc81441aad"
+upstream = "https://github.com/google/material-design-icons"
+spdx = "Apache-2.0"
+modified = false
+notice = ["licenses/Apache-2.0.txt", "THIRD_PARTY_NOTICES.md"]
+staged_by = "compiled by slint-build into kokoro-panel.exe"
+
+[[component]]
+name = "stop.svg (Material Symbols)"
+shipped_as = "compiled into kokoro-panel.exe"
+version = "Material Symbols Rounded (pinned by sha256)"
+sha256 = "0df047629b161c910b9ffaae7f702229520018bc2eef34c92e185d5a7b905606"
+upstream = "https://github.com/google/material-design-icons"
+spdx = "Apache-2.0"
+modified = false
+notice = ["licenses/Apache-2.0.txt", "THIRD_PARTY_NOTICES.md"]
+staged_by = "compiled by slint-build into kokoro-panel.exe"
+
+[[component]]
+name = "sprint.svg (Material Symbols)"
+shipped_as = "compiled into kokoro-panel.exe"
+version = "Material Symbols Rounded (pinned by sha256)"
+sha256 = "e1d5265262e2653c76d85ceab45ed3762be110e99620472d1369017313b6577e"
+upstream = "https://github.com/google/material-design-icons"
+spdx = "Apache-2.0"
+modified = false
+notice = ["licenses/Apache-2.0.txt", "THIRD_PARTY_NOTICES.md"]
+staged_by = "compiled by slint-build into kokoro-panel.exe"
+
+[[component]]
+name = "resume.svg (Material Symbols, MODIFIED)"
+shipped_as = "compiled into kokoro-panel.exe"
+version = "Material Symbols Rounded (pinned by sha256)"
+sha256 = "9451fa4a139e7eece35df3909783602ce6843d7ed5aad857c8bd10f6f0a679e6"
+upstream = "https://github.com/google/material-design-icons"
+spdx = "Apache-2.0"
+modified = true
+modification = "left bar lengthened past the play triangle; in-file change notice in kokoro-panel/ui/resume.svg"
+notice = ["licenses/Apache-2.0.txt", "THIRD_PARTY_NOTICES.md"]
+staged_by = "compiled by slint-build into kokoro-panel.exe"
+
+# --- The project's own icon (MIT) -------------------------------------------------------
+[[component]]
+name = "icon.ico"
+shipped_as = "icon.ico (+ embedded in both exes / shortcuts)"
+version = "project asset (Git LFS)"
+upstream = "this repository (icons/)"
+spdx = "MIT"
+modified = false
+notice = ["LICENSE"]
+staged_by = "packaging/build-installer.ps1"
+
+# --- NSIS installer/uninstaller stub ----------------------------------------------------
+[[component]]
+name = "NSIS installer/uninstaller stub"
+shipped_as = "the -setup.exe itself, and the installed Uninstall.exe"
+version = "3.11 (pinned in .github/workflows/installer.yml)"
+upstream = "https://nsis.sourceforge.io"
+# zlib/libpng for NSIS + zlib module, bzip2 for the bzip2 module, CPL-1.0 (with a linking
+# exception) for the LZMA module this installer uses (SetCompressor /SOLID lzma).
+spdx = "Zlib AND bzip2-1.0.6 AND CPL-1.0"
+modified = false
+notice = ["licenses/nsis/NSIS-COPYING.txt", "THIRD_PARTY_NOTICES.md"]
+staged_by = "packaging/build-installer.ps1 (from the installed NSIS COPYING)"
+
+# --- Model weights: NOT shipped (runtime download) --------------------------------------
+[[component]]
+name = "Kokoro-82M weights + voice embeddings"
+shipped_as = "NOT shipped - downloaded on first run into the user profile"
+version = "onnx-community/Kokoro-82M-v1.0-ONNX (per model-manifest.json checksums)"
+upstream = "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX"
+spdx = "Apache-2.0"
+modified = false
+notice = ["licenses/Apache-2.0.txt", "THIRD_PARTY_NOTICES.md"]
+
+# --- The executables + x86 DLLs (Rust closure; listed for completeness) -----------------
+# kokoro-host.exe, kokoro-panel.exe (x64) and KokoroSapi.dll, kokoro_hook.dll,
+# kokoro-inject.exe (x86) are Rust build outputs. Their statically-linked dependency
+# licences are enumerated per binary by cargo-about into licenses/dependencies/; their
+# conveyed licence (GPLv3 for the two exes, MIT for the x86 clients) is argued in
+# LICENSING.md. They are recorded here only as a pointer - the authoritative Rust record is
+# the generated report, not this file.

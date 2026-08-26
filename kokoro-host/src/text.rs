@@ -1,3 +1,16 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// Ported from kokoro-js (https://github.com/hexgrad/kokoro, npm `kokoro-js`),
+// licensed under the Apache License, Version 2.0. Copyright (c) 2024 Xenova / the
+// kokoro-js authors.
+//
+// Modified for Kokoro Kindle Reader: kokoro-js's text-processing logic was translated
+// from JavaScript into Rust and reworked to operate on UTF-8 bytes rather than JS
+// strings (so the byte-scanning passes reproduce the upstream regexes); it is a
+// behavioural port verified by token-parity, not an independent implementation. Full
+// licence text: licenses/Apache-2.0.txt. See THIRD_PARTY_NOTICES.md for the complete
+// list of files this notice covers.
+//
 // Kokoro-js text normalization + punctuation segmentation + phoneme post-processing.
 // Operates on UTF-8 bytes (Vec<u8>/&[u8]) so the byte-scanning passes mirror the
 // upstream kokoro-js `m()` regexes exactly. Verified by token-parity against kokoro-js.

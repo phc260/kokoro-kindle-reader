@@ -1,3 +1,11 @@
+// SPDX-License-Identifier: MIT AND Apache-2.0
+//
+// Mixed licence: this file is MIT (see LICENSE) except for the style-row selection rule
+// `clamp(nTokens - 2, 0, 509)` (marked below), which is taken from kokoro-js's
+// `generate_from_ids` (https://github.com/hexgrad/kokoro, npm `kokoro-js`), licensed
+// under the Apache License, Version 2.0. Full licence text: licenses/Apache-2.0.txt.
+// See THIRD_PARTY_NOTICES.md for the complete list of files this notice covers.
+//
 // Native Dawn WebGPU synthesis for the Kindle pipe path — pure Rust. pipe.rs calls
 // this to synthesize each chunk so Kindle can be narrated.
 //
@@ -815,6 +823,7 @@ fn worker_loop(rx: mpsc::Receiver<Job>, base: PathBuf, espeak_data: PathBuf) {
                     wids.push(0); // BOS
                     wids.extend_from_slice(window);
                     wids.push(0); // EOS
+                    // style row = clamp(nTokens-2, 0, 509) (kokoro-js generate_from_ids; Apache-2.0).
                     let row = (wids.len() as i64 - 2).clamp(0, VOICE_ROWS as i64 - 1) as usize;
                     let style = &voice_data[row * STYLE_DIM..(row + 1) * STYLE_DIM];
 

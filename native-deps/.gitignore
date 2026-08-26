@@ -1,5 +1,6 @@
 # Downloaded / built third-party artifacts (all re-created by fetch-deps.ps1).
 espeak-ng-src/
+espeak-ng-notices/
 onnxruntime/
 runtime/
 # The pinned OCR models, 9.80 MB, re-created by fetch-ocr-models.ps1. Their digests live in

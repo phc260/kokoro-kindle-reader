@@ -117,7 +117,38 @@ if ($Force -or -not (Test-Path $espkDll)) {
 }
 Copy-Item $espkDll $runtime -Force
 
+# --- 2a. espeak-ng's OWN licence + notice files -----------------------------
+# We ship a MODIFIED espeak-ng.dll + espeak-ng-data/ (GPL-3.0-or-later), and parts of the
+# espeak-ng tree carry ADDITIONAL licences that must accompany the binaries: COPYING is the
+# GPLv3 text, COPYING.APACHE / COPYING.BSD2 cover code shims, and COPYING.UCD covers the
+# Unicode Character Database data baked into espeak-ng-data/. COPYING.UCD is NOT the same
+# document as licenses/Unicode-3.0.txt (that is the Unicode v3 licence for the unicode-ident
+# crate) - the two are distinct and both are required. Provisioned from the exact 1.52.0
+# clone we build, so they stay matched to the shipped DLL, the same way the ORT notices are.
+# Re-provision when missing (a later addition, like the ORT notices) so an old provision
+# doesn't ship the DLL with no espeak notices.
+$espkNotices = Join-Path $tp 'espeak-ng-notices'
+if ($Force -or -not (Test-Path (Join-Path $espkNotices '*'))) {
+    Remove-Item -Recurse -Force $espkNotices -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Force $espkNotices | Out-Null
+    # Named files, not a wildcard sweep of the tree: ship exactly the four licence texts,
+    # nothing else the clone happens to contain. Each must exist - a modified GPL binary
+    # shipped without its licence text is the failure this whole block prevents.
+    foreach ($c in 'COPYING', 'COPYING.APACHE', 'COPYING.BSD2', 'COPYING.UCD') {
+        $src = Join-Path $espkSrc $c
+        if (-not (Test-Path $src)) {
+            throw ("espeak-ng licence file $c not found in the 1.52.0 clone at $espkSrc. " +
+                   'Shipping the modified espeak-ng.dll without its notices is what this ' +
+                   'step exists to prevent - re-clone with -Force.')
+        }
+        Copy-Item $src $espkNotices -Force
+    }
+}
+
 Write-Host '==> native-deps provisioned:'
 Write-Host ("    runtime DLLs    : {0}" -f (Get-ChildItem $runtime -Filter '*.dll').Count)
-Write-Host ("    ORT notices     : {0}" -f @(Get-ChildItem $notices -File -ErrorAction SilentlyContinue).Count)
+# -Recurse: the wheel's notice files sit one level down (under notices\onnxruntime\), so a
+# non-recursive count reads 0 and looks like a failure when provisioning actually succeeded.
+Write-Host ("    ORT notices     : {0}" -f @(Get-ChildItem $notices -Recurse -File -ErrorAction SilentlyContinue).Count)
+Write-Host ("    espeak notices  : {0}" -f @(Get-ChildItem $espkNotices -File -ErrorAction SilentlyContinue).Count)
 Write-Host ("    espeak-ng.dll   : {0}" -f (Test-Path $espkDll))

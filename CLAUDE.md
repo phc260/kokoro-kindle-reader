@@ -909,11 +909,16 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   pointed at upstream. All three now have texts in `licenses/`.
 - **A licence that is *misclassified* as already-covered is the same bug wearing a
   different shape.** `THIRD_PARTY_NOTICES.md` once described `untrusted`, `slotmap`,
-  `foldhash` and `webpki-roots` (all reached through Slint) as `OR` alternatives the
-  shipped Apache-2.0/MIT text already covered. They're sole-licensed — ISC, Zlib, Zlib,
-  CDLA-Permissive-2.0 respectively — so the doc was affirmatively dismissing obligations
-  that weren't met, which is worse than the silence it replaced. Only `ryu`
-  (`Apache-2.0 OR BSL-1.0`) is a genuine `OR` case.
+  `foldhash` and `webpki-roots` as `OR` alternatives the shipped Apache-2.0/MIT text
+  already covered. They're sole-licensed — ISC, Zlib, Zlib, CDLA-Permissive-2.0
+  respectively — so the doc was affirmatively dismissing obligations that weren't met,
+  which is worse than the silence it replaced. Only `ryu` (`Apache-2.0 OR BSL-1.0`) is a
+  genuine `OR` case. **The provenance in the doc had a second error worth not repeating:**
+  it said all four are "reached through Slint". Only `slotmap`/`foldhash` are (via
+  `i-slint-core`); `untrusted` and `webpki-roots` come through `reqwest`'s rustls stack
+  (`ring`/`rustls-webpki`/`hyper-rustls`), which the *panel* uses to download and verify
+  the model. Same closure, different door — don't attribute a crate to Slint without
+  checking the lockfile.
 - **The Rust dependency closure's licence notices are GENERATED, not hand-audited.**
   A checked-in prose list is what produced the misclassification above, and a lockfile of
   hundreds of transitive crates across two target triples was never going to stay accurate
@@ -945,6 +950,50 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   **relative to the wheel root**, not just its basename — a basename-plus-parent-directory
   collision scheme can still lose a file when two distinct ones share both, and a full
   relative path can't collide because extraction already gave every file a distinct path.
+- **espeak-ng's and NSIS's notices are PROVISIONED the same way, and both must ship.** We
+  distribute a *modified* espeak-ng.dll + `espeak-ng-data/`, so its own `COPYING*` set —
+  `COPYING` (GPLv3), `COPYING.APACHE`, `COPYING.BSD2`, `COPYING.UCD` — is copied by
+  `fetch-deps.ps1` from the exact 1.52.0 clone into `native-deps/espeak-ng-notices/` and
+  staged to `licenses/espeak-ng/`. **`COPYING.UCD` is NOT `licenses/Unicode-3.0.txt`** — the
+  former covers the UCD data baked into `espeak-ng-data/`, the latter is the `unicode-ident`
+  crate's Unicode-v3 licence; both are required and they are different documents. The
+  installer/uninstaller stub is NSIS compressed with LZMA (`SetCompressor /SOLID lzma`), so
+  `build-installer.ps1` stages NSIS's own `COPYING` (zlib + bzip2 + CPL-1.0 with the LZMA
+  linking exception) from the installed toolchain to `licenses/nsis/NSIS-COPYING.txt`. NSIS
+  is **pinned** in `installer.yml` (`--version=3.11`) so that shipped licence matches the
+  version actually used. Both stagers **throw** when the text is absent — a modified GPL
+  binary or an LZMA stub shipped without its licence is the failure they exist to prevent.
+- **`cargo-about` must run in CI, and `GPL-3.0-only` is accepted for Slint ONLY.**
+  `installer.yml` installs `cargo about` (pinned `0.9.1`, `--locked --features cli`) before
+  `build-installer.ps1`; without it `generate-dependency-licenses.ps1` throws, so this is a
+  build prerequisite, not just a compliance step (it was missing, and the gate had never
+  run in CI). `license-check.yml` runs the same gate on PRs that touch the closure.
+  `about.toml` grants `GPL-3.0-only` via **per-crate** `[<slint-crate>] accepted` entries,
+  not the global list, so a GPL dependency arriving through anything other than Slint still
+  fails `--fail`. The list of slint crates is deliberately generous — naming an absent crate
+  is a harmless warning, a missed present one is a build break.
+- **The Apache-2.0 in-file change notices are a distinct duty from shipping the text.**
+  Apache-2.0 §4(b) needs each modified file to carry a prominent change notice. The
+  `kokoro-ocr` files (PaddleOCR) already had them; `text.rs` (whole-file kokoro-js port),
+  `espeak.rs` and `native_synth.rs` (the named kokoro-js-derived portions, marked
+  `MIT AND Apache-2.0`), and `kokoro-panel/ui/resume.svg` (modified Material Symbol) now do
+  too. An SVG carries it as a leading XML comment; a mixed `.rs` file names the exact
+  derived portion rather than SPDX-tagging the whole file Apache.
+- **The non-Rust payload has its own checked-in inventory: `packaging/components.toml`.**
+  `cargo-about` sees only the Rust closure; every native DLL, ONNX model, compiled-in SVG,
+  the icon and the NSIS stub is recorded there (origin, version/revision, SHA-256 where
+  pinned, SPDX, notice files, modification status). `verify-installer-notices.ps1` extracts
+  the built `-setup.exe` in CI and fails if any required notice is missing or empty —
+  proving the tree is *in the installer*, not merely in staging. `LICENSING.md` is the
+  authoritative per-artifact map + the aggregation boundary (the x86 clients stay MIT) + the
+  §6 procedure; `THIRD_PARTY_NOTICES.md` is the shipped prose.
+- **GPL binaries ship with complete corresponding source (§6).**
+  `build-corresponding-source.ps1` builds `corresponding-source-vX.Y.Z.zip` (tracked project
+  source with LFS resolved, all lockfiles/scripts, the *modified* espeak-ng 1.52.0 tree with
+  a SHA-256 manifest, and a rebuild README); `installer.yml` builds it on a tag and attaches
+  it to the release beside the installer. The Rust deps' corresponding source is the
+  immutable crates.io versions pinned in the committed lockfiles (stated in the archive
+  README, not vendored). **Don't ship the installer alone** — that was the §6 gap.
 - **No shipped artifact may claim a bare licence name in its version resource** — not "MIT
   (app code)", which was the actual wording here until it was corrected, and which stopped
   being true the moment this tree stopped being uniformly MIT. Three places set

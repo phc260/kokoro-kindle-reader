@@ -238,9 +238,12 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
   `PhonemizeSegment` mirror, `native_synth.rs`'s style-row rule) is ported from **kokoro-js**
   and `kokoro-ocr/src/detect.rs`, `prep.rs`, `recognize.rs`, `session.rs` from **PaddleOCR** —
   both Apache-2.0, both attributed file-by-file in `THIRD_PARTY_NOTICES.md`, with the text in
-  `licenses/Apache-2.0.txt`. Every PaddleOCR-derived file also carries its own source header
-  retaining `Copyright (c) 2020 PaddlePaddle Authors. All Rights Reserved.` — flag any new
-  port of upstream code that doesn't add both the notices-file row and the source header.
+  `licenses/Apache-2.0.txt`. Every derived file carries its own in-file Apache-2.0 change
+  notice (Apache §4(b)): the PaddleOCR ones retain `Copyright (c) 2020 PaddlePaddle Authors`,
+  and `text.rs` / `espeak.rs` / `native_synth.rs` name the kokoro-js-derived portion (the
+  mixed files are marked `MIT AND Apache-2.0`, not whole-file Apache). `kokoro-panel/ui/resume.svg`
+  carries one too (modified Material Symbol). Flag any new port that doesn't add both the
+  notices-file row and the in-file header.
 - **The bundle is GPLv3 even though the source is permissive.** The app links espeak-ng
   (GPL-3.0-or-later, and *modified* by `native-deps/build-espeak.ps1`) and Slint under its
   GPL-3.0 option. So `LICENSE` + `THIRD_PARTY_NOTICES.md` + `licenses/` must stay staged
@@ -254,7 +257,21 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
   crate's `Cargo.lock`, on every installer build, and fails the build if a dependency's
   licence isn't on `packaging/about.toml`'s accepted list. Don't replace that with a
   hand-written prose list of "the unusual crates" — that's what drifted and shipped four
-  sole-licensed crates as if MIT/Apache-2.0 already covered them.
+  sole-licensed crates as if MIT/Apache-2.0 already covered them. `cargo about` must be
+  installed in CI (pinned in `installer.yml`; also gated on PRs by `license-check.yml`) or
+  the build throws. `GPL-3.0-only` is accepted for the Slint crates ONLY (per-crate entries
+  in `about.toml`), so a GPL dep through anything else fails `--fail`.
+- **Provisioned notices that must ship, and the checks that prove they do.** Besides the ORT
+  wheel notices, `fetch-deps.ps1` provisions espeak-ng's own `COPYING*` (incl. `COPYING.UCD`,
+  which is NOT `licenses/Unicode-3.0.txt`) and `build-installer.ps1` stages NSIS's `COPYING`
+  (LZMA/CPL exception) from the pinned toolchain — both `throw` when absent.
+  `verify-installer-notices.ps1` extracts the built `-setup.exe` in CI and fails on any
+  missing/empty notice. `packaging/components.toml` inventories every non-Rust shipped file;
+  `LICENSING.md` is the authoritative per-artifact map + §6 procedure.
+- **GPL binaries ship corresponding source.** `build-corresponding-source.ps1` produces
+  `corresponding-source-vX.Y.Z.zip` (LFS-resolved source, lockfiles/scripts, the modified
+  espeak-ng tree + SHA-256 manifest) and `installer.yml` attaches it to the release. Never
+  ship the installer alone.
 
 ## Encoding rules (real bugs, not style)
 

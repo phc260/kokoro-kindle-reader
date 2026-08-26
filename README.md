@@ -177,9 +177,13 @@ GPL-3.0 option. **The binaries in a release are therefore conveyed under the GNU
 version 3.** That's the normal outcome of permissively licensed code linking a GPL library
 — it doesn't restrict the source in this repository, only the combined binary.
 
-Full component list, the required notice of modification to espeak-ng, and where to get
-corresponding source: [**THIRD_PARTY_NOTICES.md**](THIRD_PARTY_NOTICES.md). The GPLv3
-text is in [licenses/](licenses/), and the installer places both next to the app.
+The authoritative per-artifact map (which binary is GPLv3, which parts stay MIT, and why),
+the aggregation boundary, and the corresponding-source procedure are in
+[**LICENSING.md**](LICENSING.md). The shipped notice — full component list, the required
+notice of modification to espeak-ng, and where to get corresponding source — is
+[**THIRD_PARTY_NOTICES.md**](THIRD_PARTY_NOTICES.md). The GPLv3 text is in
+[licenses/](licenses/), and the installer places both next to the app; each binary release
+also ships a `corresponding-source-*.zip`.
 
 The **Kokoro-82M voice model** is Apache-2.0 and is *not* bundled — the app fetches it
 from Hugging Face when you click **Download** in Settings.
