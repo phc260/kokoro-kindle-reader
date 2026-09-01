@@ -159,9 +159,9 @@ reuse. That is a separate, reviewed change.
   between the check and the `commit_from_file` that reopens it. So each file is read once, hashed
   as bytes, and the session and dictionary are built from that same buffer (`commit_from_memory`).
   What was verified is what runs, with nothing in between.
-- **They are re-verified at run time, not only at install.** These are data reachable from a
-  network-facing endpoint, and a digest an installer checked once stops being true the moment
-  anything else writes to the directory.
+- **They are re-verified at run time, not only at download.** These are data reachable from a
+  network-facing endpoint, and a digest the panel checked once at download stops being true the
+  moment anything else writes to the directory.
 - **Cancellation is a bounded discard contract, not a stop button.** ORT cannot abandon a run in
   progress, so the flag is checked between stages and before each line — which is finer than it
   sounds, since a page is one detection pass plus one inference per line. A job already inside a
@@ -212,5 +212,7 @@ $env:ORT_DYLIB_PATH = "native-deps\runtime\onnxruntime.dll"
 cargo run --manifest-path kokoro-ocr\Cargo.toml --example ocr-check -- page.png native-deps\ocr
 ```
 
-`kokoro-host` finds the models in `ocr\` beside its own exe (staged by the installer), falling
-back to `native-deps\ocr` in a debug build so `cargo run` works without a copy step.
+`kokoro-host` finds the models in `<app_data>\ocr\` — where the settings panel **downloads**
+them at first run (they are not bundled in the installer; see `ocr-manifest.json` and
+`kokoro-panel::download`) — falling back to `native-deps\ocr` in a debug build so `cargo run`
+works without a download.

@@ -29,14 +29,94 @@
 # (see fetch-deps.ps1): committing a generated report invites it to go stale the moment
 # a lockfile changes without anyone re-running this script. build-installer.ps1 calls it
 # on every build so the shipped notices always match what was just compiled.
-param([switch]$SkipCheck)
+param([switch]$SkipCheck, [string]$OutputDir)
 $ErrorActionPreference = 'Stop'
 
 $here = $PSScriptRoot
 $root = Split-Path $here -Parent
 $template = Join-Path $here 'about.hbs'
 $config = Join-Path $here 'about.toml'
-$outDir = Join-Path $here 'dependency-licenses'
+$outDir = if ($OutputDir) { $OutputDir } else { Join-Path $here 'dependency-licenses' }
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+
+# cargo-about is the licence-expression gate, but its normalized SPDX fallback text can
+# contain placeholders such as "Copyright (c) <year> <owner>" even when a crate packages
+# the real notice in LICENSE.md. Append those packaged files verbatim so binary
+# redistribution conditions retain the actual copyright holders. The SHA-256 on every
+# heading makes the appendix self-auditing and lets the installer extraction check prove
+# these are harvested source files, not another hand-written summary.
+function Add-PackagedLicenseAppendix([string]$manifest, [string]$triple, [string]$report) {
+    $metadataText = (& cargo metadata --locked --format-version 1 --filter-platform $triple `
+                     --manifest-path $manifest) | Out-String
+    if ($LASTEXITCODE) { throw "cargo metadata failed for $manifest ($triple)" }
+    $metadata = $metadataText | ConvertFrom-Json
+
+    $resolved = @{}
+    foreach ($node in $metadata.resolve.nodes) { $resolved[$node.id] = $true }
+    $packages = @($metadata.packages | Where-Object {
+        $resolved.ContainsKey($_.id)
+    } | Sort-Object name, version)
+
+    $body = New-Object System.Text.StringBuilder
+    [void]$body.AppendLine('<section id="packaged-license-files" data-license-appendix="1">')
+    [void]$body.AppendLine('<h2>Exact packaged licence and notice files</h2>')
+    [void]$body.AppendLine('<p class="intro">Copied verbatim from the dependency packages resolved by Cargo.lock.</p>')
+    $fileCount = 0
+    $packageCount = 0
+
+    foreach ($package in $packages) {
+        $packageDir = Split-Path ([string]$package.manifest_path) -Parent
+        $files = @()
+        $files += Get-ChildItem -LiteralPath $packageDir -File | Where-Object {
+            $_.Name -match '(?i)^(LICENSES?|LICENCES?|COPYINGS?|NOTICES?|COPYRIGHTS?|AUTHORS?|CONTRIBUTORS?)(?:$|[._-].*)'
+        }
+        foreach ($subdirName in 'licenses', 'licences', 'notices') {
+            $subdir = Join-Path $packageDir $subdirName
+            if (Test-Path -LiteralPath $subdir -PathType Container) {
+                $files += Get-ChildItem -LiteralPath $subdir -Recurse -File
+            }
+        }
+        $files = @($files | Sort-Object FullName -Unique)
+        if ($files.Count -eq 0) { continue }
+
+        $packageCount++
+        $packageLabel = [System.Net.WebUtility]::HtmlEncode("$($package.name) $($package.version)")
+        [void]$body.AppendLine('<article class="packaged-license">')
+        [void]$body.AppendLine("<h3>$packageLabel</h3>")
+        if ($package.authors.Count -gt 0) {
+            $authors = [System.Net.WebUtility]::HtmlEncode(($package.authors -join '; '))
+            [void]$body.AppendLine(('<p class="package-authors">Package authors: {0}</p>' -f $authors))
+        }
+
+        foreach ($file in $files) {
+            $relative = $file.FullName.Substring($packageDir.Length).TrimStart('\', '/')
+            $label = [System.Net.WebUtility]::HtmlEncode($relative)
+            $hash = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLower()
+            $text = [System.IO.File]::ReadAllText($file.FullName)
+            $encoded = [System.Net.WebUtility]::HtmlEncode($text)
+            [void]$body.AppendLine(('<h4 data-source-sha256="{0}">{1}</h4>' -f $hash, $label))
+            [void]$body.AppendLine("<pre>$encoded</pre>")
+            $fileCount++
+        }
+        [void]$body.AppendLine('</article>')
+    }
+    [void]$body.AppendLine('</section>')
+
+    if ($packageCount -eq 0 -or $fileCount -eq 0) {
+        throw "No packaged dependency licence files found for $manifest ($triple)"
+    }
+    $html = [System.IO.File]::ReadAllText($report)
+    if (-not $html.Contains('</body>')) { throw "cargo-about report has no </body>: $report" }
+    $html = $html.Replace('</body>', $body.ToString() + '</body>')
+    [System.IO.File]::WriteAllText($report, $html, $utf8NoBom)
+
+    $written = [System.IO.File]::ReadAllText($report)
+    if (-not $written.Contains('data-license-appendix="1"') -or
+        -not $written.Contains('data-source-sha256=')) {
+        throw "Packaged dependency licence appendix was not written to $report"
+    }
+    return @{ Packages = $packageCount; Files = $fileCount }
+}
 
 if (-not $SkipCheck) {
     cargo about --version *> $null
@@ -72,6 +152,9 @@ foreach ($t in $targets) {
                'notice actually ships) rather than widening `accepted` to make the error ' +
                'go away.')
     }
+    $added = Add-PackagedLicenseAppendix $manifest $t.Triple $out
+    Write-Host ("    appended exact packaged notices: {0} file(s) from {1} package(s)" -f `
+                $added.Files, $added.Packages)
 }
 
 Write-Host "==> Dependency licence notices generated in $outDir"

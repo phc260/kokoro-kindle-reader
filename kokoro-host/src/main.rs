@@ -114,7 +114,7 @@ fn start_pipe_server() -> std::sync::Arc<state::HostState> {
     // The web endpoint is best-effort: a failure to create or bind it must not take the pipe
     // down with it, because Kindle depends on the pipe and not on this.
     let web = match webserve::Endpoint::load_or_create(&app_data) {
-        Ok(ep) => Some(webserve::WebCtx::new(ctx.clone(), std::sync::Arc::new(ep))),
+        Ok(ep) => Some(webserve::WebCtx::new(ctx.clone(), std::sync::Arc::new(ep), &app_data)),
         Err(e) => {
             eprintln!("[host] web endpoint disabled: {e}");
             None

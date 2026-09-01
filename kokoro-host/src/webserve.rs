@@ -469,32 +469,28 @@ pub struct WebCtx {
 }
 
 impl WebCtx {
-    pub fn new(ctx: Ctx, endpoint: Arc<Endpoint>) -> WebCtx {
-        let assets = ocr_assets();
+    pub fn new(ctx: Ctx, endpoint: Arc<Endpoint>, app_data: &Path) -> WebCtx {
+        let assets = ocr_assets(app_data);
         eprintln!("[host] OCR models = {}", assets.dir.display());
         WebCtx { ctx, endpoint, ocr: Arc::new(kokoro_ocr::Ocr::new(assets, ocr_limits())) }
     }
 }
 
-/// The OCR model directory name, beside the exe. `ocr\` rather than a `models\` subfolder:
-/// `model_base` already means the Kokoro voice model, which the panel downloads, verifies
-/// against `model-manifest.json` and deletes files out of — and these are staged by the
-/// installer and pinned in `kokoro-ocr` instead.
+/// The OCR model directory name, `ocr\` under the app-data dir. Not `models\`:
+/// `model_base` already means the Kokoro voice model. The two models and the dictionary are
+/// **downloaded at first run** by the panel into `<app_data>/ocr/` (like the voice model, and
+/// no longer bundled in the installer), and pinned by digest in `kokoro-ocr`.
 const OCR_DIR: &str = "ocr";
 
-/// Where the two models and the dictionary live: `ocr\` beside the exe, which is what the
-/// installer stages. The dev fallback is the provisioned tree, so a `cargo run` works without
-/// a copy step — and it is `debug_assertions`-gated, because a release build that silently
-/// read a developer's `native-deps` would hide exactly the staging bug this path exists to
-/// expose.
-fn ocr_assets() -> kokoro_ocr::Assets {
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let staged = dir.join(OCR_DIR);
-            if staged.exists() {
-                return kokoro_ocr::Assets::new(staged);
-            }
-        }
+/// Where the two models and the dictionary live: `<app_data>/ocr/` — the same location the
+/// panel downloads them into (`kokoro-panel::download::ocr_dir`), so the two ends agree. The
+/// dev fallback is the provisioned tree, so a `cargo run` works without downloading — and it
+/// is `debug_assertions`-gated, because a release build that silently read a developer's
+/// `native-deps` would hide exactly the "models weren't downloaded" bug this path exposes.
+fn ocr_assets(app_data: &Path) -> kokoro_ocr::Assets {
+    let downloaded = app_data.join(OCR_DIR);
+    if downloaded.exists() {
+        return kokoro_ocr::Assets::new(downloaded);
     }
     #[cfg(debug_assertions)]
     {
@@ -508,13 +504,9 @@ fn ocr_assets() -> kokoro_ocr::Assets {
         }
     }
     // Nothing found. Returning the expected location rather than erroring is what lets
-    // `/status` say `missing` with a path in it, instead of the endpoint refusing to start.
-    kokoro_ocr::Assets::new(
-        std::env::current_exe()
-            .ok()
-            .and_then(|e| e.parent().map(|d| d.join(OCR_DIR)))
-            .unwrap_or_else(|| PathBuf::from(OCR_DIR)),
-    )
+    // `/status` say `missing` with a path in it, instead of the endpoint refusing to start —
+    // and `missing` is the correct state until the panel's first-run download lands.
+    kokoro_ocr::Assets::new(downloaded)
 }
 
 /// The request bounds. `max_body_bytes` is deliberately the same constant the transport
@@ -1079,5 +1071,35 @@ mod tests {
             .unwrap();
 
         server.await.unwrap();
+    }
+
+    // Drift guard: the OCR download manifest (ocr-manifest.json, embedded by kokoro-panel to
+    // fetch the models at first run) must agree with kokoro-ocr's own pinned filenames and
+    // digests, which gate the load and every /status probe. The two are deliberately separate
+    // authorities - the panel verifies on download, kokoro-ocr re-verifies on load - so a file
+    // the panel would accept but the host would reject is exactly the split this test forbids.
+    #[test]
+    fn ocr_manifest_matches_kokoro_ocr_pins() {
+        let m: serde_json::Value =
+            serde_json::from_str(include_str!("../../ocr-manifest.json")).unwrap();
+        let files = m["files"].as_array().expect("files array");
+        let by_name = |name: &str| {
+            files
+                .iter()
+                .find(|f| f["path"] == name)
+                .unwrap_or_else(|| panic!("ocr-manifest.json missing {name}"))
+                .clone()
+        };
+        for (name, sha) in [
+            (kokoro_ocr::DET_FILE, kokoro_ocr::DET_SHA256),
+            (kokoro_ocr::REC_FILE, kokoro_ocr::REC_SHA256),
+            (kokoro_ocr::DICT_FILE, kokoro_ocr::DICT_SHA256),
+        ] {
+            let f = by_name(name);
+            assert_eq!(f["sha256"], sha, "sha256 drift for {name}");
+            assert!(f["url"].as_str().is_some_and(|u| !u.is_empty()), "no url for {name}");
+            assert!(f["size"].as_u64().is_some_and(|s| s > 0), "no size for {name}");
+        }
+        assert_eq!(files.len(), 3, "ocr-manifest.json should list exactly the three OCR files");
     }
 }

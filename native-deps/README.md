@@ -30,11 +30,15 @@ network. `build-espeak.ps1` is called by `fetch-deps.ps1`; it builds espeak-ng
 
 Separate because it needs **network and nothing else** — no Python, no compiler, minutes
 faster. It is also not a build dependency: `kokoro-ocr` loads these at run time, so the host
-builds without them and reports OCR `missing` until they are there. `build-installer.ps1`
-stages `ocr/` into the package and calls this script's **`-VerifyOnly`** mode first, which checks
-all three digests and throws without touching the network. An existence check on one file is not
-enough: an interrupted download leaves one present and another absent, the build succeeds, and
-the host reports `missing` on the first page.
+builds without them and reports OCR `missing` until they are there.
+
+**This is for DEV only.** The OCR models are **not bundled in the installer** — the settings
+panel downloads them at first run into `%APPDATA%\...\ocr\`, exactly like the Kokoro voice model
+(see [`ocr-manifest.json`](../ocr-manifest.json) and `kokoro-panel::download`). So
+`build-installer.ps1` stages nothing under `ocr\` and no longer calls this script. Run it to
+populate `native-deps\ocr\` so a debug `cargo run` of the host finds the models without a
+download; the digests and URLs here are the same ones `ocr-manifest.json` and
+`kokoro-ocr/src/lib.rs` carry (keep the three in sync).
 
 Two things it does that are worth knowing:
 

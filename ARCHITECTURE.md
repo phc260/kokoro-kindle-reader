@@ -238,8 +238,9 @@ cargo build --release --target i686-pc-windows-msvc --manifest-path kokoro-sapi\
 C:\Windows\SysWOW64\regsvr32.exe "kokoro-sapi\target\i686-pc-windows-msvc\release\KokoroSapi.dll"
 ```
 
-The TTS model (~340 MB: `onnx/model.onnx`, voices, config/tokenizer) is **downloaded by
-the panel** on first run into the app-data dir — no manual asset step.
+The TTS model (~340 MB: `onnx/model.onnx`, voices, config/tokenizer) and the small Cloud
+Reader OCR models (~10 MB, into `<app-data>\ocr\`) are **downloaded by the panel** on first
+run into the app-data dir — no manual asset step, and neither is bundled in the installer.
 
 To build the packaged installer (release-builds both crates, stages everything, and
 runs `makensis`):

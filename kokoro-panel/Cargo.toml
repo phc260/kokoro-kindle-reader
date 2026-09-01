@@ -3,7 +3,10 @@ name = "kokoro-panel"
 version = "0.4.0"
 edition = "2021"
 description = "Native settings panel for Kokoro Kindle Reader (Slint)"
-license = "MIT"
+# MIT AND Apache-2.0: the crate's own code is MIT, but it compiles five Google Material
+# Symbols SVGs (ui/*.svg, Apache-2.0; resume.svg modified) into the binary via slint-build.
+# See LICENSING.md's island list and packaging/components.toml.
+license = "MIT AND Apache-2.0"
 
 # Separate from the headless host so the GUI toolkit doesn't bloat the always-on
 # tray binary. The tray spawns this on demand; it reads/writes the same

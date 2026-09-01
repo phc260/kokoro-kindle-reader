@@ -6,13 +6,13 @@ is recorded here rather than left to be discovered. Coverage is inventoried per 
 module; individual test names are spelled out only where the distinctions matter (the furniture
 rules, which can silently drop a line of the book).
 
-**245 automated tests**, in three suites, plus seven harnesses that are run by hand.
+**246 automated tests**, in three suites, plus seven harnesses that are run by hand.
 
 | Suite | Tests | Runs where | Command |
 |---|---|---|---|
 | Browser extension | 145 in 14 files | `bun test`, no browser | `bun test test/` |
 | `kokoro-ocr` | 54 | `cargo test`, **no models needed** | `cargo test --manifest-path kokoro-ocr\Cargo.toml` |
-| `kokoro-host` | 46 | `cargo test` | `cargo test --manifest-path kokoro-host\Cargo.toml` |
+| `kokoro-host` | 47 | `cargo test` | `cargo test --manifest-path kokoro-host\Cargo.toml` |
 | every other crate | **0** | — | — |
 
 The three suites run in about four seconds combined and need no host, no Kindle, no models and no
@@ -230,14 +230,14 @@ the models themselves.
 
 ---
 
-## `kokoro-host` — 46 tests
+## `kokoro-host` — 47 tests
 
 `cargo test --manifest-path kokoro-host\Cargo.toml`.
 
 | Module | Tests | What it pins |
 |---|---|---|
 | `text` | 29 | The Kokoro-js normalization port: golden characterization tests whose expected values were proven token-identical to the reference pipeline, plus the whole span-mapping layer (every normalized byte has a span, spans monotonic and in bounds, UTF-16 offsets counting code units not bytes) |
-| `webserve` | 9 | The loopback endpoint: per-route body caps, the constant-time token comparison visiting every byte, the frozen response shape, and *an over-cap post is refused with a status the client can read* — which speaks the browser's dialect on purpose, because `curl` sends `Expect: 100-continue` and cannot see that bug |
+| `webserve` | 10 | The loopback endpoint: per-route body caps, the constant-time token comparison visiting every byte, the frozen response shape, and *an over-cap post is refused with a status the client can read* — which speaks the browser's dialect on purpose, because `curl` sends `Expect: 100-continue` and cannot see that bug. Plus *ocr\_manifest\_matches\_kokoro\_ocr\_pins*: the OCR download manifest's digests/filenames must equal `kokoro-ocr`'s own pins, so the panel (which downloads at first run) and the host (which re-verifies on load) can never split on what a valid model is |
 | `native_synth::mark_tests` | 5 | Word marks against the wire rules — the only coverage `kokoro_protocol::mark_is_valid` has anywhere |
 | `model_patch` | 3 | The in-memory ONNX graph patch, byte-matched against `onnx`'s own serialization (270 bytes lifted verbatim out of the old sidecar) |
 
@@ -274,7 +274,7 @@ Recorded here rather than left implicit.
 
 The three workflows are `installer.yml` (builds the package on a `v*` tag), `sapi.yml` (builds the
 x86 DLL and runs the COM smoke test) and `hook.yml` (compile-checks the x86 hook and injector).
-**None of them runs `bun test` or `cargo test`.** Every one of the 245 tests above passes or fails
+**None of them runs `bun test` or `cargo test`.** Every one of the 246 tests above passes or fails
 only when somebody runs it locally.
 
 That is the single largest gap in this document, and it is cheap to close: the extension suite

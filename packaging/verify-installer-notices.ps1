@@ -35,28 +35,88 @@ if ($LASTEXITCODE) { throw "7z failed to extract $Setup" }
 # Find a file anywhere in the extracted tree (NSIS/7z layout puts app files under an
 # internal folder), returning its FileInfo or $null. Match by relative-path suffix so
 # 'licenses\espeak-ng\COPYING.UCD' is unambiguous but path-prefix-agnostic.
+#
+# A BARE name (no directory in the suffix, e.g. 'LICENSE') must be THE install-root file,
+# beside the executables - not any nested namesake. The ORT wheel ships its own
+# 'licenses\onnxruntime\...\LICENSE', and other subtrees could too (resources\, espeak-ng-data\),
+# so a plain '*\LICENSE' suffix match would let any of them satisfy a check for the top-level
+# LICENSE after the real one was dropped. Anchor bare names to the directory kokoro-host.exe
+# lands in - the install root - and match the name exactly there.
 $all = Get-ChildItem $dir -Recurse -File
+$hostExe = $all | Where-Object { $_.Name -ieq 'kokoro-host.exe' } | Select-Object -First 1
+if (-not $hostExe) {
+    throw 'kokoro-host.exe not found in the extracted installer; cannot anchor the install root.'
+}
+$installRoot = $hostExe.DirectoryName
 function Find-Shipped([string]$suffix) {
     $s = ($suffix -replace '/', '\')
-    $all | Where-Object { $_.FullName -replace '/', '\' -like "*\$s" } | Select-Object -First 1
+    $bare = ($s -notmatch '\\')
+    $all | Where-Object {
+        if ($bare) { ($_.DirectoryName -eq $installRoot) -and ($_.Name -ieq $s) }
+        else { ($_.FullName -replace '/', '\') -like "*\$s" }
+    } | Select-Object -First 1
 }
 
-# Required single files (relative to the install root) - must exist AND be non-empty.
+# Extract the exact per-component notice paths from the authoritative non-Rust inventory.
+# This is intentionally a narrow, fail-closed parser for components.toml's documented
+# one-line `notice = ["path", ...]` schema. Windows PowerShell 5.1 has no TOML parser; accepting
+# only this small shape avoids adding a build dependency while making format drift an error.
+function Get-ComponentNoticePaths([string]$manifestPath) {
+    $toml = [System.IO.File]::ReadAllText($manifestPath)
+    $componentCount = [regex]::Matches($toml, '(?m)^\s*\[\[component\]\]\s*$').Count
+    $declarationCount = [regex]::Matches($toml, '(?m)^\s*notice\s*=').Count
+    $matches = [regex]::Matches(
+        $toml,
+        '(?m)^\s*notice\s*=\s*\[(?<items>[^\r\n]*)\]\s*(?:#.*)?$'
+    )
+
+    if ($componentCount -eq 0) { throw 'components.toml contains no component blocks.' }
+    if ($declarationCount -ne $componentCount) {
+        throw ("components.toml must have exactly one notice field per component: " +
+               "$componentCount component(s), $declarationCount notice field(s).")
+    }
+    if ($matches.Count -ne $declarationCount) {
+        throw ('Every components.toml notice field must use the one-line ' +
+               '`notice = ["path", ...]` schema.')
+    }
+
+    $paths = @()
+    foreach ($match in $matches) {
+        $items = $match.Groups['items'].Value
+        $stringPattern = '"[^"\\\r\n]+"'
+        $listPattern = '^\s*' + $stringPattern + '(?:\s*,\s*' + $stringPattern + ')*\s*$'
+        if ($items -notmatch $listPattern) {
+            throw "Malformed components.toml notice list: [$items]"
+        }
+        $strings = [regex]::Matches($items, '"(?<value>[^"\\\r\n]+)"')
+
+        foreach ($string in $strings) {
+            $path = $string.Groups['value'].Value
+            $segments = @($path -split '[/\\]')
+            if ([System.IO.Path]::IsPathRooted($path) -or $path.EndsWith('/') -or
+                $path.EndsWith('\') -or $segments -contains '..' -or
+                $segments -contains '.' -or $segments -contains '' -or
+                [System.Management.Automation.WildcardPattern]::ContainsWildcardCharacters($path)) {
+                throw "Component notice must name an exact install-relative file: $path"
+            }
+            $paths += $path
+        }
+    }
+
+    return @($paths | Sort-Object -Unique)
+}
+
+$componentNotices = @(Get-ComponentNoticePaths (Join-Path $here 'components.toml'))
+
+# Project-level notices not owned by one non-Rust component. Unicode-3.0 is the standalone
+# text linked by THIRD_PARTY_NOTICES.md for the Rust unicode-ident dependency; the generated
+# per-binary reports are checked separately below.
 $required = @(
     'LICENSE',
     'THIRD_PARTY_NOTICES.md',
-    'licenses\GPL-3.0.txt',
-    'licenses\Apache-2.0.txt',
-    'licenses\Unicode-3.0.txt',
-    'licenses\dawn-BSD-3-Clause.txt',
-    'licenses\dxcompiler-NCSA.txt',
-    'licenses\espeak-ng-BSD-2-Clause.txt',
-    'licenses\espeak-ng\COPYING',
-    'licenses\espeak-ng\COPYING.APACHE',
-    'licenses\espeak-ng\COPYING.BSD2',
-    'licenses\espeak-ng\COPYING.UCD',
-    'licenses\nsis\NSIS-COPYING.txt'
-)
+    'licenses\Unicode-3.0.txt'
+) + $componentNotices
+$required = @($required | Sort-Object -Unique)
 
 $missing = @()
 $empty = @()
@@ -66,23 +126,26 @@ foreach ($r in $required) {
     elseif ($f.Length -eq 0) { $empty += $r }
 }
 
-# Required directory groups - must contain at least one non-empty file.
-function Test-Group([string]$suffixDir, [string]$filter, [int]$min) {
-    $sd = ($suffixDir -replace '/', '\')
-    $hits = $all | Where-Object {
-        ($_.FullName -replace '/', '\') -like "*\$sd\*$filter" -and $_.Length -gt 0
-    }
-    return $hits.Count -ge $min
-}
-
 $groupErrors = @()
-# ORT notice set (LICENSE/ThirdPartyNotices/Privacy, provisioned from the wheel).
-if (-not (Test-Group 'licenses\onnxruntime' '' 1)) {
-    $groupErrors += 'licenses\onnxruntime\ (ORT wheel notices) is missing or empty'
-}
-# The five per-binary generated Rust dependency reports.
-if (-not (Test-Group 'licenses\dependencies' '.html' 5)) {
-    $groupErrors += 'licenses\dependencies\*.html (expected 5 per-binary cargo-about reports)'
+# ORT's own LICENSE + ThirdPartyNotices now come from exact canonical paths in
+# components.toml, not a directory marker: a co-location check can be satisfied by an
+# unrelated namesake in a sibling subtree after ORT's real notice is dropped.
+# The five per-binary generated Rust dependency reports. Each must also carry the exact
+# licence/notice files harvested from its resolved crate packages; cargo-about's normalized
+# SPDX fallback can contain copyright placeholders, so the appendix is load-bearing.
+foreach ($reportName in 'kokoro-host.html', 'kokoro-panel.html', 'kokoro-sapi.html',
+                         'kokoro-hook.html', 'kokoro-inject.html') {
+    $relative = "licenses\dependencies\$reportName"
+    $report = Find-Shipped $relative
+    if (-not $report -or $report.Length -eq 0) {
+        $groupErrors += "$relative (missing or empty)"
+        continue
+    }
+    $reportText = [System.IO.File]::ReadAllText($report.FullName)
+    if (-not $reportText.Contains('data-license-appendix="1"') -or
+        -not $reportText.Contains('data-source-sha256=')) {
+        $groupErrors += "$relative (missing exact packaged licence-file appendix)"
+    }
 }
 
 Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue

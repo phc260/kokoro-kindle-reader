@@ -33,7 +33,7 @@ The combined binary is **GPL-3.0-only**, not "or-later": Slint's GPL option is
 | `onnxruntime.dll`, `onnxruntime_providers_shared.dll` | **MIT** | ONNX Runtime, unmodified. |
 | Dawn / Tint (inside ORT) | **BSD-3-Clause** | Statically linked by ORT. |
 | `dxcompiler.dll`, `dxil.dll` | **NCSA** | From ORT-webgpu wheel. |
-| OCR models + `en_dict.txt` | **Apache-2.0** | Data, aggregated (not linked). |
+| OCR models + `en_dict.txt` | **Apache-2.0**, *not shipped* | Downloaded at first run (like Kokoro-82M); not in the installer. |
 | Material Symbols SVGs (compiled into panel) | **Apache-2.0**, `resume.svg` modified | In-file change notices; see `components.toml`. |
 | `icon.ico` | **MIT** | This project's own art. |
 | Rust crate closure | **MIT OR Apache-2.0** + ISC/Zlib/BSL-1.0/BSD/Unicode-3.0/CDLA-Permissive-2.0 | Enumerated per build by `cargo-about`. |
@@ -50,10 +50,18 @@ The combined binary is **GPL-3.0-only**, not "or-later": Slint's GPL option is
   kokoro-js; the rest is original MIT (file marked `MIT AND Apache-2.0`).
 - `kokoro-ocr/src/detect.rs`, `prep.rs`, `recognize.rs`, `session.rs` — simplifications of
   **PaddleOCR**'s DBNet post-processing / conventions (Apache-2.0).
+- `kokoro-panel/ui/*.svg` — five **Google Material Symbols** (Apache-2.0), compiled into
+  `kokoro-panel.exe` by `slint-build`. `resume.svg` is modified (left bar lengthened) and
+  carries an in-file change notice; the other four are unmodified. Per-glyph provenance +
+  SHA-256 in [`packaging/components.toml`](packaging/components.toml).
 
-Each file carries an in-file provenance + change notice (Apache-2.0 §4(b)); the crate
-`Cargo.toml`s declare `MIT AND Apache-2.0` for `kokoro-host`/`kokoro-ocr` and `MIT` for the
-rest.
+The ported/derived Rust files and the **modified** `resume.svg` each carry an in-file
+provenance + change notice (Apache-2.0 §4(b), which applies to *modified* files). The four
+**unmodified** Material Symbols SVGs need no §4(b) header; their attribution is
+`packaging/components.toml` (per-glyph origin + SHA-256) plus `THIRD_PARTY_NOTICES.md` and
+the shipped `licenses/Apache-2.0.txt`. The crate `Cargo.toml`s declare `MIT AND Apache-2.0`
+for `kokoro-host`/`kokoro-ocr`/`kokoro-panel` (the first two embed the ported Rust files, the
+last the Material Symbols SVGs) and `MIT` for the rest.
 
 **Apache-2.0 §4(d) (NOTICE reproduction):** checked 2026-08-26 — none of the upstream
 Apache-2.0 projects (`hexgrad/kokoro`, `PaddlePaddle/PaddleOCR`, `google/material-design-icons`)
@@ -95,10 +103,14 @@ reachable.
 - **`cargo-about --fail`** (`packaging/generate-dependency-licenses.ps1`, run by
   `build-installer.ps1` and in CI) refuses any Rust dependency whose licence is not in
   `packaging/about.toml`'s `accepted` list. `GPL-3.0-only` is accepted **only** for the
-  Slint crates, so a GPL dependency arriving through anything else fails the build.
+  Slint crates, so a GPL dependency arriving through anything else fails the build. The
+  generator also appends the exact licence/notice files from every resolved crate package
+  that supplies them, with SHA-256s, so normalized SPDX text cannot replace a required
+  copyright notice with a placeholder.
 - **The installer-extraction test** in CI unpacks the produced `-setup.exe` and asserts the
   whole notice tree is present and non-empty (LICENSE, THIRD_PARTY_NOTICES.md, the licence
-  texts, ORT/espeak/NSIS notices, and the generated per-binary Rust reports).
+  texts, ORT/espeak/NSIS notices, and all five generated per-binary Rust reports with their
+  exact packaged-licence appendices).
 - **`components.toml`** is the checked-in inventory of every non-Rust shipped file the Rust
   gate cannot see.
 

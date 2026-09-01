@@ -196,15 +196,18 @@ into `kokoro-panel/ui/` as SVG and compiled into `kokoro-panel.exe`: `play-arrow
 is lengthened past the play triangle; the rest are used unmodified apart from being
 recoloured at runtime.
 
-### PP-OCR models (Cloud Reader OCR) — Apache-2.0
+### PP-OCR models (Cloud Reader OCR) — Apache-2.0 — *not shipped*
 
-Two ONNX models and a character dictionary, **installed with the application** into
-`ocr\` beside the executables, where `kokoro-host` loads them to recognize Kindle Cloud
-Reader pages. They are PP-OCR models originating with PaddleOCR
-(<https://github.com/PaddlePaddle/PaddleOCR>) and are redistributed here unmodified,
-pinned by SHA-256 and fetched at build time by
-[`native-deps/fetch-ocr-models.ps1`](https://github.com/phc260/kokoro-kindle-reader/blob/main/native-deps/fetch-ocr-models.ps1)
-— no copy of the weights is checked into this repository.
+Two ONNX models and a character dictionary, **not included in the installer** — like the
+Kokoro voice model, they are **downloaded on first run** (by the settings panel, into
+`%APPDATA%\com.phc260.kokoro-kindle-reader\ocr\`, per
+[`ocr-manifest.json`](https://github.com/phc260/kokoro-kindle-reader/blob/main/ocr-manifest.json)
+and SHA-256-verified), where `kokoro-host` loads them to recognize Kindle Cloud Reader
+pages. They are PP-OCR models originating with PaddleOCR
+(<https://github.com/PaddlePaddle/PaddleOCR>) and are used unmodified, pinned by SHA-256 —
+no copy of the weights is checked into this repository, and none is redistributed in the
+binary release. (`native-deps/fetch-ocr-models.ps1` fetches the same files for local
+development.)
 
 - **`det.onnx`** — the PP-OCRv3 English text *detector*, taken from
   <https://huggingface.co/SWHL/RapidOCR>.
@@ -247,6 +250,12 @@ stages its output into `licenses\dependencies\` beside the installed application
 directory, like `licenses\onnxruntime\`, exists in an install and not in this source tree.
 To reproduce it yourself: `cargo install cargo-about --locked --features cli`, then
 `packaging\generate-dependency-licenses.ps1`.
+
+Each report also appends the exact `LICENSE*`, `LICENCE*`, `COPYING*`, `NOTICE*`,
+`COPYRIGHT*`, `AUTHORS*`, and `CONTRIBUTORS*` files from every resolved dependency that
+packages them, with a SHA-256 beside each file. This is deliberate: a normalized SPDX
+fallback can contain placeholders even when the crate package carries the real copyright
+notice, and the packaged file is the notice that must accompany a binary redistribution.
 
 Two terms in that closure are **not** alternatives you can decline by picking MIT or
 Apache-2.0, so their text has to ship on its own:

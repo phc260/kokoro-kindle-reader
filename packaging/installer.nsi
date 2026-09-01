@@ -88,10 +88,9 @@ Section "Install"
   SetOutPath "$INSTDIR\espeak-ng-data"
   File /r "${STAGING}\espeak-ng-data\*.*"
 
-  ; Cloud Reader OCR: the pinned detector, recognizer and dictionary. kokoro-host looks for
-  ; this directory beside its own exe and re-verifies all three digests on every status poll.
-  SetOutPath "$INSTDIR\ocr"
-  File /r "${STAGING}\ocr\*.*"
+  ; Cloud Reader OCR models are NOT bundled - the panel downloads them at first run into
+  ; %APPDATA%\...\ocr\ (like the voice model), SHA-256-verified, and kokoro-host re-verifies
+  ; the digests on every status poll. Nothing to install here.
 
   ; Connect-only x86 SAPI engine + guard scripts (voice-setup.ps1 reads from here),
   ; plus the x86 Kindle-hook DLL + injector the host spawns to force the Kokoro voice.

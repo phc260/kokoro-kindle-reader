@@ -30,11 +30,17 @@ $ProgressPreference = 'SilentlyContinue'   # fast Invoke-WebRequest
 $runtime = Join-Path $tp 'runtime'
 $notices = Join-Path $runtime 'notices'
 New-Item -ItemType Directory -Force $runtime | Out-Null
-# Re-fetch when EITHER half is missing, not just the DLLs. The notices are a later
-# addition, so an existing provision has the DLLs and not them, and gating that on -Force
-# is how an installer build ends up staging licence text that was never fetched.
+# Re-fetch when ANY expected piece is missing, not just the DLLs. Each of these was added
+# after the DLLs, so an existing provision predating it has the DLLs and not it, and gating
+# that on -Force is how an installer build ends up staging licence text that was never
+# fetched (or, for the ORT-*.txt anchors, failing verify-installer-notices later):
+#   - notices\*                        (the wheel's own notice tree)
+#   - notices\ORT-LICENSE.txt          (canonical ORT anchor, this round)
+#   - notices\ORT-ThirdPartyNotices.txt
 if ($Force -or -not (Test-Path (Join-Path $runtime 'onnxruntime.dll')) -or
-    -not (Test-Path (Join-Path $notices '*'))) {
+    -not (Test-Path (Join-Path $notices '*')) -or
+    -not (Test-Path (Join-Path $notices 'ORT-LICENSE.txt')) -or
+    -not (Test-Path (Join-Path $notices 'ORT-ThirdPartyNotices.txt'))) {
     Write-Host "==> Fetching onnxruntime-webgpu $OrtVersion wheel (Dawn DLLs)"
     $wdir = Join-Path $env:TEMP "ort-webgpu-$OrtVersion"
     Remove-Item -Recurse -Force $wdir -ErrorAction SilentlyContinue
@@ -83,6 +89,33 @@ if ($Force -or -not (Test-Path (Join-Path $runtime 'onnxruntime.dll')) -or
                "those DLLs without them is exactly what this step exists to prevent - " +
                "find where upstream moved them and widen the glob.")
     }
+    # "Some notice file exists" is not enough: the two that redistribution actually turns on
+    # are the wheel's OWN LICENSE (the ORT MIT text) and its ThirdPartyNotices (everything ORT
+    # links statically - Dawn/Tint, DXC, and more). Two ways a lax check goes wrong: Privacy.md
+    # alone satisfying the glob (ships neither), and a vendored dependency's LICENSE.third-party
+    # (or a nested dep's own LICENSE + ThirdPartyNotices) standing in for ORT's own.
+    #
+    # So this is ORT-SPECIFIC, not "any directory that happens to hold a co-located pair": the
+    # shipped DLLs came from $capi (onnxruntime\capi\*.dll, above), so ORT's OWN notices are the
+    # pair at that package's ROOT - the parent of $capi. A vendored dependency lives in some
+    # other subtree, so pinning the source directory to $ortPkgDir is what ties the notices to
+    # the exact package the binaries came out of. Match ORT's names precisely there (not LICENSE*,
+    # which swallows LICENSE.third-party). A layout change upstream throws here with a clear
+    # message rather than silently canonicalizing a namesake from elsewhere in the tree.
+    $licRe = '^LICENSE(\.(txt|md))?$'
+    $tpnRe = '^ThirdPartyNotices(\.txt)?$'
+    $ortPkgDir = Split-Path $capi -Parent    # $wex\onnxruntime - the package root the DLLs came from
+    $ortLic = $found | Where-Object { $_.Name -match $licRe -and $_.DirectoryName -eq $ortPkgDir } | Select-Object -First 1
+    $ortTpn = $found | Where-Object { $_.Name -match $tpnRe -and $_.DirectoryName -eq $ortPkgDir } | Select-Object -First 1
+    if (-not $ortLic -or -not $ortTpn) {
+        $licDirs = @($found | Where-Object { $_.Name -match $licRe } | ForEach-Object { $_.DirectoryName })
+        $tpnDirs = @($found | Where-Object { $_.Name -match $tpnRe } | ForEach-Object { $_.DirectoryName })
+        throw ("onnxruntime-webgpu wheel: ORT's own LICENSE and ThirdPartyNotices were not both " +
+               "found at the package root $ortPkgDir (the parent of the DLL dir $capi). Found " +
+               "LICENSE in [$($licDirs -join '; ')]; ThirdPartyNotices in [$($tpnDirs -join '; ')]. " +
+               "The wheel's own notices must come from the package the shipped DLLs came out of, " +
+               "not a vendored subtree; if upstream moved them, update this anchor.")
+    }
     foreach ($f in $found) {
         # Preserve the file's path RELATIVE TO $wex, not just its basename. Two distinct
         # files that share both a basename and their immediate parent directory's name
@@ -96,6 +129,17 @@ if ($Force -or -not (Test-Path (Join-Path $runtime 'onnxruntime.dll')) -or
         New-Item -ItemType Directory -Force (Split-Path $dest -Parent) | Out-Null
         Copy-Item $f.FullName $dest -Force
     }
+
+    # Emit the VERIFIED ORT pair - $ortLic/$ortTpn, pinned above to the package root the DLLs
+    # came from - under fixed, ORT-SPECIFIC canonical names at the notices root. This is the
+    # anchor the installer verifier checks: the original files keep ORT's own names at the
+    # wheel's own nested path, so requiring THOSE by path would mean hardcoding an
+    # upstream-controlled layout; a file named ORT-LICENSE.txt sitting directly under
+    # licenses\onnxruntime\ is one nothing else in the tree produces, so requiring it by exact
+    # path is a check no namesake can pass. Byte copies of the package-root files, so the
+    # canonical anchor IS ORT's text, not a stand-in.
+    Copy-Item $ortLic.FullName (Join-Path $notices 'ORT-LICENSE.txt') -Force
+    Copy-Item $ortTpn.FullName (Join-Path $notices 'ORT-ThirdPartyNotices.txt') -Force
 }
 
 # --- 2. espeak-ng x64 (clone + build) ---------------------------------------

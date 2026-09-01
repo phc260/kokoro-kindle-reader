@@ -15,6 +15,14 @@ on:
       - 'packaging/about.hbs'
       - 'packaging/generate-dependency-licenses.ps1'
       - 'packaging/components.toml'
+      - 'packaging/verify-component-hashes.ps1'
+      # The installer/staging/notice-verifier/corresponding-source scripts control what ships;
+      # touching them re-runs this gate at review time (the full extraction proof still runs on
+      # the tag build in installer.yml, which needs the built -setup.exe).
+      - 'packaging/build-installer.ps1'
+      - 'packaging/installer.nsi'
+      - 'packaging/verify-installer-notices.ps1'
+      - 'packaging/build-corresponding-source.ps1'
       - 'THIRD_PARTY_NOTICES.md'
       - 'LICENSING.md'
       - 'native-deps/**'
@@ -57,3 +65,10 @@ jobs:
       - name: Run the licence gate
         shell: pwsh
         run: ./packaging/generate-dependency-licenses.ps1
+
+      # Verify the in-repo assets pinned in components.toml (the five Material Symbols SVGs
+      # compiled into kokoro-panel.exe) still hash to their recorded sha256 - so the non-Rust
+      # inventory can't silently drift from the tree.
+      - name: Verify component hashes
+        shell: pwsh
+        run: ./packaging/verify-component-hashes.ps1

@@ -27,9 +27,10 @@
 # download that a size check would wave through. The pointer's own `oid sha256` happens to be
 # the pinned digest, so this is checkable: the file must BE those bytes, not describe them.
 #
-# -VerifyOnly checks all three against their pins and throws without touching the network. That
-# is what packaging/build-installer.ps1 calls: the pins have to live in ONE place or they drift,
-# and a build script that re-listed them would be a fourth copy to forget.
+# -VerifyOnly checks all three against their pins and throws without touching the network - a
+# standalone integrity check for a dev's native-deps\ocr. (The installer no longer stages these:
+# the OCR models are NOT bundled; the panel downloads them at first run per ocr-manifest.json,
+# whose pins mirror the ones here and in kokoro-ocr/src/lib.rs - keep the three in sync.)
 param(
     [switch]$Force,
     [switch]$VerifyOnly

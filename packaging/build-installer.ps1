@@ -16,6 +16,32 @@ $hostRel = Join-Path $root 'kokoro-host\target\release'
 $panelRel = Join-Path $root 'kokoro-panel\target\release'
 $sapiRs = Join-Path $root 'kokoro-sapi'
 
+# 0. Fail fast on inventory drift: the in-repo assets pinned in components.toml (the five
+#    Material Symbols SVGs compiled into kokoro-panel.exe) must still hash to their recorded
+#    SHA-256. license-check.yml runs this on PRs, but a tag/manual build can start from a
+#    commit that never went through a PR - so run it here too, before the long build, rather
+#    than shipping a stale inventory. (verify-installer-notices.ps1 later proves the notice
+#    tree is IN the built -setup.exe.)
+Write-Host '==> Verifying non-Rust component hashes (components.toml)'
+& (Join-Path $here 'verify-component-hashes.ps1')  # throws on drift ($ErrorActionPreference=Stop)
+
+#    Provisioned notices must be current too. Check the canonical ORT anchors before any
+#    cargo build so a stale dependency cache costs seconds, not a full release build.
+$ortNotices = Join-Path $root 'native-deps\runtime\notices'
+$missingOrtNotices = @()
+foreach ($noticeName in 'ORT-LICENSE.txt', 'ORT-ThirdPartyNotices.txt') {
+    $noticePath = Join-Path $ortNotices $noticeName
+    if (-not (Test-Path -LiteralPath $noticePath -PathType Leaf) -or
+        (Get-Item -LiteralPath $noticePath -ErrorAction SilentlyContinue).Length -eq 0) {
+        $missingOrtNotices += $noticeName
+    }
+}
+if ($missingOrtNotices.Count) {
+    throw ("ONNX Runtime notice provision is missing or stale at $ortNotices " +
+           "($($missingOrtNotices -join ', ')) - run native-deps\fetch-deps.ps1. " +
+           'It provisions the canonical files from the same wheel as the runtime DLLs.')
+}
+
 # 1. Build the x86 SAPI DLL (Kindle is 32-bit, loads it in-process). The Rust engine
 #    is connect-only -- it forwards Speak to kokoro-host over the pipe -- so there's no
 #    ONNX/espeak dep here.
@@ -59,27 +85,13 @@ foreach ($d in 'onnxruntime.dll', 'onnxruntime_providers_shared.dll', 'dxcompile
 Copy-Item -Recurse (Join-Path $hostRel 'espeak-ng-data') $stage
 Copy-Item (Join-Path $root 'icons\icon.ico') (Join-Path $stage 'icon.ico')
 
-# 3a. The Cloud Reader OCR models (9.80 MB). Staged from native-deps rather than from the
-#     build output: they are loaded at RUN time, so nothing in the build copies them next to
-#     the exe, and a host that ships without them answers every /ocr with `missing`. Failing
-#     here is the point - the alternative is an installer that looks complete and cannot read
-#     a page.
-#     All THREE are verified against their pinned digests, by the fetch script's own
-#     -VerifyOnly mode - not by an existence check on one of them, and not by a second
-#     copy of the pins here. An interrupted download leaves one file present and another
-#     absent or truncated, which an existence check waves through: the build then
-#     succeeds, the installer looks complete, and the host reports 'missing' on the
-#     first page.
-#     The three files are then copied BY NAME, not as a directory. A recursive copy would
-#     stage whatever else is sitting in native-deps\ocr - a stale model from an older pin,
-#     a scratch file - and ship it verified by nothing.
-$ocrSrc = Join-Path $root 'native-deps\ocr'
-& (Join-Path $root 'native-deps\fetch-ocr-models.ps1') -VerifyOnly
-$ocrStage = Join-Path $stage 'ocr'
-New-Item -ItemType Directory -Force $ocrStage | Out-Null
-foreach ($f in 'det.onnx', 'rec.onnx', 'en_dict.txt') {
-    Copy-Item (Join-Path $ocrSrc $f) $ocrStage
-}
+# 3a. The Cloud Reader OCR models are NOT bundled. Like the Kokoro voice model, they are
+#     DOWNLOADED at first run - by the panel, into <app_data>/ocr/, per ocr-manifest.json and
+#     SHA-256-verified (kokoro-panel::download). So there is nothing to stage here: a fresh
+#     install ships no ocr\ dir, the host answers /ocr with `missing` until the download
+#     lands, and the browser extension surfaces that state. This keeps ~10 MB of a
+#     browser-only asset out of the installer (and out of every Kindle-only user's download).
+#     fetch-ocr-models.ps1 still provisions them for DEV (`cargo run` reads native-deps\ocr).
 
 # 3b. License texts. The bundle links espeak-ng (GPL-3.0-or-later, and MODIFIED -- see
 #     native-deps\build-espeak.ps1) and Slint under its GPL-3.0-only option, so the
@@ -94,13 +106,9 @@ Copy-Item -Recurse (Join-Path $root 'licenses') $stage
 #     the repo, so it stays matched to the exact wheel the shipped DLLs came out of. Four
 #     of the binaries we install come from that wheel, and dxcompiler.dll's licence
 #     (University of Illinois/NCSA) requires its notice accompany them.
+#     The fail-fast check above already proved the canonical files exist and are non-empty.
 #     Throwing beats shipping without: an installer missing licence text looks complete and
 #     is not, which is the same trap as the OCR models above.
-$ortNotices = Join-Path $root 'native-deps\runtime\notices'
-if (-not (Test-Path (Join-Path $ortNotices '*'))) {
-    throw ("No ONNX Runtime notices at $ortNotices - run native-deps\fetch-deps.ps1 " +
-           '(it fetches them alongside the runtime DLLs).')
-}
 $ortStage = Join-Path $stage 'licenses\onnxruntime'
 New-Item -ItemType Directory -Force $ortStage | Out-Null
 # -Recurse: fetch-deps.ps1 now preserves the wheel's own directory structure under

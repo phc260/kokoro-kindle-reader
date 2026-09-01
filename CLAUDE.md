@@ -88,10 +88,11 @@ bun run build.ts --stage         # from kokoro-browser-extension/; --stage copie
 bun test test/                   # chunking + offsets, word timing, manifest/permission drift
 curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8787/status   # the whole transport, reproducible
 
-# Cloud Reader OCR (kokoro-ocr, PP-OCR on the host). The models are loaded at RUN time, so the
-# host builds without them and reports `missing`; fetch them once. Digests verified on download
-# AND on every /status probe.
-native-deps\fetch-ocr-models.ps1
+# Cloud Reader OCR (kokoro-ocr, PP-OCR on the host). NOT bundled: the panel downloads the models
+# at first run into <app_data>/ocr/ (like the voice model). For DEV, provision native-deps\ocr
+# so a debug `cargo run` finds them without a download. Digests verified on download AND on every
+# /status probe.
+native-deps\fetch-ocr-models.ps1   # dev only; the release downloads per ocr-manifest.json
 cargo test --manifest-path kokoro-ocr\Cargo.toml   # needs no models: bounds, DB post, CTC decode
 # The real graphs over one PNG, no browser and no host — the only thing that catches a tensor
 # layout or class-count mistake, which otherwise reads out as fluent, confident, wrong text.
@@ -124,7 +125,7 @@ cargo run --release --target i686-pc-windows-msvc --manifest-path kokoro-sapi-sm
 C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe -File kokoro-sapi\test-speak.ps1
 ```
 
-**245 automated tests** — 145 in the extension (`bun test test/`), 54 in `kokoro-ocr` and 46 in
+**246 automated tests** — 145 in the extension (`bun test test/`), 54 in `kokoro-ocr` and 47 in
 `kokoro-host`, all of which run in seconds and need no host, no Kindle, no models and no network.
 Every other crate has none, and the x86 ones have smoke binaries instead. What is *not* covered
 that way is still the audible half: Preview in the panel and Read Aloud in Kindle (or
@@ -673,7 +674,7 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   text. **Calling `probe()` from the load path is not the fix** — its digest cache is keyed on
   length and mtime (right for a polled endpoint, wrong for a gate), and a path checked is not a
   path reopened. Each file is read once, hashed as bytes, and committed from that same buffer
-  via `commit_from_memory`; what was verified is what runs. They are re-verified on every probe, not just at install, because they are data
+  via `commit_from_memory`; what was verified is what runs. They are re-verified on every probe, not just at download, because they are data
   reachable from a network-facing endpoint. `probe()` never builds a session (loading is
   ~10 MiB and a third of a second, and `/status` is polled), and a failed load is never cached
   — the fix for `missing` is to put the file back. The worker catches a *panic* out of the load
@@ -692,13 +693,19 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   inference per line. A deadline fails the whole page rather than returning part of it, and is
   checked *before* each line for that reason: a partial column narrated as a whole one is the
   book silently going missing.
-- **The installer verifies all three digests via `fetch-ocr-models.ps1 -VerifyOnly`**, never an
-  existence check and never a second copy of the pins. An interrupted download leaves one file
-  present and another absent, which an existence check waves through: the build succeeds, the
-  package looks complete, and the host reports `missing` on the first page. It then stages the
-  three files **by name** — a recursive copy would ship whatever else is in `native-deps\ocr`,
-  verified by nothing.
-- **`fetch-ocr-models.ps1` pins a revision per URL and pulls the recognizer from
+- **The OCR models are NOT bundled — the panel downloads them at first run**, into
+  `<app_data>/ocr/`, like the Kokoro voice model. `ocr-manifest.json` (repo root, embedded by
+  `kokoro-panel`) carries the per-file URL + size + SHA-256; `download.rs` fetches them right
+  after the voice model in the same flow and `verify()` covers them, so a missing OCR file on an
+  install that predates un-bundling is caught and re-fetched. The host reads them from
+  `<app_data>/ocr/` (`webserve::ocr_assets(app_data)`), not beside the exe, and `/status` says
+  `missing` until the download lands. The digests live in **three** places on purpose — the
+  manifest (fetch spec), `kokoro-ocr`'s consts (the load/probe gate, which re-verifies
+  independently), and `fetch-ocr-models.ps1` (dev provisioning) — keep them in sync. The
+  installer stages **nothing** under `ocr\`, and `build-installer.ps1` no longer runs
+  `fetch-ocr-models.ps1 -VerifyOnly`.
+- **`fetch-ocr-models.ps1` (dev provisioning) and `ocr-manifest.json` pin a revision per URL and
+  pull the recognizer from
   `media.githubusercontent.com`.** That file is Git LFS, and `raw.` answers 200 with a 132-byte
   *pointer* — the shape of download a size check waves through. The dictionary is not LFS and
   `media` 404s for anything that isn't, so the two deliberately come from different hosts.
@@ -866,10 +873,12 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   bench crate that consumed them through `#[path]` includes is gone, so nothing outside the host
   depends on that now — but the golden normalization tests do, and purity is what keeps them
   cheap.
-- `model-manifest.json` + `icons/` are at the repo root (the panel embeds the manifest; the
-  exes, the installer **and the browser extension** use the icons — `build.ts` copies
-  `32x32.png`/`128x128.png` into each `dist/<target>/icons/` rather than keeping a second copy,
-  so the toolbar and the tray can't show different art). `icons/*` are in Git LFS.
+- `model-manifest.json` + `ocr-manifest.json` + `icons/` are at the repo root. The panel embeds
+  **both** manifests (`model-manifest.json` for the Kokoro voice model, `ocr-manifest.json` for
+  the Cloud Reader OCR models it downloads into `<app_data>/ocr/`). The exes, the installer **and
+  the browser extension** use the icons — `build.ts` copies `32x32.png`/`128x128.png` into each
+  `dist/<target>/icons/` rather than keeping a second copy, so the toolbar and the tray can't show
+  different art. `icons/*` are in Git LFS.
 - The pipe wire constants live in the `kokoro-protocol` crate — a `path` dep of **both**
   `kokoro-host` and `kokoro-sapi`, so the two ends can't drift. Neither may hardcode them.
 - The Kindle-18632 hook + injector are standalone root crates (`kokoro-hook/`,
@@ -877,7 +886,8 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
 - Cloud Reader OCR is `kokoro-ocr/` — a path dep of `kokoro-host` with a **target-neutral**
   public API (no HTTP, browser, Windows-UI, pipe or synthesis types), so a non-Windows port
   reuses it unchanged and `webserve.rs` stays the only file that knows both halves. Its models
-  are staged into the installer's `ocr\`, beside the exe.
+  are **not bundled** — the panel downloads them at first run into `<app_data>/ocr/` (per
+  `ocr-manifest.json`), the same directory the host reads.
 - There is **no root workspace**; each crate builds standalone with its own target dir.
 
 ### Licensing of the bundle (permissive source, GPLv3 binaries)

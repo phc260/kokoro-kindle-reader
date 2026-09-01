@@ -760,7 +760,7 @@ fn main() -> Result<(), slint::PlatformError> {
                 if repaired > 0 {
                     ui.set_status(
                         format!(
-                            "{repaired} of {checked} model files were corrupt and removed — click Download to repair."
+                            "{repaired} of {checked} model/OCR files are missing or corrupt — click Download to repair."
                         )
                         .into(),
                     );

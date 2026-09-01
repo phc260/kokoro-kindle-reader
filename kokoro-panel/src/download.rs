@@ -46,6 +46,56 @@ fn load_manifest() -> Manifest {
     }
 }
 
+// --- Cloud Reader OCR models (browser path) ---------------------------------
+// Downloaded at first run alongside the voice model, into <app_data>/ocr/, from the
+// embedded ocr-manifest.json. NOT bundled in the installer. Each file carries its own URL
+// because the recognizer is Git-LFS on a different host than the detector/dictionary. The
+// SHA-256 here is the fetch spec; kokoro-ocr re-verifies the same digests independently on
+// load and on every /status probe, so a corrupt or wrong file never survives here or there.
+const OCR_MANIFEST_JSON: &str = include_str!("../../ocr-manifest.json");
+
+struct OcrFile {
+    path: String,
+    url: String,
+    size: u64,
+    sha256: String,
+}
+
+fn load_ocr_files() -> Vec<OcrFile> {
+    let v: serde_json::Value =
+        serde_json::from_str(OCR_MANIFEST_JSON).expect("embedded ocr manifest");
+    v["files"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .map(|f| OcrFile {
+                    path: f["path"].as_str().unwrap_or("").to_string(),
+                    url: f["url"].as_str().unwrap_or("").to_string(),
+                    size: f["size"].as_u64().unwrap_or(0),
+                    sha256: f["sha256"].as_str().unwrap_or("").to_string(),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The OCR model dir, `<app_data>/ocr/`. The host reads the models from here
+/// (webserve.rs `ocr_assets`), so the two ends agree on one location.
+fn ocr_dir(app_data: &Path) -> PathBuf {
+    app_data.join("ocr")
+}
+
+/// A manifest OCR file's on-disk path, with the same traversal guard as the model files:
+/// the name must be a single `Normal` component, so it can never escape the OCR dir.
+fn ocr_file_path(app_data: &Path, rel: &str) -> Option<PathBuf> {
+    use std::path::Component;
+    if rel.is_empty() || !Path::new(rel).components().all(|c| matches!(c, Component::Normal(_))) {
+        return None;
+    }
+    Some(ocr_dir(app_data).join(rel))
+}
+
+
 /// Resolve a manifest file's on-disk path under `<app_data>/<model_id>/`. Returns
 /// `None` if `rel` isn't a plain relative path — every component must be `Normal`, so
 /// an absolute path, a drive prefix, or a `..` is rejected and can never escape the
@@ -105,7 +155,8 @@ fn valid_with_progress(
 /// "~N MB" figure the panel shows before download, so that figure can never drift
 /// from the manifest.
 pub fn total_bytes() -> u64 {
-    load_manifest().files.iter().map(|f| f.size).sum()
+    load_manifest().files.iter().map(|f| f.size).sum::<u64>()
+        + load_ocr_files().iter().map(|f| f.size).sum::<u64>()
 }
 
 /// Whether every manifest file is present with the expected size (the model is
@@ -155,13 +206,81 @@ pub fn start(
     });
 }
 
+/// Fetch one file to `dest`, verifying it against `sha256` before committing
+/// (`.part` -> rename), and accumulating `downloaded` for the shared progress bar. Shared
+/// by the model and OCR loops, which differ only in URL and destination. A file already
+/// present at `size` is kept (resume; the hash is skipped for speed, and a corrupt one is
+/// caught by "Verify & repair").
+fn fetch_file(
+    client: &reqwest::blocking::Client,
+    url: &str,
+    dest: &Path,
+    size: u64,
+    sha256: &str,
+    downloaded: &mut u64,
+    progress: &Arc<Mutex<Progress>>,
+    repaint: &dyn Fn(),
+) -> Result<(), String> {
+    if present(dest, size) {
+        *downloaded += size;
+        let mut p = progress.lock().unwrap();
+        p.downloaded = *downloaded;
+        drop(p);
+        repaint();
+        return Ok(());
+    }
+
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let part = dest.with_extension("part");
+    let mut file = std::fs::File::create(&part).map_err(|e| e.to_string())?;
+    let mut hasher = Sha256::new();
+
+    let mut resp = client
+        .get(url)
+        .send()
+        .map_err(|e| format!("GET {url} failed: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("GET {url} failed: {e}"))?;
+
+    let mut buf = [0u8; 128 * 1024];
+    loop {
+        let n = resp.read(&mut buf).map_err(|e| format!("stream {url}: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+        file.write_all(&buf[..n]).map_err(|e| e.to_string())?;
+        *downloaded += n as u64;
+        let mut p = progress.lock().unwrap();
+        p.downloaded = *downloaded;
+        drop(p);
+        repaint();
+    }
+    file.flush().map_err(|e| e.to_string())?;
+    drop(file);
+
+    // Verify before committing; discard a corrupt/truncated download.
+    let got = hex(hasher.finalize());
+    if got != sha256 {
+        let _ = std::fs::remove_file(&part);
+        let name = dest.file_name().and_then(|n| n.to_str()).unwrap_or("file");
+        return Err(format!("checksum mismatch for {name} (retry the download)"));
+    }
+    std::fs::rename(&part, dest).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 fn download(
     app_data: &Path,
     progress: &Arc<Mutex<Progress>>,
     repaint: &(impl Fn() + Send + 'static),
 ) -> Result<(), String> {
     let manifest = load_manifest();
-    let total: u64 = manifest.files.iter().map(|f| f.size).sum();
+    let ocr = load_ocr_files();
+    let total: u64 = manifest.files.iter().map(|f| f.size).sum::<u64>()
+        + ocr.iter().map(|f| f.size).sum::<u64>();
     {
         let mut p = progress.lock().unwrap();
         *p = Progress { total, ..Default::default() };
@@ -173,63 +292,27 @@ fn download(
     let mut downloaded: u64 = 0;
 
     for f in &manifest.files {
-        let dest = file_path(app_data, &manifest.model_id, &f.path)
-            .ok_or_else(|| format!("unsafe path in manifest: {}", f.path))?;
         {
             let mut p = progress.lock().unwrap();
             p.file = f.path.clone();
         }
-
-        // Resume: a file already present with the right size is kept (skip the
-        // hash for speed; a corrupt one can be caught by "Verify & repair").
-        if present(&dest, f.size) {
-            downloaded += f.size;
-            let mut p = progress.lock().unwrap();
-            p.downloaded = downloaded;
-            drop(p);
-            repaint();
-            continue;
-        }
-
-        if let Some(parent) = dest.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        }
-        let part = dest.with_extension("part");
-        let mut file = std::fs::File::create(&part).map_err(|e| e.to_string())?;
-        let mut hasher = Sha256::new();
-
+        let dest = file_path(app_data, &manifest.model_id, &f.path)
+            .ok_or_else(|| format!("unsafe path in manifest: {}", f.path))?;
         let url = format!("{}/{}", manifest.base_url, f.path);
-        let mut resp = client
-            .get(&url)
-            .send()
-            .map_err(|e| format!("GET {url} failed: {e}"))?
-            .error_for_status()
-            .map_err(|e| format!("GET {url} failed: {e}"))?;
+        fetch_file(&client, &url, &dest, f.size, &f.sha256, &mut downloaded, progress, repaint)?;
+    }
 
-        let mut buf = [0u8; 128 * 1024];
-        loop {
-            let n = resp.read(&mut buf).map_err(|e| format!("stream {url}: {e}"))?;
-            if n == 0 {
-                break;
-            }
-            hasher.update(&buf[..n]);
-            file.write_all(&buf[..n]).map_err(|e| e.to_string())?;
-            downloaded += n as u64;
+    // Cloud Reader OCR models (browser path), into <app_data>/ocr/ right after the voice
+    // model - NOT bundled in the installer. Per-file URL; same present-skip + SHA-256
+    // verify as the model above.
+    for f in &ocr {
+        {
             let mut p = progress.lock().unwrap();
-            p.downloaded = downloaded;
-            drop(p);
-            repaint();
+            p.file = f.path.clone();
         }
-        file.flush().map_err(|e| e.to_string())?;
-        drop(file);
-
-        // Verify before committing; discard a corrupt/truncated download.
-        let got = hex(hasher.finalize());
-        if got != f.sha256 {
-            let _ = std::fs::remove_file(&part);
-            return Err(format!("checksum mismatch for {} (retry the download)", f.path));
-        }
-        std::fs::rename(&part, &dest).map_err(|e| e.to_string())?;
+        let dest = ocr_file_path(app_data, &f.path)
+            .ok_or_else(|| format!("unsafe path in ocr manifest: {}", f.path))?;
+        fetch_file(&client, &f.url, &dest, f.size, &f.sha256, &mut downloaded, progress, repaint)?;
     }
     Ok(())
 }
@@ -241,7 +324,9 @@ fn download(
 /// repaired-count).
 pub fn verify(app_data: &Path, mut on_progress: impl FnMut(u64, u64)) -> (usize, usize) {
     let m = load_manifest();
-    let total: u64 = m.files.iter().map(|f| f.size).sum();
+    let ocr = load_ocr_files();
+    let total: u64 = m.files.iter().map(|f| f.size).sum::<u64>()
+        + ocr.iter().map(|f| f.size).sum::<u64>();
     let mut base: u64 = 0;
     let mut repaired = 0;
     for f in &m.files {
@@ -260,5 +345,22 @@ pub fn verify(app_data: &Path, mut on_progress: impl FnMut(u64, u64)) -> (usize,
         base += f.size;
         on_progress(base, total);
     }
-    (m.files.len(), repaired)
+    // The OCR models, same treatment - so a missing OCR file on an existing install (one
+    // that downloaded the voice model before OCR was un-bundled) is caught here and the
+    // user is prompted to Download, which fetches just the missing files.
+    for f in &ocr {
+        let Some(path) = ocr_file_path(app_data, &f.path) else {
+            repaired += 1;
+            base += f.size;
+            on_progress(base, total);
+            continue;
+        };
+        if !valid_with_progress(&path, f.size, &f.sha256, base, total, &mut on_progress) {
+            let _ = std::fs::remove_file(&path);
+            repaired += 1;
+        }
+        base += f.size;
+        on_progress(base, total);
+    }
+    (m.files.len() + ocr.len(), repaired)
 }

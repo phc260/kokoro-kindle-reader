@@ -8,8 +8,20 @@
 # reports, everything else here.
 #
 # Per-artifact conveyed-licence reasoning (which binary is GPLv3, which stays MIT, and why)
-# lives in LICENSING.md; THIRD_PARTY_NOTICES.md carries the human-readable prose. This is
-# the machine-checkable inventory the installer-extraction CI test reads.
+# lives in LICENSING.md; THIRD_PARTY_NOTICES.md carries the human-readable prose.
+#
+# What actually enforces this file (so the inventory can't quietly drift from the tree):
+#   - verify-component-hashes.ps1 (run in license-check.yml AND at the top of
+#     build-installer.ps1) recomputes the sha256 of every in-repo asset pinned here - the
+#     five kokoro-panel/ui/*.svg - fails on a mismatch, AND asserts that set equals the SVGs
+#     panel.slint actually compiles in (so a deleted block or an un-inventoried new glyph both
+#     fail), so the SVG inventory here cannot drift from the tree.
+#   - verify-installer-notices.ps1 (run after the installer build) parses every `notice`
+#     field below and asserts each exact file is present and non-empty in the built -setup.exe.
+#     It also rejects an unparseable field, a component without exactly one field, or a
+#     directory-level notice path, so this manifest and the extraction proof cannot drift.
+# The ORT DLLs / OCR models carry a sha256_note instead: their digests are pinned by the
+# wheel version and ocr-manifest.json, not recomputed here.
 #
 # Fields per [[component]]:
 #   name         - shipped filename or asset group
@@ -20,7 +32,8 @@
 #   upstream     - canonical source URL
 #   spdx         - SPDX licence expression
 #   modified     - true if this project alters it (with `modification` describing how)
-#   notice       - the licence/notice file(s) shipped for it (install-relative)
+#   notice       - exact install-relative licence/notice file(s) shipped for it; directory
+#                  paths are forbidden because the extraction proof checks individual files
 #   corresponding_source - where the complete source is, for copyleft components
 #   provisioned_by / staged_by - the scripts that fetch and package it
 
@@ -32,11 +45,11 @@
 [[component]]
 name = "onnxruntime.dll"
 shipped_as = "onnxruntime.dll"
-version = "onnxruntime-webgpu 1.27.0 wheel"
+version = "onnxruntime-webgpu 1.27.0 wheel (git commit 8f0278c77bf44b0cc83c098c6c722b92a36ac4b5; DLL build string 1.27.20260615.2.8f0278c embeds it)"
 upstream = "https://github.com/microsoft/onnxruntime"
 spdx = "MIT"
 modified = false
-notice = ["licenses/onnxruntime/", "THIRD_PARTY_NOTICES.md"]
+notice = ["licenses/onnxruntime/ORT-LICENSE.txt", "licenses/onnxruntime/ORT-ThirdPartyNotices.txt", "THIRD_PARTY_NOTICES.md"]
 provisioned_by = "native-deps/fetch-deps.ps1"
 staged_by = "packaging/build-installer.ps1"
 sha256_note = "fixed by the pinned wheel version; not recomputed here"
@@ -48,7 +61,7 @@ version = "onnxruntime-webgpu 1.27.0 wheel"
 upstream = "https://github.com/microsoft/onnxruntime"
 spdx = "MIT"
 modified = false
-notice = ["licenses/onnxruntime/", "THIRD_PARTY_NOTICES.md"]
+notice = ["licenses/onnxruntime/ORT-LICENSE.txt", "licenses/onnxruntime/ORT-ThirdPartyNotices.txt", "THIRD_PARTY_NOTICES.md"]
 provisioned_by = "native-deps/fetch-deps.ps1"
 staged_by = "packaging/build-installer.ps1"
 sha256_note = "fixed by the pinned wheel version; not recomputed here"
@@ -58,18 +71,21 @@ sha256_note = "fixed by the pinned wheel version; not recomputed here"
 [[component]]
 name = "Dawn / Tint (inside onnxruntime.dll)"
 shipped_as = "onnxruntime.dll (statically linked)"
-version = "as bundled in onnxruntime-webgpu 1.27.0"
-upstream = "https://dawn.googlesource.com/dawn"
+# Tint lives in the Dawn repo, so the Dawn commit fixes both. ORT pins this in its own
+# cmake/deps.txt at the ORT commit above; this is that pin (archive SHA1 in `sha256`-adjacent
+# note below is upstream's, not ours).
+version = "git commit ec7b457e5bb1fcec6f59733c4f3dd84d2f885a38 (per ORT 1.27.0 cmake/deps.txt; archive SHA1 d4d64d1729104b61e654073566f1a376e16cad92)"
+upstream = "https://github.com/google/dawn"
 spdx = "BSD-3-Clause"
 modified = false
-notice = ["licenses/dawn-BSD-3-Clause.txt", "licenses/onnxruntime/"]
+notice = ["licenses/dawn-BSD-3-Clause.txt", "licenses/onnxruntime/ORT-ThirdPartyNotices.txt"]
 provisioned_by = "native-deps/fetch-deps.ps1 (as part of onnxruntime.dll)"
 staged_by = "packaging/build-installer.ps1"
 
 [[component]]
 name = "dxcompiler.dll"
 shipped_as = "dxcompiler.dll"
-version = "as bundled in onnxruntime-webgpu 1.27.0 (Microsoft.Direct3D.DXC redistributable)"
+version = "Microsoft.Direct3D.DXC redistributable, dxcompiler.dll v1.9.0.1 (version resource embeds short commit 3e6e1485; full immutable commit 3e6e148537683c22e3e74977d56516f16f39c7be); bundled in onnxruntime-webgpu 1.27.0"
 upstream = "https://github.com/microsoft/DirectXShaderCompiler"
 spdx = "NCSA"
 modified = false
@@ -81,7 +97,7 @@ sha256_note = "fixed by the pinned wheel version; not recomputed here"
 [[component]]
 name = "dxil.dll"
 shipped_as = "dxil.dll"
-version = "as bundled in onnxruntime-webgpu 1.27.0 (Microsoft.Direct3D.DXC redistributable)"
+version = "Microsoft.Direct3D.DXC redistributable, dxil.dll v1.8.2502.11 (version resource embeds short commit 239921522; full immutable commit 2399215226737c64e76afc55ffd874ecd6fc459f); bundled in onnxruntime-webgpu 1.27.0"
 upstream = "https://github.com/microsoft/DirectXShaderCompiler"
 spdx = "NCSA"
 modified = false
@@ -101,7 +117,7 @@ upstream = "https://github.com/espeak-ng/espeak-ng (tag 1.52.0)"
 spdx = "GPL-3.0-or-later"
 modified = true
 modification = "phsource/ph_english_us: phoneme o@ reverted from horse-hoarse merger (upstream 5b01dd86), 2026-07-05; see build-espeak.ps1 and THIRD_PARTY_NOTICES.md section 5(a) notice"
-notice = ["licenses/espeak-ng/COPYING", "licenses/espeak-ng/COPYING.APACHE", "licenses/espeak-ng/COPYING.BSD2", "licenses/espeak-ng/COPYING.UCD", "licenses/GPL-3.0.txt"]
+notice = ["licenses/espeak-ng/COPYING", "licenses/espeak-ng/COPYING.APACHE", "licenses/espeak-ng/COPYING.BSD2", "licenses/espeak-ng/COPYING.UCD", "licenses/espeak-ng-BSD-2-Clause.txt", "licenses/GPL-3.0.txt"]
 corresponding_source = "native-deps/build-espeak.ps1 (patch + build recipe); corresponding-source-vX.Y.Z.zip carries the built modified tree"
 provisioned_by = "native-deps/fetch-deps.ps1 -> build-espeak.ps1"
 staged_by = "packaging/build-installer.ps1"
@@ -122,42 +138,42 @@ corresponding_source = "native-deps/build-espeak.ps1; corresponding-source-vX.Y.
 provisioned_by = "native-deps/fetch-deps.ps1 -> build-espeak.ps1"
 staged_by = "packaging/build-installer.ps1"
 
-# --- Cloud Reader OCR models: pinned by SHA-256, redistributed unmodified ----------------
+# --- Cloud Reader OCR models: NOT shipped - downloaded at first run ----------------------
+# Like the Kokoro voice model, these are downloaded on first run by kokoro-panel into
+# <app_data>/ocr/ per ocr-manifest.json (SHA-256-verified), NOT bundled in the installer.
+# Recorded here for attribution; nothing in the binary release ships them.
 [[component]]
 name = "det.onnx"
-shipped_as = "ocr/det.onnx"
+shipped_as = "NOT shipped - downloaded at first run into <app_data>/ocr/"
 version = "en_PP-OCRv3_det_infer"
 sha256 = "f139598bc2af4e4b6fe98dec11574e30edfdd91fc94ac1425c18ace3bd5a866b"
 upstream = "https://huggingface.co/SWHL/RapidOCR (rev 1cfba2e90fc938db55889873735088de210cc173, PP-OCRv4/en_PP-OCRv3_det_infer.onnx)"
 spdx = "Apache-2.0"
 modified = false
 notice = ["licenses/Apache-2.0.txt", "THIRD_PARTY_NOTICES.md"]
-provisioned_by = "native-deps/fetch-ocr-models.ps1"
-staged_by = "packaging/build-installer.ps1"
+downloaded_by = "kokoro-panel (ocr-manifest.json); native-deps/fetch-ocr-models.ps1 for dev"
 
 [[component]]
 name = "rec.onnx"
-shipped_as = "ocr/rec.onnx"
+shipped_as = "NOT shipped - downloaded at first run into <app_data>/ocr/"
 version = "en_PP-OCRv5_mobile_rec_infer"
 sha256 = "1081b104a3c44d103511f150763d997a846994431c5775a800c802254c1124bf"
 upstream = "https://github.com/PT-Perkasa-Pilar-Utama/ppu-paddle-ocr-models (rev 3a180da5b1a3bab3371d970f4da42cb9b354a9a7, recognition/multi/en/v5)"
 spdx = "Apache-2.0"
 modified = false
 notice = ["licenses/Apache-2.0.txt", "THIRD_PARTY_NOTICES.md"]
-provisioned_by = "native-deps/fetch-ocr-models.ps1"
-staged_by = "packaging/build-installer.ps1"
+downloaded_by = "kokoro-panel (ocr-manifest.json); native-deps/fetch-ocr-models.ps1 for dev"
 
 [[component]]
 name = "en_dict.txt"
-shipped_as = "ocr/en_dict.txt"
+shipped_as = "NOT shipped - downloaded at first run into <app_data>/ocr/"
 version = "ppocrv5_en_dict"
 sha256 = "c60d46e9e01d500ed6388fe8681051eac9cf6692e0d57238315be171927a0a1b"
 upstream = "https://github.com/PT-Perkasa-Pilar-Utama/ppu-paddle-ocr-models (rev 3a180da5b1a3bab3371d970f4da42cb9b354a9a7)"
 spdx = "Apache-2.0"
 modified = false
 notice = ["licenses/Apache-2.0.txt", "THIRD_PARTY_NOTICES.md"]
-provisioned_by = "native-deps/fetch-ocr-models.ps1"
-staged_by = "packaging/build-installer.ps1"
+downloaded_by = "kokoro-panel (ocr-manifest.json); native-deps/fetch-ocr-models.ps1 for dev"
 
 # --- Google Material Symbols: compiled INTO kokoro-panel.exe (no separate file) ----------
 # Checked into kokoro-panel/ui/ as SVG and compiled by slint-build. Upstream does not
