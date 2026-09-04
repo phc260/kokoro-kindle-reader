@@ -3,8 +3,10 @@
 // Mixed licence: this file is MIT (see LICENSE) except for the style-row selection rule
 // `clamp(nTokens - 2, 0, 509)` (marked below), which is taken from kokoro-js's
 // `generate_from_ids` (https://github.com/hexgrad/kokoro, npm `kokoro-js`), licensed
-// under the Apache License, Version 2.0. Full licence text: licenses/Apache-2.0.txt.
-// See THIRD_PARTY_NOTICES.md for the complete list of files this notice covers.
+// under the Apache License, Version 2.0. Modified for Kokoro Kindle Reader: that rule is
+// applied inside this native Rust/ORT synthesis pipeline. Full licence text:
+// licenses/Apache-2.0.txt. See THIRD_PARTY_NOTICES.md for the complete list of files this
+// notice covers.
 //
 // Native Dawn WebGPU synthesis for the Kindle pipe path — pure Rust. pipe.rs calls
 // this to synthesize each chunk so Kindle can be narrated.

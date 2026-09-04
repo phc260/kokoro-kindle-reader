@@ -5,8 +5,8 @@ per-artifact map, the one judgment call it rests on, and how to obtain correspon
 source. [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) is the notice that ships with the
 binaries (the human-readable prose + the licence texts it points at);
 [`packaging/components.toml`](packaging/components.toml) is the machine-checkable inventory
-of the non-Rust payload; the Rust closure is generated per build by `cargo-about`. This
-file ties them together.
+of components outside Cargo's package graph; the Cargo closure is generated per build by
+`cargo-about`. This file ties them together.
 
 ## The one-line version
 
@@ -36,7 +36,8 @@ The combined binary is **GPL-3.0-only**, not "or-later": Slint's GPL option is
 | OCR models + `en_dict.txt` | **Apache-2.0**, *not shipped* | Downloaded at first run (like Kokoro-82M); not in the installer. |
 | Material Symbols SVGs (compiled into panel) | **Apache-2.0**, `resume.svg` modified | In-file change notices; see `components.toml`. |
 | `icon.ico` | **MIT** | This project's own art. |
-| Rust crate closure | **MIT OR Apache-2.0** + ISC/Zlib/BSL-1.0/BSD/Unicode-3.0/CDLA-Permissive-2.0 | Enumerated per build by `cargo-about`. |
+| Cargo crate closure | **MIT OR Apache-2.0** + ISC/Zlib/BSL-1.0/BSD/Unicode-3.0/CDLA-Permissive-2.0 | Enumerated per build by `cargo-about`. |
+| Rust Standard Library | Primarily **MIT OR Apache-2.0**, with bundled code under additional terms | Statically linked into every Rust output; exact toolchain report staged from `rustc` as `licenses/rust/COPYRIGHT-library.html`. |
 | Installer / uninstaller stub | **NSIS license** (Zlib + bzip2 + CPL-1.0-w/-exception) | LZMA-compressed NSIS stub. |
 | Kokoro-82M weights | **Apache-2.0**, *not shipped* | Runtime download. |
 | Repository source | **MIT**, except Apache-2.0 ported files | Alan's grant; ports retain upstream licence. |
@@ -93,25 +94,33 @@ carries a `corresponding-source-vX.Y.Z.zip` beside the installer, built by
 [`packaging/build-corresponding-source.ps1`](packaging/build-corresponding-source.ps1) and
 linked from the release body (GPLv3 §6(d): equivalent access from the same place, with clear
 directions). Its contents are listed in that script and in `THIRD_PARTY_NOTICES.md`. The
-project source at the matching tag on GitHub is itself corresponding source for the Rust
-portion; the archive additionally pins the modified espeak-ng tree and the exact
-lockfiles/build scripts so a §6 recipient does not depend on an upstream tag remaining
-reachable.
+archive contains the project source at the matching tag, the modified espeak-ng tree, and
+the exact `rust-src` Standard Library `library/` tree from the toolchain that built all five
+Rust outputs, plus the lockfiles/build scripts and immutable toolchain commit. A §6 recipient
+therefore does not depend on a mutable upstream tag for either modified espeak-ng or the
+statically linked standard library.
 
 ## How this is enforced
 
 - **`cargo-about --fail`** (`packaging/generate-dependency-licenses.ps1`, run by
-  `build-installer.ps1` and in CI) refuses any Rust dependency whose licence is not in
+  `build-installer.ps1` and in CI) refuses any Cargo dependency whose licence is not in
   `packaging/about.toml`'s `accepted` list. `GPL-3.0-only` is accepted **only** for the
   Slint crates, so a GPL dependency arriving through anything else fails the build. The
   generator also appends the exact licence/notice files from every resolved crate package
   that supplies them, with SHA-256s, so normalized SPDX text cannot replace a required
   copyright notice with a placeholder.
+- **The Rust Standard Library is provisioned from the build toolchain**, not inferred from
+  Cargo metadata. `build-installer.ps1` requires and stages that rustc sysroot's generated
+  `COPYRIGHT-library.html` plus its release/commit; `build-corresponding-source.ps1` requires
+  `rust-src` and includes the exact `library/` source tree. CI installs `rust-src` explicitly.
 - **The installer-extraction test** in CI unpacks the produced `-setup.exe` and asserts the
   whole notice tree is present and non-empty (LICENSE, THIRD_PARTY_NOTICES.md, the licence
-  texts, ORT/espeak/NSIS notices, and all five generated per-binary Rust reports with their
-  exact packaged-licence appendices).
-- **`components.toml`** is the checked-in inventory of every non-Rust shipped file the Rust
+  texts, ORT/espeak/NSIS/Rust-toolchain notices, and all five generated per-binary Cargo
+  reports with their exact packaged-licence appendices).
+- **Every binary-bearing CI artifact is complete.** `installer.yml` pairs the installer with
+  corresponding source even on a manual, non-release run; `sapi.yml` build-tests the SAPI DLL
+  but does not upload that intermediate binary without its notices.
+- **`components.toml`** is the checked-in inventory of every shipped component the Cargo
   gate cannot see.
 
 ## Audit log

@@ -1,7 +1,8 @@
 // One default below is taken from PaddleOCR (https://github.com/PaddlePaddle/PaddleOCR),
 // licensed under the Apache License, Version 2.0: the bilinear resize filter matches
 // PaddleOCR's own `cv2.resize` default. Copyright (c) 2020 PaddlePaddle Authors. All
-// Rights Reserved. See THIRD_PARTY_NOTICES.md.
+// Rights Reserved. Modified for Kokoro Kindle Reader: that resize behavior is implemented
+// in Rust with the `image` crate. See THIRD_PARTY_NOTICES.md.
 
 // Bytes on the wire -> the RGB buffer both models are fed from.
 //

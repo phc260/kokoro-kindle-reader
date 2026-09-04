@@ -211,7 +211,7 @@ against the engine the user actually has installed.
 | `model-manifest.json` | Files the model downloads from HF (paths + sizes + SHA-256); embedded in `kokoro-panel` (the narrator list is derived from it). |
 | `icons/` | Shared app icons (LFS); embedded in the exes' version resource and the installer. |
 | `packaging/` | `installer.nsi` + `build-installer.ps1` (standalone NSIS build) — per-user install with self-elevating voice registration. See [`packaging/README.md`](packaging/README.md). |
-| `THIRD_PARTY_NOTICES.md` + `licenses/` | Bundle licensing: the repository source is MIT except for the files ported from `kokoro-js` and PaddleOCR and the Google Material Symbols SVGs (Apache-2.0, attributed there file by file), but the shipped binaries link espeak-ng (GPL-3.0-or-later, **modified** by `build-espeak.ps1`) and Slint-under-GPL, so a release is conveyed under GPLv3. `build-installer.ps1` stages both into the installer — they must ship *with* the binaries, not just live here. |
+| `THIRD_PARTY_NOTICES.md` + `licenses/` | Bundle licensing: the repository source is MIT except for the files ported from `kokoro-js` and PaddleOCR and the Google Material Symbols SVGs (Apache-2.0, attributed there file by file), but the shipped binaries link espeak-ng (GPL-3.0-or-later, **modified** by `build-espeak.ps1`) and Slint-under-GPL, so a release is conveyed under GPLv3. `build-installer.ps1` stages these notices plus the active Rust toolchain's generated Standard Library report — they must ship *with* the binaries, not just live here. |
 
 ## Building from source
 
@@ -231,7 +231,7 @@ rustup target add i686-pc-windows-msvc   # for the x86 SAPI DLL
 cargo run --manifest-path kokoro-host\Cargo.toml
 cargo run --manifest-path kokoro-panel\Cargo.toml   # or launched from the tray
 
-# 3. The x86 SAPI engine (Rust cdylib, no third-party deps) — for a real Kindle test
+# 3. The x86 SAPI engine (Rust cdylib, no bundled native runtime deps) — for a real Kindle test
 cargo build --release --target i686-pc-windows-msvc --manifest-path kokoro-sapi\Cargo.toml
 
 # Register the voice (ELEVATED; the 32-bit regsvr32 is the one that matters)
@@ -249,9 +249,10 @@ runs `makensis`):
 .\packaging\build-installer.ps1
 ```
 
-CI does this on a `v*` tag (`.github/workflows/installer.yml`); the `sapi.yml` workflow
-builds the DLL + runs the COM smoke test on engine changes, and `hook.yml` compile-checks
-the x86 hook + injector on their changes.
+CI does this on a `v*` tag or manual dispatch (`.github/workflows/installer.yml`). Every
+Actions artifact pairs the installer with corresponding source; a tag also drafts a release
+with both. The `sapi.yml` workflow builds the DLL + runs the COM smoke test on engine changes
+but does not distribute that bare DLL, and `hook.yml` compile-checks the x86 hook + injector.
 
 ## Kindle for PC notes (technical)
 

@@ -929,7 +929,7 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   (`ring`/`rustls-webpki`/`hyper-rustls`), which the *panel* uses to download and verify
   the model. Same closure, different door — don't attribute a crate to Slint without
   checking the lockfile.
-- **The Rust dependency closure's licence notices are GENERATED, not hand-audited.**
+- **The Cargo dependency closure's licence notices are GENERATED, not hand-audited.**
   A checked-in prose list is what produced the misclassification above, and a lockfile of
   hundreds of transitive crates across two target triples was never going to stay accurate
   by hand regardless. `packaging/generate-dependency-licenses.ps1` runs `cargo about`
@@ -941,9 +941,10 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   project has reviewed; a dependency whose licence isn't on it makes generation **fail the
   build**, which is the mechanism for noticing a new licence category rather than someone
   re-reading the whole tree. All eight crates now declare a `license` field in their own
-  `Cargo.toml` (mixed `MIT AND Apache-2.0` for `kokoro-host` and `kokoro-ocr`, which embed
-  the ported/derived files; plain `MIT` for the rest) — `cargo-about` treats an unset
-  `license` field as an error, and that field was simply missing everywhere before.
+  `Cargo.toml` (mixed `MIT AND Apache-2.0` for `kokoro-host`, `kokoro-ocr`, and
+  `kokoro-panel`: the first two embed ported/derived Rust files and the panel embeds the
+  Material Symbols; plain `MIT` for the rest) — `cargo-about` treats an unset `license`
+  field as an error, and that field was simply missing everywhere before.
 - **ONNX Runtime's notices are PROVISIONED, not tracked** — `fetch-deps.ps1` keeps the
   wheel's own `LICENSE`/`Privacy.md`/`ThirdPartyNotices.txt` into
   `native-deps/runtime/notices/` and `build-installer.ps1` stages them to
@@ -989,21 +990,29 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   `MIT AND Apache-2.0`), and `kokoro-panel/ui/resume.svg` (modified Material Symbol) now do
   too. An SVG carries it as a leading XML comment; a mixed `.rs` file names the exact
   derived portion rather than SPDX-tagging the whole file Apache.
-- **The non-Rust payload has its own checked-in inventory: `packaging/components.toml`.**
-  `cargo-about` sees only the Rust closure; every native DLL, ONNX model, compiled-in SVG,
-  the icon and the NSIS stub is recorded there (origin, version/revision, SHA-256 where
-  pinned, SPDX, notice files, modification status). `verify-installer-notices.ps1` extracts
+- **Everything outside Cargo's graph has its own checked-in inventory: `packaging/components.toml`.**
+  `cargo-about` sees only Cargo packages; the Rust Standard Library supplied by the toolchain,
+  every native DLL, ONNX model, compiled-in SVG, the icon and the NSIS stub are recorded there
+  (origin, version/revision, SHA-256 where pinned, SPDX, notice files, modification status).
+  The standard library is not a Cargo package: `build-installer.ps1` stages the active
+  toolchain's generated `COPYRIGHT-library.html` plus a `TOOLCHAIN.txt` with its immutable
+  commit, and `installer.yml` installs `rust-src` so `build-corresponding-source.ps1` can put
+  that exact `library/` tree into the source archive. `verify-installer-notices.ps1` extracts
   the built `-setup.exe` in CI and fails if any required notice is missing or empty —
   proving the tree is *in the installer*, not merely in staging. `LICENSING.md` is the
   authoritative per-artifact map + the aggregation boundary (the x86 clients stay MIT) + the
   §6 procedure; `THIRD_PARTY_NOTICES.md` is the shipped prose.
 - **GPL binaries ship with complete corresponding source (§6).**
   `build-corresponding-source.ps1` builds `corresponding-source-vX.Y.Z.zip` (tracked project
-  source with LFS resolved, all lockfiles/scripts, the *modified* espeak-ng 1.52.0 tree with
-  a SHA-256 manifest, and a rebuild README); `installer.yml` builds it on a tag and attaches
-  it to the release beside the installer. The Rust deps' corresponding source is the
+  source with LFS resolved, all lockfiles/scripts, the *modified* espeak-ng 1.52.0 tree and
+  the exact Rust Standard Library source with SHA-256 manifests, and a rebuild README);
+  `installer.yml` builds it on every run: strict tag-matched source for releases, a clearly
+  stamped non-release archive for manual CI runs. Its Actions artifact always carries the
+  archive beside the installer, and a tag attaches both to the release. `sapi.yml` does not
+  upload its intermediate DLL by itself. The Cargo deps' corresponding source is the
   immutable crates.io versions pinned in the committed lockfiles (stated in the archive
-  README, not vendored). **Don't ship the installer alone** — that was the §6 gap.
+  README, not vendored). **Don't ship an installer or intermediate binary alone** — that was
+  the §6/notice gap.
 - **No shipped artifact may claim a bare licence name in its version resource** — not "MIT
   (app code)", which was the actual wording here until it was corrected, and which stopped
   being true the moment this tree stopped being uniformly MIT. Three places set

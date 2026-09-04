@@ -3,7 +3,9 @@ name: sapi (Rust SAPI engine)
 # Builds the x86 Rust SAPI DLL (kokoro-sapi) and runs the no-Kindle COM smoke test
 # (kokoro-sapi-smoke): LoadLibrary + DllGetClassObject + CreateInstance + QI across the
 # interfaces + GetOutputFormat. The engine is a thin COM shim + named-pipe client with
-# no third-party deps -- all synthesis happens in kokoro-host. SAPI5 is Windows-only.
+# no bundled native runtime deps -- all synthesis happens in kokoro-host. SAPI5 is
+# Windows-only. This workflow deliberately does not publish the DLL by itself: the release
+# installer is the distribution path and carries its Cargo + Rust toolchain notices.
 
 on:
   push:
@@ -29,10 +31,3 @@ jobs:
       # (7) still run and a vtable/QI regression fails the job.
       - name: COM smoke test (no Kindle, no host)
         run: cargo run --release --target i686-pc-windows-msvc --manifest-path kokoro-sapi-smoke/Cargo.toml -- kokoro-sapi/target/i686-pc-windows-msvc/release/KokoroSapi.dll
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: KokoroSapi.dll
-          path: kokoro-sapi/target/i686-pc-windows-msvc/release/KokoroSapi.dll
-          if-no-files-found: error

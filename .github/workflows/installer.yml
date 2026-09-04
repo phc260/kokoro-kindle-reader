@@ -40,6 +40,9 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: i686-pc-windows-msvc # the x86 SAPI DLL (kokoro-sapi)
+          # The release archive carries the exact standard-library source linked into all
+          # five Rust outputs; cargo-about cannot see code supplied by the rustc sysroot.
+          components: rust-src
 
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
@@ -89,18 +92,29 @@ jobs:
         shell: pwsh
         run: ./packaging/verify-installer-notices.ps1
 
-      # Complete corresponding source (GPLv3 section 6) for the GPL-covered binaries -
-      # attached beside the installer below and linked from the release body.
-      - name: Build corresponding source
+      # Complete corresponding source (GPLv3 section 6) for the GPL-covered binaries.
+      # A tag build must satisfy the strict clean+matching-tag proof. A manual build is not
+      # a release, but upload-artifact still conveys its installer, so pair it with a source
+      # archive from the same checkout and stamp that archive NON-RELEASE.
+      - name: Build corresponding source (release)
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
         run: ./packaging/build-corresponding-source.ps1
 
-      - name: Upload installer
+      - name: Build corresponding source (manual CI artifact)
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        shell: pwsh
+        run: ./packaging/build-corresponding-source.ps1 -AllowUncommitted
+
+      # Never upload the GPL-covered installer as a standalone Actions artifact. This path
+      # runs on manual dispatch too, where there is no GitHub Release to pair the source.
+      - name: Upload installer + corresponding source
         uses: actions/upload-artifact@v7
         with:
-          name: kokoro-kindle-reader-setup
-          path: packaging/*-setup.exe
+          name: kokoro-kindle-reader-bundle
+          path: |
+            packaging/*-setup.exe
+            packaging/corresponding-source-*.zip
           if-no-files-found: error
 
       # Release title: match the existing "kokoro-kindle-reader vX.Y.Z" convention

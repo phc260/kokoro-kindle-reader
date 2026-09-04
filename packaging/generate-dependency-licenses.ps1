@@ -1,4 +1,4 @@
-# Generate the Rust dependency-licence notices for every crate the installer actually
+# Generate the Cargo dependency-licence notices for every crate the installer actually
 # ships, from THIS checkout's locked dependency graph - not a hand-maintained prose list.
 #
 # THIRD_PARTY_NOTICES.md used to assert license coverage for a handful of unusual crates
@@ -9,7 +9,9 @@
 # just used, resolves every crate's licence expression against the ACCEPTED list in
 # about.toml, and renders the full text (with that crate's own copyright holder, where
 # known) via packaging/about.hbs. THIRD_PARTY_NOTICES.md stays the human-readable
-# overview; this is the notice of record for the Rust closure.
+# overview; this is the notice of record for the Cargo closure. The Rust standard library
+# comes from the compiler sysroot rather than this graph and is staged separately by
+# build-installer.ps1.
 #
 # `--fail` is the mechanism that satisfies "detect new licence categories when
 # dependencies change": a crate whose resolved expression cannot be satisfied from

@@ -252,7 +252,7 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
   plus `LegalCopyright` in `kokoro-host/build.rs` and `kokoro-panel/build.rs`; all three
   read a copyright holder plus a pointer to `THIRD_PARTY_NOTICES.md` instead. If the espeak
   patch changes, the notice of modification in `THIRD_PARTY_NOTICES.md` must change with it.
-- **The Rust dependency closure's own licence notices are generated, not hand-audited.**
+- **The Cargo dependency closure's own licence notices are generated, not hand-audited.**
   `packaging/generate-dependency-licenses.ps1` runs `cargo about` against each shipped
   crate's `Cargo.lock`, on every installer build, and fails the build if a dependency's
   licence isn't on `packaging/about.toml`'s accepted list. Don't replace that with a
@@ -266,12 +266,17 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
   which is NOT `licenses/Unicode-3.0.txt`) and `build-installer.ps1` stages NSIS's `COPYING`
   (LZMA/CPL exception) from the pinned toolchain — both `throw` when absent.
   `verify-installer-notices.ps1` extracts the built `-setup.exe` in CI and fails on any
-  missing/empty notice. `packaging/components.toml` inventories every non-Rust shipped file;
-  `LICENSING.md` is the authoritative per-artifact map + §6 procedure.
+  missing/empty notice. The Rust Standard Library is outside Cargo's graph too:
+  `build-installer.ps1` stages the exact toolchain's generated `COPYRIGHT-library.html` plus
+  its release/commit, CI installs `rust-src`, and the corresponding-source archive carries
+  that full `library/` tree. `packaging/components.toml` inventories every non-Cargo shipped
+  component; `LICENSING.md` is the authoritative per-artifact map + §6 procedure.
 - **GPL binaries ship corresponding source.** `build-corresponding-source.ps1` produces
   `corresponding-source-vX.Y.Z.zip` (LFS-resolved source, lockfiles/scripts, the modified
-  espeak-ng tree + SHA-256 manifest) and `installer.yml` attaches it to the release. Never
-  ship the installer alone.
+  espeak-ng tree and the exact Rust Standard Library source, both with SHA-256 manifests)
+  and `installer.yml` pairs it with the installer in both Actions artifacts and tagged
+  releases. `sapi.yml` build-tests its intermediate DLL but does not upload it bare. Never
+  ship an installer or intermediate binary alone.
 
 ## Encoding rules (real bugs, not style)
 

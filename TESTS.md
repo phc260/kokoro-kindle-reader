@@ -272,8 +272,9 @@ Recorded here rather than left implicit.
 
 ### Nothing in CI runs any of these
 
-The three workflows are `installer.yml` (builds the package on a `v*` tag), `sapi.yml` (builds the
-x86 DLL and runs the COM smoke test) and `hook.yml` (compile-checks the x86 hook and injector).
+The four workflows are `installer.yml` (builds the package on a `v*` tag or manual dispatch),
+`license-check.yml` (runs the Cargo licence gate), `sapi.yml` (builds the x86 DLL and runs the
+COM smoke test), and `hook.yml` (compile-checks the x86 hook and injector).
 **None of them runs `bun test` or `cargo test`.** Every one of the 246 tests above passes or fails
 only when somebody runs it locally.
 

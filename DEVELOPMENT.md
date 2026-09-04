@@ -20,8 +20,11 @@ way to remove them. Two reasons they're unsuitable for building:
   images, so the exes/installer build with broken icons (or the build trips on them).
 - They aren't a git checkout, so anything that consults git state won't behave.
 
-The only release asset this project actually publishes is the
-`kokoro-kindle-reader-X.Y.Z-setup.exe` installer.
+The two release assets this project publishes are the
+`kokoro-kindle-reader-X.Y.Z-setup.exe` installer and its
+`corresponding-source-X.Y.Z.zip`. The latter is the GPL source bundle; it is distinct from
+GitHub's automatic "Source code" archives above and includes the resolved LFS assets and
+modified dependency source needed for the matching binary release.
 
 ## Building
 
@@ -87,9 +90,9 @@ to co-author to work around it.
 
 | Workflow | Trigger | What it does |
 |---|---|---|
-| `installer.yml` | `v*` tag push, or manual dispatch | Full installer build (both exes + the 3 x86 artifacts + NSIS, pinned). Installs `cargo-about` (pinned) so the licence gate runs; verifies the built installer's notice tree (`verify-installer-notices.ps1`). On a tag it drafts a GitHub Release with the setup.exe **and** `corresponding-source-*.zip` attached. |
+| `installer.yml` | `v*` tag push, or manual dispatch | Full installer build (both exes + the 3 x86 artifacts + NSIS, pinned). Installs `cargo-about` (pinned) for the Cargo licence gate and `rust-src` for the exact Standard Library corresponding source; verifies the built installer's notice tree (`verify-installer-notices.ps1`). Its Actions artifact always contains the setup.exe **and** `corresponding-source-*.zip`; on a tag it also drafts a release with both. |
 | `license-check.yml` | PRs touching `Cargo.*`, `about.toml`, `native-deps/**`, panel SVGs, or the notices | Runs the `cargo-about --fail` gate (`generate-dependency-licenses.ps1`) at review time — no full build. |
-| `sapi.yml` | `kokoro-sapi/**`, `kokoro-sapi-smoke/**`, or `kokoro-protocol/**` changes | Builds the x86 SAPI DLL + runs the no-Kindle COM smoke test (`kokoro-sapi-smoke`). |
+| `sapi.yml` | `kokoro-sapi/**`, `kokoro-sapi-smoke/**`, or `kokoro-protocol/**` changes | Builds the x86 SAPI DLL + runs the no-Kindle COM smoke test (`kokoro-sapi-smoke`). It does not upload the bare intermediate DLL; the licensed installer is the distribution path. |
 | `hook.yml` | `kokoro-hook/**` / `kokoro-inject/**` changes | Compile-checks the x86 hook + injector. |
 
 `sapi.yml` and `hook.yml` also re-run when their own workflow file changes (the standard

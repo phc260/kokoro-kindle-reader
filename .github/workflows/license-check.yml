@@ -4,7 +4,7 @@ name: License check (cargo-about gate)
 # that could change the licence closure, so a dependency under a licence not in
 # packaging/about.toml's `accepted` list is caught at review time - not only on a release
 # tag. This does NOT build the installer or the native deps; it only resolves and renders
-# the Rust dependency-licence notices, which is what the gate needs.
+# the Cargo dependency-licence notices, which is what the gate needs.
 
 on:
   pull_request:
@@ -67,7 +67,7 @@ jobs:
         run: ./packaging/generate-dependency-licenses.ps1
 
       # Verify the in-repo assets pinned in components.toml (the five Material Symbols SVGs
-      # compiled into kokoro-panel.exe) still hash to their recorded sha256 - so the non-Rust
+      # compiled into kokoro-panel.exe) still hash to their recorded sha256 - so the non-Cargo
       # inventory can't silently drift from the tree.
       - name: Verify component hashes
         shell: pwsh

@@ -1,11 +1,12 @@
-# Non-Rust shipped-component manifest (authoritative inventory)
+# Non-Cargo shipped-component manifest (authoritative inventory)
 #
-# cargo-about (packaging/generate-dependency-licenses.ps1) enumerates the RUST closure
-# statically linked into the executables and the x86 DLLs. It cannot see the native DLLs,
-# the ONNX models, the SVG assets baked into the panel, or the NSIS installer stub. This
-# file is the checked-in record for exactly those non-Rust shipped files, so every byte the
-# installer places on disk has a recorded origin + licence somewhere: Rust in the generated
-# reports, everything else here.
+# cargo-about (packaging/generate-dependency-licenses.ps1) enumerates the CARGO PACKAGE
+# closure statically linked into the executables and the x86 DLLs. It cannot see the Rust
+# standard library supplied by the toolchain, the native DLLs, the ONNX models, the SVG
+# assets baked into the panel, or the NSIS installer stub. This file is the checked-in
+# record for those non-Cargo components, so every byte the installer places on disk has a
+# recorded origin + licence somewhere: Cargo packages in the generated reports, everything
+# outside that graph here.
 #
 # Per-artifact conveyed-licence reasoning (which binary is GPLv3, which stays MIT, and why)
 # lives in LICENSING.md; THIRD_PARTY_NOTICES.md carries the human-readable prose.
@@ -36,6 +37,26 @@
 #                  paths are forbidden because the extraction proof checks individual files
 #   corresponding_source - where the complete source is, for copyleft components
 #   provisioned_by / staged_by - the scripts that fetch and package it
+
+# --- Rust standard library: statically linked, invisible to cargo-about -----------------
+# Every Rust output includes the target's precompiled std/core/alloc/compiler-builtins from
+# the active rustc sysroot. The exact licence composition changes with the toolchain and
+# includes bundled source dependencies, so do not duplicate it as a hand-maintained SPDX
+# list. LicenseRef-Rust-Standard-Library-Per-Build denotes Rust's own generated, exhaustive
+# COPYRIGHT-library.html staged from that same sysroot; TOOLCHAIN.txt records the release and
+# immutable commit. The corresponding-source archive carries that toolchain's rust-src
+# `library/` tree in full.
+[[component]]
+name = "Rust Standard Library (statically linked into all five Rust outputs)"
+shipped_as = "compiled into kokoro-host.exe, kokoro-panel.exe, KokoroSapi.dll, kokoro_hook.dll, and kokoro-inject.exe"
+version = "per-build stable toolchain (exact release and commit in licenses/rust/TOOLCHAIN.txt)"
+upstream = "https://github.com/rust-lang/rust"
+spdx = "LicenseRef-Rust-Standard-Library-Per-Build"
+modified = false
+notice = ["licenses/rust/COPYRIGHT-library.html", "licenses/rust/TOOLCHAIN.txt", "THIRD_PARTY_NOTICES.md"]
+corresponding_source = "corresponding-source-vX.Y.Z.zip carries the exact rust-src library tree from this toolchain"
+provisioned_by = "the active rustc sysroot"
+staged_by = "packaging/build-installer.ps1"
 
 # --- ONNX Runtime (WebGPU) wheel: four redistributed DLLs -------------------------------
 # All four come from the onnxruntime-webgpu 1.27.0 Python wheel (pinned in fetch-deps.ps1).
@@ -269,7 +290,7 @@ spdx = "Apache-2.0"
 modified = false
 notice = ["licenses/Apache-2.0.txt", "THIRD_PARTY_NOTICES.md"]
 
-# --- The executables + x86 DLLs (Rust closure; listed for completeness) -----------------
+# --- The executables + x86 DLLs (Cargo closure; listed for completeness) ----------------
 # kokoro-host.exe, kokoro-panel.exe (x64) and KokoroSapi.dll, kokoro_hook.dll,
 # kokoro-inject.exe (x86) are Rust build outputs. Their statically-linked dependency
 # licences are enumerated per binary by cargo-about into licenses/dependencies/; their

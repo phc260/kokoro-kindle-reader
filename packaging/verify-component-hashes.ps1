@@ -1,5 +1,5 @@
 # Verify that the SHA-256s recorded in packaging/components.toml for the in-repo shipped
-# assets still match the actual files. cargo-about covers the Rust closure; the extraction
+# assets still match the actual files. cargo-about covers the Cargo closure; the extraction
 # test proves the notice tree ships; this closes the remaining gap components.toml claimed
 # but nothing enforced: a Material Symbol SVG (compiled into kokoro-panel.exe) changing
 # without its recorded digest being updated, leaving the "authoritative inventory" silently

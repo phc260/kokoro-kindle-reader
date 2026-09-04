@@ -22,7 +22,7 @@ $sapiRs = Join-Path $root 'kokoro-sapi'
 #    commit that never went through a PR - so run it here too, before the long build, rather
 #    than shipping a stale inventory. (verify-installer-notices.ps1 later proves the notice
 #    tree is IN the built -setup.exe.)
-Write-Host '==> Verifying non-Rust component hashes (components.toml)'
+Write-Host '==> Verifying non-Cargo component hashes (components.toml)'
 & (Join-Path $here 'verify-component-hashes.ps1')  # throws on drift ($ErrorActionPreference=Stop)
 
 #    Provisioned notices must be current too. Check the canonical ORT anchors before any
@@ -130,10 +130,10 @@ $espkStage = Join-Path $stage 'licenses\espeak-ng'
 New-Item -ItemType Directory -Force $espkStage | Out-Null
 Copy-Item (Join-Path $espkNotices '*') $espkStage -Force
 
-#     The Rust dependency closure's own licence notices - generated fresh from the
+#     The Cargo dependency closure's own licence notices - generated fresh from the
 #     Cargo.lock files this build just compiled against, not a hand-maintained prose
 #     list (see generate-dependency-licenses.ps1 for why, and THIRD_PARTY_NOTICES.md's
-#     "Rust crates" section for the human-readable pointer to it). Regenerating on every
+#     "Cargo crates" section for the human-readable pointer to it). Regenerating on every
 #     build, rather than provisioning once like the ORT notices, is deliberate: this
 #     closure moves with ordinary `cargo update`s in a way the ORT wheel version does
 #     not, and a stale copy here is exactly the kind of drift this mechanism exists to
@@ -145,6 +145,38 @@ $depLicSrc = Join-Path $here 'dependency-licenses'
 $depLicStage = Join-Path $stage 'licenses\dependencies'
 New-Item -ItemType Directory -Force $depLicStage | Out-Null
 Copy-Item (Join-Path $depLicSrc '*') $depLicStage -Force
+
+#     The Rust standard library is statically linked into every Rust output but is NOT a
+#     Cargo package, so cargo-about cannot see it. Rust ships a generated per-toolchain
+#     COPYRIGHT-library.html that covers std/core/alloc/compiler-builtins and their bundled
+#     source dependencies. Stage that exact file from the rustc sysroot used for this build,
+#     plus rustc's release and immutable commit, rather than checking in a copy that would
+#     drift whenever the `stable` toolchain moves.
+$rustSysroot = (& rustc --print sysroot)
+if ($LASTEXITCODE -or -not $rustSysroot) { throw 'rustc --print sysroot failed.' }
+$rustSysroot = $rustSysroot.Trim()
+$rustStdNotice = Join-Path $rustSysroot 'share\doc\rust\COPYRIGHT-library.html'
+if (-not (Test-Path -LiteralPath $rustStdNotice -PathType Leaf)) {
+    throw ("Rust standard-library notice not found at $rustStdNotice - the Rust toolchain " +
+           'cannot be redistributed without its generated copyright/licence report.')
+}
+$rustNoticeText = [System.IO.File]::ReadAllText($rustStdNotice)
+if (-not $rustNoticeText.Contains('Copyright notices for The Rust Standard Library')) {
+    throw "Unexpected Rust standard-library notice content: $rustStdNotice"
+}
+$rustToolchain = @(& rustc --version --verbose)
+if ($LASTEXITCODE -or $rustToolchain.Count -eq 0 -or
+    -not (($rustToolchain -join "`n") -match '(?m)^commit-hash:\s+[0-9a-f]{40}\s*$')) {
+    throw 'Could not record rustc release + immutable commit for the shipped standard library.'
+}
+$rustStage = Join-Path $stage 'licenses\rust'
+New-Item -ItemType Directory -Force $rustStage | Out-Null
+Copy-Item -LiteralPath $rustStdNotice (Join-Path $rustStage 'COPYRIGHT-library.html') -Force
+[System.IO.File]::WriteAllLines(
+    (Join-Path $rustStage 'TOOLCHAIN.txt'),
+    [string[]]$rustToolchain,
+    [System.Text.Encoding]::ASCII
+)
 
 $res = Join-Path $stage 'resources'
 Copy-Item $sapiDll $res

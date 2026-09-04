@@ -8,12 +8,13 @@
 # release body.
 #
 # "Complete corresponding source" here is: the modified GPL component (espeak-ng) carried IN
-# FULL in this archive, plus GPLv3 section 6(d) clear-directions/equivalent-access pointers
-# for the pieces whose upstream source is immutable and public - the Rust crates (crates.io,
-# which forbids republishing a version), NSIS, and the permissively-licensed native runtime
-# ORT/Dawn/DXC pull in dynamically (their exact versions are pinned in components.toml). The
-# archive is therefore NOT fully self-contained by design; the README below spells out where
-# each off-archive piece is obtained so a section 6 recipient never depends on a mutable tag.
+# FULL in this archive, the exact Rust standard-library source statically linked by the active
+# toolchain, plus GPLv3 section 6(d) clear-directions/equivalent-access pointers for the pieces
+# whose upstream source is immutable and public - the Cargo crates (crates.io, which forbids
+# republishing a version), NSIS, and the permissively-licensed native runtime ORT/Dawn/DXC pull
+# in dynamically (their exact versions are pinned in components.toml). The archive is therefore
+# not fully self-contained by design; the README below spells out where each off-archive piece
+# is obtained so a section 6 recipient never depends on a mutable tag.
 #
 #   packaging\build-corresponding-source.ps1                 # version from installer.nsi
 #   packaging\build-corresponding-source.ps1 -Version 0.4.0  # explicit
@@ -76,6 +77,36 @@ if (-not $releaseClean) {
 }
 Write-Host ("==> Source commit: {0}{1}" -f $commit, $(if ($releaseClean) { " (clean, tagged $expectedTag)" } else { ' (DEV/dirty)' }))
 
+# Resolve the exact Rust toolchain whose precompiled standard library is linked into every
+# Rust output. cargo-about enumerates Cargo packages only; rust-src is the corresponding source
+# for std/core/alloc/compiler-builtins and the toolchain-generated COPYRIGHT-library.html is
+# their exhaustive notice. installer.yml installs the rust-src component; fail loudly when a
+# local release build omitted it.
+$rustcInfo = @(& rustc --version --verbose)
+if ($LASTEXITCODE -or $rustcInfo.Count -eq 0) { throw 'rustc --version --verbose failed.' }
+$rustcInfoText = $rustcInfo -join "`n"
+if ($rustcInfoText -notmatch '(?m)^release:\s+(\S+)\s*$') {
+    throw 'Could not read the Rust release from rustc --version --verbose.'
+}
+$rustRelease = $Matches[1]
+if ($rustcInfoText -notmatch '(?m)^commit-hash:\s+([0-9a-f]{40})\s*$') {
+    throw 'Could not read the immutable Rust commit from rustc --version --verbose.'
+}
+$rustCommit = $Matches[1]
+$rustSysroot = (& rustc --print sysroot)
+if ($LASTEXITCODE -or -not $rustSysroot) { throw 'rustc --print sysroot failed.' }
+$rustSysroot = $rustSysroot.Trim()
+$rustLibrarySource = Join-Path $rustSysroot 'lib\rustlib\src\rust\library'
+$rustStdNotice = Join-Path $rustSysroot 'share\doc\rust\COPYRIGHT-library.html'
+if (-not (Test-Path -LiteralPath (Join-Path $rustLibrarySource 'std\Cargo.toml'))) {
+    throw ("Rust standard-library source not found at $rustLibrarySource - install the exact " +
+           "toolchain's rust-src component before building release corresponding source.")
+}
+if (-not (Test-Path -LiteralPath $rustStdNotice -PathType Leaf)) {
+    throw "Rust standard-library copyright report not found at $rustStdNotice"
+}
+Write-Host "==> Rust standard library: $rustRelease ($rustCommit)"
+
 $stage = Join-Path $here "corresponding-source-$Version"
 $out = Join-Path $here "corresponding-source-$Version.zip"
 Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
@@ -137,7 +168,32 @@ Get-ChildItem $espkDest -Recurse -File | ForEach-Object {
     "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $rel
 } | Set-Content -Encoding ascii $manifest
 
-# 3. The README with deterministic-build directions and the lockfile-immutability note that
+# 3. The exact Rust standard-library source linked into all five Rust outputs. rust-src is
+#    target-independent, so one copy covers both the x64 and x86 precompiled standard libraries
+#    from this toolchain. Include the toolchain's generated copyright report beside it: unlike
+#    Cargo packages, these sources never enter cargo-about's graph.
+$rustPathVersion = [regex]::Replace($rustRelease, '[^A-Za-z0-9._-]', '-')
+$rustDest = Join-Path $stage "rust-standard-library-$rustPathVersion"
+$rustLibraryDest = Join-Path $rustDest 'library'
+Write-Host "==> Copying Rust standard-library source ($rustRelease)"
+New-Item -ItemType Directory -Force $rustLibraryDest | Out-Null
+Get-ChildItem -LiteralPath $rustLibrarySource -Force | ForEach-Object {
+    Copy-Item $_.FullName (Join-Path $rustLibraryDest $_.Name) -Recurse -Force
+}
+Copy-Item -LiteralPath $rustStdNotice (Join-Path $rustDest 'COPYRIGHT-library.html') -Force
+[System.IO.File]::WriteAllLines(
+    (Join-Path $rustDest 'TOOLCHAIN.txt'),
+    [string[]]$rustcInfo,
+    [System.Text.Encoding]::ASCII
+)
+Write-Host '==> Hashing Rust standard-library source tree'
+$rustManifest = Join-Path $stage "rust-standard-library-$rustPathVersion.SHA256SUMS.txt"
+Get-ChildItem $rustDest -Recurse -File | ForEach-Object {
+    $rel = $_.FullName.Substring($rustDest.Length).TrimStart('\', '/')
+    "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $rel
+} | Set-Content -Encoding ascii $rustManifest
+
+# 4. The README with deterministic-build directions and the lockfile-immutability note that
 #    stands in for `cargo vendor` (the crates.io versions pinned in the committed Cargo.lock
 #    files ARE the corresponding source; crates.io is immutable).
 $provenance = if ($releaseClean) {
@@ -166,15 +222,26 @@ Contents
                                    phsource/ph_english_us (see build-espeak.ps1). Its .git
                                    and build output are excluded.
 - espeak-ng-modified-1.52.0.SHA256SUMS.txt   SHA-256 of every file in that tree.
+- rust-standard-library-$rustPathVersion/   The exact rust-src library/ tree for rustc
+                                   $rustRelease, commit $rustCommit, plus that toolchain's
+                                   generated COPYRIGHT-library.html and TOOLCHAIN.txt.
+- rust-standard-library-$rustPathVersion.SHA256SUMS.txt   SHA-256 of every file in that tree.
 
-Rust dependencies
------------------
-The Rust crates statically linked into the executables are the immutable crates.io versions
+Cargo dependencies
+------------------
+The Cargo crates statically linked into the executables are the immutable crates.io versions
 pinned in the committed Cargo.lock files (kokoro-host/Cargo.lock and kokoro-panel/Cargo.lock
 for the GPL-covered exes). crates.io does not permit republishing a version, so those pins
 ARE the corresponding source; ``cargo build`` against the included lockfiles fetches exactly
 them. Slint's version is recorded in kokoro-panel/Cargo.lock (used unmodified, under its
 GPL-3.0-only option). To materialize them offline: ``cargo vendor`` from each crate dir.
+
+Rust standard library
+---------------------
+Every Rust output also statically links the standard library supplied by rustc $rustRelease
+(commit $rustCommit). That code is outside Cargo's package graph, so it is included above in
+full from this exact toolchain's rust-src component. COPYRIGHT-library.html is Rust's generated
+licence and copyright inventory for that library source and its bundled dependencies.
 
 NSIS
 ----
@@ -213,7 +280,7 @@ source above).
 
 Rebuilding
 ----------
-1. Install: Rust (stable, with the i686-pc-windows-msvc target), Python 3.12, CMake + MSVC,
+1. Install: Rust (stable, with rust-src and the i686-pc-windows-msvc target), Python 3.12, CMake + MSVC,
    NSIS 3.11, and ``cargo install cargo-about --version 0.9.1 --locked --features cli``.
 2. From kokoro-kindle-reader/: run ``native-deps\fetch-deps.ps1`` and
    ``native-deps\fetch-ocr-models.ps1`` (or reuse espeak-ng-modified-1.52.0/ here for the
@@ -226,7 +293,7 @@ functionally identical build.
 "@
 Set-Content -Encoding ascii (Join-Path $stage 'README.txt') $readme
 
-# 4. Zip it.
+# 5. Zip it.
 Write-Host '==> Compressing'
 Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $out -Force
 Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue

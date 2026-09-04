@@ -57,7 +57,7 @@ function Find-Shipped([string]$suffix) {
     } | Select-Object -First 1
 }
 
-# Extract the exact per-component notice paths from the authoritative non-Rust inventory.
+# Extract the exact per-component notice paths from the authoritative non-Cargo inventory.
 # This is intentionally a narrow, fail-closed parser for components.toml's documented
 # one-line `notice = ["path", ...]` schema. Windows PowerShell 5.1 has no TOML parser; accepting
 # only this small shape avoids adding a build dependency while making format drift an error.
@@ -108,7 +108,7 @@ function Get-ComponentNoticePaths([string]$manifestPath) {
 
 $componentNotices = @(Get-ComponentNoticePaths (Join-Path $here 'components.toml'))
 
-# Project-level notices not owned by one non-Rust component. Unicode-3.0 is the standalone
+# Project-level notices not owned by one non-Cargo component. Unicode-3.0 is the standalone
 # text linked by THIRD_PARTY_NOTICES.md for the Rust unicode-ident dependency; the generated
 # per-binary reports are checked separately below.
 $required = @(
@@ -130,7 +130,29 @@ $groupErrors = @()
 # ORT's own LICENSE + ThirdPartyNotices now come from exact canonical paths in
 # components.toml, not a directory marker: a co-location check can be satisfied by an
 # unrelated namesake in a sibling subtree after ORT's real notice is dropped.
-# The five per-binary generated Rust dependency reports. Each must also carry the exact
+# The Rust Standard Library is outside Cargo's graph. Presence alone is not enough: prove
+# the staged HTML is Rust's generated library-only report and TOOLCHAIN.txt carries the
+# immutable commit identifying the source copied into the corresponding-source archive.
+$rustCopyright = Find-Shipped 'licenses\rust\COPYRIGHT-library.html'
+if (-not $rustCopyright -or $rustCopyright.Length -eq 0) {
+    $groupErrors += 'licenses\rust\COPYRIGHT-library.html (missing or empty)'
+} else {
+    $rustCopyrightText = [System.IO.File]::ReadAllText($rustCopyright.FullName)
+    if (-not $rustCopyrightText.Contains('Copyright notices for The Rust Standard Library')) {
+        $groupErrors += 'licenses\rust\COPYRIGHT-library.html (not the generated library report)'
+    }
+}
+$rustToolchain = Find-Shipped 'licenses\rust\TOOLCHAIN.txt'
+if (-not $rustToolchain -or $rustToolchain.Length -eq 0) {
+    $groupErrors += 'licenses\rust\TOOLCHAIN.txt (missing or empty)'
+} else {
+    $rustToolchainText = [System.IO.File]::ReadAllText($rustToolchain.FullName)
+    if ($rustToolchainText -notmatch '(?m)^release:\s+\S+\s*$' -or
+        $rustToolchainText -notmatch '(?m)^commit-hash:\s+[0-9a-f]{40}\s*$') {
+        $groupErrors += 'licenses\rust\TOOLCHAIN.txt (missing release or immutable commit)'
+    }
+}
+# The five per-binary generated Cargo dependency reports. Each must also carry the exact
 # licence/notice files harvested from its resolved crate packages; cargo-about's normalized
 # SPDX fallback can contain copyright placeholders, so the appendix is load-bearing.
 foreach ($reportName in 'kokoro-host.html', 'kokoro-panel.html', 'kokoro-sapi.html',

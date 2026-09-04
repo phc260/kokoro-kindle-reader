@@ -82,7 +82,8 @@ notice of record is in the source.
 | **ONNX Runtime** (WebGPU build) | `onnxruntime.dll`, `onnxruntime_providers_shared.dll` | MIT |
 | **Dawn / Tint** | statically linked into `onnxruntime.dll` | BSD-3-Clause |
 | **DirectX Shader Compiler** | `dxcompiler.dll`, `dxil.dll` | see below |
-| **Rust crates** | statically linked into both `.exe`s and the x86 `.dll`s | mostly MIT OR Apache-2.0 — see below for the full generated closure |
+| **Cargo crates** | statically linked into all five Rust outputs | mostly MIT OR Apache-2.0 — see below for the full generated closure |
+| **Rust Standard Library** | statically linked into all five Rust outputs | primarily MIT OR Apache-2.0, with bundled code under additional terms — exact per-toolchain report below |
 | **NSIS** (installer/uninstaller stub) | the `-setup.exe` itself + the installed `Uninstall.exe` | NSIS license (zlib/libpng + bzip2 + CPL-1.0-w/-exception for the LZMA module) |
 | **Kokoro-82M** model weights | *not shipped* — downloaded on first run | Apache-2.0 |
 
@@ -220,9 +221,9 @@ All three are licensed under the Apache License, Version 2.0
 ([`licenses/Apache-2.0.txt`](licenses/Apache-2.0.txt)), as are both redistributing projects
 and PaddleOCR itself.
 
-### Rust crates — MIT OR Apache-2.0, plus a generated closure report
+### Cargo crates — MIT OR Apache-2.0, plus a generated closure report
 
-The two executables and the three x86 libraries statically link a number of crates from
+The five shipped Rust outputs (three executables and two DLLs) statically link crates from
 crates.io — including `ort`, `windows`/`windows-sys`, `serde`, `tray-icon`, `cpal`, and
 their transitive dependencies. Most are permissively licensed (typically
 `MIT OR Apache-2.0`), but a full lockfile is hundreds of transitive crates, and a
@@ -246,7 +247,7 @@ than ship silently uncovered — that's the mechanism for "a new licence categor
 up," not a person re-reading the whole tree by hand.
 
 `packaging/build-installer.ps1` runs the generator on every build (not once, provisioned —
-the Rust closure moves with ordinary `cargo update`s in a way a pinned wheel doesn't) and
+the Cargo closure moves with ordinary `cargo update`s in a way a pinned wheel doesn't) and
 stages its output into `licenses\dependencies\` beside the installed application. That
 directory, like `licenses\onnxruntime\`, exists in an install and not in this source tree.
 To reproduce it yourself: `cargo install cargo-about --locked --features cli`, then
@@ -278,6 +279,27 @@ Apache-2.0, so their text has to ship on its own:
 
 Slint, listed separately above, is the one dependency in this set that is **not**
 permissively licensed.
+
+### Rust Standard Library — exact per-toolchain report
+
+Every Rust output also statically links the target's precompiled Rust Standard Library:
+`std`, `core`, `alloc`, `compiler-builtins`, and the source dependencies bundled with them.
+Those components come from the active `rustc` sysroot, not from a package in any
+`Cargo.lock`, so `cargo-about` cannot enumerate them. Treating its five reports as the
+entire Rust closure therefore omitted both the standard library's contributor notices and
+the additional licence terms carried by its bundled code.
+
+Rust generates **`COPYRIGHT-library.html`** for exactly this boundary. On every installer
+build, `packaging/build-installer.ps1` copies that report from the same toolchain that built
+the binaries into `licenses\rust\COPYRIGHT-library.html`; it also writes
+`licenses\rust\TOOLCHAIN.txt` with `rustc --version --verbose`, including the immutable
+compiler commit. The report is authoritative for that moving per-toolchain composition and
+contains the applicable licence texts and copyright notices; it is not replaced by a
+checked-in list that can drift at the next stable Rust release.
+
+Upstream: <https://github.com/rust-lang/rust>. Rust describes the Standard Library as
+primarily `MIT OR Apache-2.0`, with individual and bundled files under the additional terms
+recorded in its generated report.
 
 ### Kokoro-82M — Apache-2.0 — *not shipped*
 
@@ -312,9 +334,15 @@ provided at no charge, from the same place as the binary (GPLv3 §6(d)): each re
 <https://github.com/phc260/kokoro-kindle-reader/releases> carries a
 **`corresponding-source-vX.Y.Z.zip`** beside the installer. It contains the project source
 at that tag (with Git-LFS assets resolved), all lockfiles and build/install scripts, the
-**modified** espeak-ng 1.52.0 tree that was actually built (with a SHA-256 manifest), and a
-rebuild README with tool versions. It is produced by
+**modified** espeak-ng 1.52.0 tree that was actually built (with a SHA-256 manifest), the
+exact `rust-src` Standard Library tree used by the build (also with a SHA-256 manifest), and
+a rebuild README with tool versions and immutable commits. It is produced by
 [`packaging/build-corresponding-source.ps1`](https://github.com/phc260/kokoro-kindle-reader/blob/main/packaging/build-corresponding-source.ps1).
+
+The build workflow never uploads the installer by itself: its Actions artifact contains this
+source archive too, including on a manual non-release run (where the archive is visibly stamped
+as such). Tagged releases likewise attach both files. The separate SAPI smoke-test workflow
+does not publish its intermediate DLL without the notice tree.
 
 The individual upstreams, for reference:
 
@@ -326,8 +354,11 @@ The individual upstreams, for reference:
   remaining reachable.
 - **Slint:** <https://github.com/slint-ui/slint>, at the version recorded in
   `kokoro-panel/Cargo.lock`. Used unmodified.
-- **Rust crates:** the immutable crates.io versions pinned in the committed `Cargo.lock`
+- **Cargo crates:** the immutable crates.io versions pinned in the committed `Cargo.lock`
   files; `cargo build` against them fetches exactly the corresponding source.
+- **Rust Standard Library:** <https://github.com/rust-lang/rust>, at the immutable commit
+  recorded in the archive's `TOOLCHAIN.txt`. The archive includes that exact toolchain's
+  complete `rust-src` `library/` tree rather than relying on the upstream link.
 
 The download above satisfies the §6 obligation, so this project makes no separate standing
 written offer of source (§6(b)). If a release's source archive is ever missing or a link is
