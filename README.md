@@ -10,7 +10,7 @@
 [![TTS: Kokoro-82M](https://img.shields.io/badge/TTS-Kokoro--82M-E91E63)](https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX)
 [![Language: English](https://img.shields.io/badge/language-English-673AB7)](#)
 [![100% Offline](https://img.shields.io/badge/100%25-offline-43A047)](#)
-[![Source: MIT](https://img.shields.io/badge/source-MIT-009688)](LICENSE)
+[![Source: MIT + Apache-2.0](https://img.shields.io/badge/source-MIT%20%2B%20Apache--2.0-009688)](LICENSING.md)
 [![Binaries: GPLv3](https://img.shields.io/badge/binaries-GPLv3-00695C)](THIRD_PARTY_NOTICES.md)
 [![Latest release](https://img.shields.io/github/v/release/phc260/kokoro-kindle-reader?include_prereleases&label=release&color=F4511E)](https://github.com/phc260/kokoro-kindle-reader/releases)
 
@@ -174,10 +174,11 @@ CI, releasing) is in [**DEVELOPMENT.md**](DEVELOPMENT.md).
 
 ## Licensing
 
-This project's own source code is **MIT** — see [LICENSE](LICENSE) — with the exception of
-a few files ported from **Apache-2.0** projects (`kokoro-js`, PaddleOCR), which carry that
-licence instead. Both are permissive and both permit reuse; which files, and what they were
-ported from, is in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+This repository's source is **MIT** — see [LICENSE](LICENSE) — with the exception of files
+derived from **Apache-2.0** projects: the `kokoro-js` and PaddleOCR ports, plus five Google
+Material Symbols SVGs compiled into the settings panel. Both licences are permissive and
+permit reuse; the exact files, their origins, and their terms are in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 The **installed app** is a different question, because it bundles third-party pieces:
 it links [espeak-ng](https://github.com/espeak-ng/espeak-ng) (GPL-3.0-or-later, and

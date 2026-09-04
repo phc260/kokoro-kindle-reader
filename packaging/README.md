@@ -45,8 +45,9 @@ The TTS model is **not** bundled; the panel downloads it on first run (~340 MB).
 
 The bundle links **espeak-ng** (GPL-3.0-or-later — and *modified* by
 `native-deps/build-espeak.ps1`, which reverts the horse-hoarse merger) and **Slint** under
-its GPL-3.0-only option. The app's own code stays permissive (MIT, plus Apache-2.0 for the
-files ported from `kokoro-js` and PaddleOCR), but **the installed combination is conveyed
+its GPL-3.0-only option. The repository source stays permissive (MIT, plus Apache-2.0 for the
+files ported from `kokoro-js` and PaddleOCR and the Google Material Symbols SVGs), but **the
+installed combination is conveyed
 under GPLv3**, so the license text and notices have to ship *with* the binaries. Don't drop
 them from the staging list or the `File` directives. `licenses/` is staged and installed
 **recursively**, so a new licence text there ships with no edit here — which is what keeps

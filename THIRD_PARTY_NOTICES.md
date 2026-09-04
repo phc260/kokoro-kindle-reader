@@ -1,7 +1,7 @@
 # Third-party notices
 
-Kokoro Kindle Reader's own source code is MIT-licensed — see [`LICENSE`](LICENSE) —
-apart from a handful of files ported from Apache-2.0 projects, listed below. The
+Kokoro Kindle Reader's repository source is MIT-licensed — see [`LICENSE`](LICENSE) —
+apart from a handful of files and assets derived from Apache-2.0 projects, listed below. The
 **distributed binaries** (the `-setup.exe` and everything it unpacks) additionally bundle
 third-party components, one of which is copyleft. This file is the notice that accompanies
 those binaries; the installer places a copy next to the application.
@@ -16,14 +16,14 @@ therefore conveyed under the GNU General Public License, version 3** — full te
 This does not restrict the project's own source: its terms are GPL-compatible, so the
 repository remains available to you under them. Only the *combined binary* — the project's
 own code linked against GPL code — is GPLv3. Those terms are MIT for most of the tree and
-Apache-2.0 for the ported files in the next section.
+Apache-2.0 for the derived files and assets in the next section.
 
 ## Source in this repository that is not MIT
 
-Two upstream projects are represented in this repository not as bundled binaries but as
-**source**: files here are ports or deliberate simplifications of their code. A derivative
-work carries the original's licence, so those files are offered under **Apache-2.0**, not
-MIT. Full text: [`licenses/Apache-2.0.txt`](licenses/Apache-2.0.txt).
+Three upstream projects are represented in this repository not as bundled binaries but as
+**source**: files here are ports or deliberate simplifications of upstream code, or upstream
+visual assets. Those files and assets are offered under **Apache-2.0**, not MIT. Full text:
+[`licenses/Apache-2.0.txt`](licenses/Apache-2.0.txt).
 
 This changes nothing about how the application may be used or redistributed — Apache-2.0 is
 compatible with both MIT and GPLv3 — but attribution and a copy of the licence are
@@ -33,6 +33,7 @@ conditions of that permission, and this section is where they are given.
 |---|---|---|
 | `kokoro-host/src/text.rs`, the `phonemize_segment_spans` structure in `kokoro-host/src/espeak.rs`, the style-row rule in `kokoro-host/src/native_synth.rs` | **kokoro-js** | Apache-2.0 |
 | `kokoro-ocr/src/detect.rs`, `prep.rs`, `recognize.rs`, `session.rs` | **PaddleOCR** | Apache-2.0 |
+| `kokoro-panel/ui/play-arrow.svg`, `pause.svg`, `stop.svg`, `sprint.svg`, `resume.svg` | **Google Material Symbols** (`resume.svg` modified) | Apache-2.0 |
 
 ### kokoro-js — Apache-2.0
 
