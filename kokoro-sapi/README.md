@@ -53,7 +53,9 @@ and by `../kokoro-sapi-smoke` — a no-Kindle / no-registration / no-elevation h
   proving the hand-declared `ISpTTSEngine` slot order / IID are right.
 - `DllCanUnloadNow` returns `S_FALSE`.
 - With no host, `Speak` returns `E_FAIL` and no audio (the correct "no pipe, no
-  fallback" behavior).
+  fallback" behavior) - after `RECOVER_WINDOW` (15 s) of re-attempts, never instantly. A
+  host that comes up inside that window narrates the page instead. Failures land in
+  `%TEMP%\kokoro-sapi.log`.
 
 There is no root workspace, so `-p` cannot reach a sibling crate — each command names its
 own manifest. From the **repo root**:

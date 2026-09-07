@@ -134,13 +134,25 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
 ## Gotchas / invariants (do not rediscover these)
 
 ### Runtime / synth
-- **`kokoro-host` must be running** or Kindle gets no audio (the engine's `Speak` returns
-  `E_FAIL` when the pipe is absent — no fallback). It's a windowless tray daemon that
+- **`kokoro-host` must be running** or Kindle gets no audio (the engine's `Speak` ends in
+  `E_FAIL` when the pipe is absent — no fallback voice). It's a windowless tray daemon that
   **auto-starts hidden at login** (`auto-launch`, `--hidden`); Quit is only via the tray
-  menu. Closing the settings panel does **not** stop the host. This also fixes Kindle
-  **fast-scrolling** when the host is gone mid-Read-Aloud: a mid-session pipe disconnect
-  makes each per-page `Speak` fail instantly, which Kindle reads as "page done" and races
-  through the book — so keep the host alive.
+  menu. Closing the settings panel does **not** stop the host.
+- **A `Speak` that produces no audio must never return QUICKLY** — `RECOVER_WINDOW`
+  (`engine.rs`, 15 s) enforces it. Kindle's narrator turns the page when the utterance ends
+  and an `HRESULT` is all it has to go on, so a failure and a finished page are the *same
+  event* to it: an instant `E_FAIL` reads as "page done" instantly and Kindle goes through
+  the book at the rate the loop can run. The window also *recovers* the page — an
+  unreachable host is nearly always transient — so it is spent re-attempting, both no-audio
+  shapes (`Frame::Error`, `Frame::Failed`), caching nothing across attempts because a
+  reconnect may reach a different, restarted host. **Don't return early from a failure
+  path**, and don't let the wait stop polling `SPVES_ABORT`.
+- **Diagnosing a page that produced nothing** needs two logs, because the engine sits
+  between them: `%TEMP%\kokoro-sapi.log` (failure-only, like `kokoro-hook`'s) and Kindle's
+  own `%LOCALAPPDATA%\Packages\AMZNKindle…\LocalState\logs\kindle.log`, where
+  `SpVoiceEngine:` names the voice it resolved and `NarratorService: Speaking SSML with N
+  words` / `Speech completed event received` bracket each page — the gap between those two
+  *is* the narration.
 - **Two synth performance questions are SETTLED. Don't re-open either without different
   hardware.** The standalone timing crate that measured them is gone (it produced figures, which
   this repo does not keep, and it could not be run here anyway); what it concluded is load-bearing

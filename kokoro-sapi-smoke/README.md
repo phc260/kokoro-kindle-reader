@@ -11,7 +11,8 @@ Read Aloud. Run in CI on every `kokoro-sapi` change (`.github/workflows/sapi.yml
 `ISpTTSEngine` / `ISpObjectWithToken` / `IUnknown` (and `E_NOINTERFACE` for a bogus IID);
 `GetOutputFormat` dispatched through the vtable returns 24 kHz/16-bit/mono;
 `DllCanUnloadNow` returns `S_FALSE`. With no host, `Speak` returns `E_FAIL` (the correct
-"no pipe, no fallback" behavior).
+"no pipe, no fallback" behavior) - after ~15 s, not instantly: see `RECOVER_WINDOW` in
+`engine.rs`. Start a host inside that window and the same run narrates instead.
 
 There is no root workspace, so `-p` cannot reach a sibling crate — each command names its
 own manifest. From the **repo root** (the same two commands CI runs):

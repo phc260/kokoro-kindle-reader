@@ -8,6 +8,7 @@
 use core::ffi::c_void;
 use core::ptr::null_mut;
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{
     CLASS_E_NOAGGREGATION, E_FAIL, E_OUTOFMEMORY, E_POINTER, LPARAM, S_OK, WPARAM,
@@ -233,6 +234,76 @@ unsafe fn report_event(site: &ISpTTSEngineSite, interest: u64, ev: &SpeakEvent, 
     }
 }
 
+/// How long one `Speak` keeps trying to get audio out of the host before it gives the page
+/// up. **This constant is the fast-scroll fix**, and the number matters far less than the
+/// fact that it is not zero.
+///
+/// Kindle's narrator turns the page when the utterance ends, and an `HRESULT` is all it has
+/// to go on: a failure and a finished page are the same event to it. So a `Speak` that failed
+/// *instantly* made Kindle read "page done" instantly, and it went through the book as fast
+/// as that loop could run - measured in Kindle's own log at **one page every ~150 ms, 871
+/// pages in a single sitting**. The audio was never the loss; the reader's place in the book
+/// was.
+///
+/// Waiting is also the truer report. An unreachable host is overwhelmingly a *transient*
+/// state - it is a tray daemon, so it gets quit, rebuilt, and started at login in a race with
+/// Kindle - which makes "not yet" a better answer than "never", and a page that waits is a
+/// page that gets narrated when the host comes back. That recovery is why the window is spent
+/// re-attempting rather than merely sleeping.
+///
+/// It costs nothing on the path that works: the first attempt succeeds and none of this runs.
+const RECOVER_WINDOW: Duration = Duration::from_secs(15);
+
+/// Gap between attempts inside [`RECOVER_WINDOW`]. Long enough not to hammer `CreateFile` at
+/// a host that isn't there, short enough to pick up one that is coming up mid-page.
+const RETRY_GAP: Duration = Duration::from_millis(750);
+
+/// How often a wait looks for an abort. Stop has to stay instant while we stall: the stall is
+/// the only thing standing between a missing host and the user's place in the book, so it
+/// must never become the thing that ignores a Stop.
+const ABORT_POLL: Duration = Duration::from_millis(100);
+
+/// True once the site has asked us to stop.
+unsafe fn aborting(site: &ISpTTSEngineSite) -> bool {
+    site.GetActions() & SPVES_ABORT.0 as u32 != 0
+}
+
+/// Sleep up to `d`, waking early if the site asks us to abort. `false` = aborted.
+unsafe fn nap(site: &ISpTTSEngineSite, d: Duration) -> bool {
+    let until = Instant::now() + d;
+    loop {
+        if aborting(site) {
+            return false;
+        }
+        let now = Instant::now();
+        if now >= until {
+            return true;
+        }
+        std::thread::sleep(ABORT_POLL.min(until - now));
+    }
+}
+
+/// Append one line to `%TEMP%\kokoro-sapi.log`, on failure only.
+///
+/// The engine had no diagnostics at all, and that is why this bug outlived months of
+/// sightings: every way of producing nothing - no host, a host that dropped us, a chunk the
+/// host could not synthesize - reaches Kindle as the same silent page turn, and afterwards
+/// nothing anywhere says which one it was. Kindle logs that it asked; the host can only log
+/// requests that reached it; the gap between the two was exactly where this lived. Mirrors
+/// `kokoro-hook`'s log, and stays silent on the path that works.
+fn log_failure(msg: &str) {
+    use std::io::Write;
+    if let Ok(dir) = std::env::var("TEMP") {
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(format!("{dir}\\kokoro-sapi.log"))
+        {
+            let _ = writeln!(f, "[kokoro-sapi] {msg}");
+        }
+    }
+}
+
 #[implement(ISpTTSEngine, ISpObjectWithToken)]
 pub struct KokoroEngine {
     // The voice token SAPI hands us (held for its lifetime; never read).
@@ -309,13 +380,9 @@ impl ISpTTSEngine_Impl for KokoroEngine_Impl {
             return E_POINTER;
         };
 
-        // Connect to the host's synth pipe (silently skip if it isn't running).
-        {
-            let _lk = SYNTH_LOCK.lock().unwrap();
-            if !WORKER.ensure_connected() {
-                return E_FAIL;
-            }
-        }
+        // No connect here. Reaching the host is the retry loop's job further down, and this
+        // early `return E_FAIL` was the fast-scroll bug in its purest form: one failed
+        // `CreateFile` cost a page of the book. See `RECOVER_WINDOW`.
 
         // Which events the host wants reported (Kindle asks for word/bookmark). We only
         // AddEvents for interested ids.
@@ -435,21 +502,48 @@ impl ISpTTSEngine_Impl for KokoroEngine_Impl {
         //
         // A host that is simply absent takes the same path and ends at the same `E_FAIL`, one
         // extra `CreateFile` later — there is no way to tell the two apart without trying.
-        let mut first = if open(true) { read_first() } else { Some(Frame::Error) };
-        if matches!(first, Some(Frame::Error)) {
-            // Re-check the abort before re-sending. The probe's read blocks for as long as
-            // the first chunk takes, so a Stop pressed inside it is *already* pending by the
-            // time we get here — and `open` writes a whole utterance the host will start
-            // synthesizing on its one serialized worker before its first write to us fails.
-            // That is wasted work behind a Stop the user has watched succeed, and it stamps
-            // the Kindle-audio clock, which is what "Kokoro is narrating" is read from.
-            if site.GetActions() & SPVES_ABORT.0 as u32 != 0 {
-                first = None;
-            } else {
-                if !open(false) {
-                    return E_FAIL;
+        //
+        // All of the above is one *attempt*, and an attempt that ends with no audio is
+        // retried until [`RECOVER_WINDOW`] runs out instead of failing the page on the spot
+        // — see that constant for why an instant failure is what races Kindle through a
+        // book. Both no-audio shapes are retried, because neither is permanent: `Error` is a
+        // host that is absent, was quit, or dropped us, and `Failed` is a live host that
+        // could not render chunk 0 (the transient Dawn device error its own internal retry
+        // exists for). Nothing is carried across attempts — a reconnect may reach a
+        // *different*, restarted host, so every attempt probes for `CMD_SYNTH_ALIGNED` from
+        // scratch, for the same reason the capability answer is never cached.
+        let deadline = Instant::now() + RECOVER_WINDOW;
+        let mut attempts = 0u32;
+        let mut first;
+        loop {
+            attempts += 1;
+            first = if open(true) { read_first() } else { Some(Frame::Error) };
+            if matches!(first, Some(Frame::Error)) {
+                // Re-check the abort before re-sending. The probe's read blocks for as long
+                // as the first chunk takes, so a Stop pressed inside it is *already* pending
+                // by the time we get here — and `open` writes a whole utterance the host
+                // will start synthesizing on its one serialized worker before its first write
+                // to us fails. That is wasted work behind a Stop the user has watched
+                // succeed, and it stamps the Kindle-audio clock, which is what "Kokoro is
+                // narrating" is read from.
+                if aborting(site) {
+                    first = None;
+                } else {
+                    first = if open(false) { read_first() } else { Some(Frame::Error) };
                 }
-                first = read_first();
+            }
+            // `None` is an abort and anything else is a live stream; only the two no-audio
+            // shapes go round again. What each one *means* is still decided in one place, by
+            // the streaming loop below, once the window is spent.
+            if !matches!(first, Some(Frame::Error) | Some(Frame::Failed)) {
+                break;
+            }
+            if Instant::now() >= deadline {
+                break;
+            }
+            if !nap(site, RETRY_GAP) {
+                first = None;
+                break;
             }
         }
 
@@ -495,6 +589,17 @@ impl ISpTTSEngine_Impl for KokoroEngine_Impl {
                     // the queue and halting; only report failure if nothing came through.
                     if bytes_written == 0 {
                         result = E_FAIL;
+                        log_failure(&format!(
+                            "no audio for {} chars after {} attempt(s): {} \
+                             - Kindle treats this page as read and turns it",
+                            text.chars().count(),
+                            attempts,
+                            if matches!(frame, Frame::Failed) {
+                                "host reported SYNTH_ERROR"
+                            } else {
+                                "could not reach the host (is kokoro-host running?)"
+                            },
+                        ));
                     }
                     break;
                 }

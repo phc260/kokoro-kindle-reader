@@ -10,11 +10,20 @@ Windows. Pure-Rust synth core (`ort` crate on ONNX Runtime's Dawn WebGPU EP + an
 FFI). Two x64 exes plus three x86 artifacts Kindle loads in-process. No workspace — each
 crate builds standalone.
 
-## Your role here is **reviewer**
+## Your role follows the user's request
 
-Default to reviewing, not editing. Read the code, verify claims, report findings. Don't
-rewrite working code, and don't propose stylistic changes — formatting, naming, and comment
-density are settled and match the surrounding code deliberately.
+For review requests, read the code, verify claims, and report findings. When the user asks
+for fixes or implementation, make the necessary changes and complete the appropriate
+verification. Permission already given for that work remains valid within its scope; don't
+ask again merely because the default workflow describes Codex as a reviewer. The read-only
+review workflow in `DEVELOPMENT.md` applies to review-only sessions, not user-authorized edits.
+
+Read the current diff before working: Claude and the user may have changed the tree since
+the last turn. Preserve their pending changes and keep your edits focused on the requested
+work. Commit or publish changes only when the user requests it.
+
+Don't rewrite working code, and don't propose stylistic changes — formatting, naming, and
+comment density are settled and match the surrounding code deliberately.
 
 **Verify before reporting.** Grep or read the relevant source and confirm a finding actually
 holds before writing it up. A confident false positive costs more here than a missed nit,
@@ -125,6 +134,11 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
     `begin_synth` (the host closed while the request was still being written) and a failed first
     read (it closed after). Which one happens is a race on the pipe buffer. Handling only the
     read shape makes the fallback unreachable and every page returns `E_FAIL` - silence.
+  - **A `Speak` that yields no audio must not return quickly** (`RECOVER_WINDOW`, 15 s).
+    Kindle turns the page when the utterance ends and an `HRESULT` is all it has, so an
+    instant `E_FAIL` reads as "page done" and races the book. Flag any change that returns
+    early from a failure path, caches "no host" across attempts, or makes the wait ignore
+    `SPVES_ABORT`.
   - **The fallback re-checks `SPVES_ABORT` before re-sending.** The probe read blocks for a whole
     chunk's synthesis, so a Stop pressed inside it is already pending by the time the fallback
     runs - and re-sending puts the host to work on the one serialized synth worker behind a Stop
@@ -325,3 +339,7 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
 Number each finding. For each: the defect in one sentence, `file:line`, a concrete failure
 scenario (inputs/state → wrong outcome), and severity. Group by file. Lead with whether
 anything was found at all.
+
+For requested fixes, explain what changed, why, what was checked, and any unresolved issues.
+Distinguish checks you ran from results reported by the user or another agent; don't describe
+your own implementation review as an independent review.

@@ -133,8 +133,10 @@ sets it for you.
 
 ## Troubleshooting
 
-- **Kindle is silent / no Read Aloud sound** — the kokoro-kindle-reader app isn't
-  running. Start it and try again. (There's no fallback voice by design.)
+- **Kindle is silent, or turns pages without reading them** — the kokoro-kindle-reader
+  app isn't running. Start it and try again; there's no fallback voice by design. You
+  don't need to stop Read Aloud first — the page being read picks the app up as soon as
+  it is there.
 - **Kindle reverted to the old robotic voice** — make sure **Narrate Kindle with
   Kokoro** is ticked in Settings, confirm the app is running, then reopen Kindle.
 - **A switch didn't take effect** — fully close and reopen Kindle after changing
