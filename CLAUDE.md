@@ -948,7 +948,9 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
 - **ONNX Runtime's notices are PROVISIONED, not tracked** — `fetch-deps.ps1` keeps the
   wheel's own `LICENSE`/`Privacy.md`/`ThirdPartyNotices.txt` into
   `native-deps/runtime/notices/` and `build-installer.ps1` stages them to
-  `licenses/onnxruntime/`. That keeps them matched to the exact wheel the DLLs came from; a
+  `licenses/onnxruntime/`. The exact cp312 win_amd64 wheel is pinned by filename plus its PyPI
+  SHA-256; selecting by the machine's Python is forbidden because the 1.27.0 cp311-cp314
+  wheels contain different native DLL bytes. That keeps notices matched to the exact wheel; a
   hand copy goes stale at the next version bump. Both ends **throw** when they're missing —
   and the fetch re-runs when the notices are absent even if the DLLs are present, or an old
   provision would never acquire them. The glob is `Get-ChildItem $wex -Recurse -File
@@ -971,7 +973,7 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   installer/uninstaller stub is NSIS compressed with LZMA (`SetCompressor /SOLID lzma`), so
   `build-installer.ps1` stages NSIS's own `COPYING` (zlib + bzip2 + CPL-1.0 with the LZMA
   linking exception) from the installed toolchain to `licenses/nsis/NSIS-COPYING.txt`. NSIS
-  is **pinned** in `installer.yml` (`--version=3.11`) so that shipped licence matches the
+  is **pinned** in `installer.yml` (`--version=3.12`) so that shipped licence matches the
   version actually used. Both stagers **throw** when the text is absent — a modified GPL
   binary or an LZMA stub shipped without its licence is the failure they exist to prevent.
 - **`cargo-about` must run in CI, and `GPL-3.0-only` is accepted for Slint ONLY.**
@@ -983,6 +985,20 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   not the global list, so a GPL dependency arriving through anything other than Slint still
   fails `--fail`. The list of slint crates is deliberately generous — naming an absent crate
   is a harmless warning, a missed present one is a build break.
+  Preserve the packaged-file/source-header appendices and hash-pinned upstream
+  clarifications too. Some published crates omit their licence files, and some put the
+  copyright only in source comments; generic MIT templates cannot replace those notices.
+  `cargo-about` 0.9.1 only warns if a clarification fails, so
+  `verify-dependency-licenses.ps1` checks every configured text hash per crate/version in
+  the generated AND extracted reports. AccessKit's Chromium BSD terms remain an `AND`
+  alongside its MIT/Apache choice. The offline regression script runs on PowerShell 5.1.
+  `source-notices.json` pins complete W3C terms from Tao/Winit/cursor-icon and Intel's ISC
+  notice from Ring's native P-384 source; unreviewed versions or changed excerpts fail
+  generation, and their hashes are required in generated and extracted reports.
+  Ordinary appendix files/headers must also pass decoded-text hashes and the recorded
+  block count; checking only special clarifications misses changed or deleted notices.
+  The tray and Settings must keep **About & licenses** available independently of narration;
+  it opens installed `legal.html`, whose content and local links are checked in packaging.
 - **The Apache-2.0 in-file change notices are a distinct duty from shipping the text.**
   Apache-2.0 §4(b) needs each modified file to carry a prominent change notice. The
   `kokoro-ocr` files (PaddleOCR) already had them; `text.rs` (whole-file kokoro-js port),
@@ -997,15 +1013,43 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   The standard library is not a Cargo package: `build-installer.ps1` stages the active
   toolchain's generated `COPYRIGHT-library.html` plus a `TOOLCHAIN.txt` with its immutable
   commit, and `installer.yml` installs `rust-src` so `build-corresponding-source.ps1` can put
-  that exact `library/` tree into the source archive. `verify-installer-notices.ps1` extracts
+  that exact `library/` tree into the source archive. The source packager requires its active
+  toolchain to equal the installer's staged `TOOLCHAIN.txt`, so a local toolchain switch cannot
+  pair different standard-library source with the binary. `verify-installer-notices.ps1` extracts
   the built `-setup.exe` in CI and fails if any required notice is missing or empty —
   proving the tree is *in the installer*, not merely in staging. `LICENSING.md` is the
   authoritative per-artifact map + the aggregation boundary (the x86 clients stay MIT) + the
   §6 procedure; `THIRD_PARTY_NOTICES.md` is the shipped prose.
+- **Checked-in licence texts are content-pinned, not merely presence-checked.**
+  `packaging/license-texts.sha256` inventories `LICENSE`, `THIRD_PARTY_NOTICES.md`, and every
+  file under `licenses/` after newline normalization. `verify-license-texts.ps1` runs in PR
+  CI, before an installer build, and against the extracted installer; update a hash only after
+  comparing the complete replacement with the exact pinned upstream revision. Provisioned
+  espeak/ORT/NSIS notices must be the exact named, non-empty files rather than any wildcard
+  match.
+- **A native cache must prove which recipe produced it.** `fetch-deps.ps1` writes exact ORT
+  and espeak provision markers only after all expected outputs and notices exist; a missing or
+  mismatched marker forces re-provisioning. Installer staging reads those marked runtime files
+  directly, not copies left in a host target directory. The espeak marker names immutable
+  commit `4870adfa25b1a32b4361592f1be8a40337c58d6c` plus the horse-hoarse revert, and its
+  build-time source SHA-256 manifest must exactly match the tree copied into corresponding
+  source. Otherwise the release would describe or offer source for a different binary.
+- **`-SkipBuild` cannot mean "trust whatever is in target".** A successful full installer
+  build records every tracked source file's SHA-256, both x64 executable hashes, and
+  `rustc --version --verbose` beside the host output. `-SkipBuild` requires all records to
+  match, including after a standalone build overwrites an executable. The corresponding-source
+  packager uses records frozen in `staging/provenance/`, including espeak's source manifest,
+  and independently compares the current tracked tree to the build-time manifest. This
+  prevents a clean tagged checkout from pairing stale binaries with different source.
+- **The NSIS 3.12 pin is enforced, not documentary.** `build-installer.ps1` checks
+  `makensis /VERSION` before packaging and rejects any other local version; otherwise the
+  installed stub, staged `COPYING`, `components.toml`, and corresponding-source instructions
+  could describe different toolchains even though CI happens to install the pinned one.
 - **GPL binaries ship with complete corresponding source (§6).**
-  `build-corresponding-source.ps1` builds `corresponding-source-vX.Y.Z.zip` (tracked project
+  `build-corresponding-source.ps1` builds `corresponding-source-X.Y.Z.zip` (tracked project
   source with LFS resolved, all lockfiles/scripts, the *modified* espeak-ng 1.52.0 tree and
-  the exact Rust Standard Library source with SHA-256 manifests, and a rebuild README);
+  the exact Rust Standard Library source with SHA-256 manifests, the hash-verified official
+  NSIS 3.12 source archive for its CPL-covered LZMA module, and a rebuild README);
   `installer.yml` builds it on every run: strict tag-matched source for releases, a clearly
   stamped non-release archive for manual CI runs. Its Actions artifact always carries the
   archive beside the installer, and a tag attaches both to the release. `sapi.yml` does not

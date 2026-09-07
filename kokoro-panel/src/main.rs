@@ -28,6 +28,8 @@ use kokoro_protocol::{KINDLE_CLOSE, KINDLE_PAUSE, KINDLE_PLAY, KINDLE_QUERY, KIN
 mod benchmark;
 mod download;
 mod hostlink;
+#[path = "../../legal.rs"]
+mod legal;
 mod preview;
 
 slint::include_modules!();
@@ -477,6 +479,19 @@ fn main() -> Result<(), slint::PlatformError> {
     let controls = Arc::new(Mutex::new(Controls::load()));
 
     let ui = AppWindow::new()?;
+    {
+        let weak = ui.as_weak();
+        ui.on_legal_open(move || {
+            let weak = weak.clone();
+            std::thread::spawn(move || {
+                if let Err(e) = legal::open() {
+                    let _ = weak.upgrade_in_event_loop(move |ui| {
+                        ui.set_status(format!("Could not open legal notices: {e}").into());
+                    });
+                }
+            });
+        });
+    }
 
     // Narrator: three cascading dropdowns (accent x gender -> name), seeded from the
     // saved voice.

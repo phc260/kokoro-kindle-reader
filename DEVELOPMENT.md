@@ -25,6 +25,8 @@ The two release assets this project publishes are the
 `corresponding-source-X.Y.Z.zip`. The latter is the GPL source bundle; it is distinct from
 GitHub's automatic "Source code" archives above and includes the resolved LFS assets and
 modified dependency source needed for the matching binary release.
+Its root `README.txt` gives the rebuild steps, including the exact Rust release and
+initializing a local Git index (`git init`, `git add --all`) for the packaging scripts.
 
 ## Building
 
@@ -91,7 +93,7 @@ to co-author to work around it.
 | Workflow | Trigger | What it does |
 |---|---|---|
 | `installer.yml` | `v*` tag push, or manual dispatch | Full installer build (both exes + the 3 x86 artifacts + NSIS, pinned). Installs `cargo-about` (pinned) for the Cargo licence gate and `rust-src` for the exact Standard Library corresponding source; verifies the built installer's notice tree (`verify-installer-notices.ps1`). Its Actions artifact always contains the setup.exe **and** `corresponding-source-*.zip`; on a tag it also drafts a release with both. |
-| `license-check.yml` | PRs touching `Cargo.*`, `about.toml`, `native-deps/**`, panel SVGs, or the notices | Runs the `cargo-about --fail` gate (`generate-dependency-licenses.ps1`) at review time — no full build. |
+| `license-check.yml` | PRs touching dependency, component, packaging, or notice inputs | Runs the `cargo-about --fail` gate plus component and fixed notice-text integrity checks at review time — no full build. |
 | `sapi.yml` | `kokoro-sapi/**`, `kokoro-sapi-smoke/**`, or `kokoro-protocol/**` changes | Builds the x86 SAPI DLL + runs the no-Kindle COM smoke test (`kokoro-sapi-smoke`). It does not upload the bare intermediate DLL; the licensed installer is the distribution path. |
 | `hook.yml` | `kokoro-hook/**` / `kokoro-inject/**` changes | Compile-checks the x86 hook + injector. |
 

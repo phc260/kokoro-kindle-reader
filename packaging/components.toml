@@ -21,8 +21,8 @@
 #     field below and asserts each exact file is present and non-empty in the built -setup.exe.
 #     It also rejects an unparseable field, a component without exactly one field, or a
 #     directory-level notice path, so this manifest and the extraction proof cannot drift.
-# The ORT DLLs / OCR models carry a sha256_note instead: their digests are pinned by the
-# wheel version and ocr-manifest.json, not recomputed here.
+# The ORT DLLs / OCR models carry a sha256_note instead: ORT is pinned by one exact wheel
+# SHA-256 and the OCR assets by ocr-manifest.json, not recomputed here.
 #
 # Fields per [[component]]:
 #   name         - shipped filename or asset group
@@ -54,38 +54,39 @@ upstream = "https://github.com/rust-lang/rust"
 spdx = "LicenseRef-Rust-Standard-Library-Per-Build"
 modified = false
 notice = ["licenses/rust/COPYRIGHT-library.html", "licenses/rust/TOOLCHAIN.txt", "THIRD_PARTY_NOTICES.md"]
-corresponding_source = "corresponding-source-vX.Y.Z.zip carries the exact rust-src library tree from this toolchain"
+corresponding_source = "corresponding-source-X.Y.Z.zip carries the exact rust-src library tree from this toolchain"
 provisioned_by = "the active rustc sysroot"
 staged_by = "packaging/build-installer.ps1"
 
 # --- ONNX Runtime (WebGPU) wheel: four redistributed DLLs -------------------------------
-# All four come from the onnxruntime-webgpu 1.27.0 Python wheel (pinned in fetch-deps.ps1).
-# Their SHA-256 is fixed by that wheel version, not by our build; the wheel pin IS the pin.
+# All four come from the exact onnxruntime-webgpu 1.27.0 cp312 win_amd64 Python wheel pinned
+# by URL + SHA-256 in fetch-deps.ps1. The cp311-cp314 native DLL bytes differ, so a bare
+# release-number pin is not sufficient even though their embedded source IDs agree.
 # The wheel's own LICENSE / ThirdPartyNotices.txt / Privacy.md ship in licenses/onnxruntime/.
 
 [[component]]
 name = "onnxruntime.dll"
 shipped_as = "onnxruntime.dll"
-version = "onnxruntime-webgpu 1.27.0 wheel (git commit 8f0278c77bf44b0cc83c098c6c722b92a36ac4b5; DLL build string 1.27.20260615.2.8f0278c embeds it)"
+version = "onnxruntime_webgpu-1.27.0-cp312-cp312-win_amd64.whl SHA-256 7ef99275b13e8cb9584bd0db7a6f00ebf76095601eeccf7d34749b89ee991c19 (git commit 8f0278c77bf44b0cc83c098c6c722b92a36ac4b5; DLL build string 1.27.20260615.2.8f0278c embeds it)"
 upstream = "https://github.com/microsoft/onnxruntime"
 spdx = "MIT"
 modified = false
 notice = ["licenses/onnxruntime/ORT-LICENSE.txt", "licenses/onnxruntime/ORT-ThirdPartyNotices.txt", "THIRD_PARTY_NOTICES.md"]
 provisioned_by = "native-deps/fetch-deps.ps1"
 staged_by = "packaging/build-installer.ps1"
-sha256_note = "fixed by the pinned wheel version; not recomputed here"
+sha256_note = "fixed by the exact wheel SHA-256; native-deps/runtime/ORT-PROVISION.txt records that wheel and prevents cache substitution"
 
 [[component]]
 name = "onnxruntime_providers_shared.dll"
 shipped_as = "onnxruntime_providers_shared.dll"
-version = "onnxruntime-webgpu 1.27.0 wheel"
+version = "onnxruntime_webgpu-1.27.0-cp312-cp312-win_amd64.whl SHA-256 7ef99275b13e8cb9584bd0db7a6f00ebf76095601eeccf7d34749b89ee991c19"
 upstream = "https://github.com/microsoft/onnxruntime"
 spdx = "MIT"
 modified = false
 notice = ["licenses/onnxruntime/ORT-LICENSE.txt", "licenses/onnxruntime/ORT-ThirdPartyNotices.txt", "THIRD_PARTY_NOTICES.md"]
 provisioned_by = "native-deps/fetch-deps.ps1"
 staged_by = "packaging/build-installer.ps1"
-sha256_note = "fixed by the pinned wheel version; not recomputed here"
+sha256_note = "fixed by the exact wheel SHA-256; native-deps/runtime/ORT-PROVISION.txt records that wheel and prevents cache substitution"
 
 # Dawn / Tint are statically linked INSIDE onnxruntime.dll (no separate file), and implement
 # the WebGPU execution provider the synth runs on.
@@ -99,6 +100,8 @@ version = "git commit ec7b457e5bb1fcec6f59733c4f3dd84d2f885a38 (per ORT 1.27.0 c
 upstream = "https://github.com/google/dawn"
 spdx = "BSD-3-Clause"
 modified = false
+# The checked-in file is the exact LICENSE at the pinned Dawn commit (not a newer
+# main-branch copy); ORT's own notice independently reproduces the same 2017-2023 notice.
 notice = ["licenses/dawn-BSD-3-Clause.txt", "licenses/onnxruntime/ORT-ThirdPartyNotices.txt"]
 provisioned_by = "native-deps/fetch-deps.ps1 (as part of onnxruntime.dll)"
 staged_by = "packaging/build-installer.ps1"
@@ -108,38 +111,43 @@ name = "dxcompiler.dll"
 shipped_as = "dxcompiler.dll"
 version = "Microsoft.Direct3D.DXC redistributable, dxcompiler.dll v1.9.0.1 (version resource embeds short commit 3e6e1485; full immutable commit 3e6e148537683c22e3e74977d56516f16f39c7be); bundled in onnxruntime-webgpu 1.27.0"
 upstream = "https://github.com/microsoft/DirectXShaderCompiler"
-spdx = "NCSA"
+# DXC's top-level licence is NCSA, while its own LICENSE.TXT also records permissive and
+# public-domain terms for bundled LLVM components. The complete upstream file is shipped.
+spdx = "NCSA AND LicenseRef-DXC-Bundled-Third-Party"
 modified = false
 notice = ["licenses/dxcompiler-NCSA.txt", "THIRD_PARTY_NOTICES.md"]
 provisioned_by = "native-deps/fetch-deps.ps1"
 staged_by = "packaging/build-installer.ps1"
-sha256_note = "fixed by the pinned wheel version; not recomputed here"
+sha256_note = "fixed by the exact wheel SHA-256; native-deps/runtime/ORT-PROVISION.txt records that wheel and prevents cache substitution"
 
 [[component]]
 name = "dxil.dll"
 shipped_as = "dxil.dll"
 version = "Microsoft.Direct3D.DXC redistributable, dxil.dll v1.8.2502.11 (version resource embeds short commit 239921522; full immutable commit 2399215226737c64e76afc55ffd874ecd6fc459f); bundled in onnxruntime-webgpu 1.27.0"
 upstream = "https://github.com/microsoft/DirectXShaderCompiler"
-spdx = "NCSA"
+spdx = "NCSA AND LicenseRef-DXC-Bundled-Third-Party"
 modified = false
 # Same redistributable package as dxcompiler.dll; Microsoft's terms state LICENSE-LLVM.txt
-# (the NCSA text in dxcompiler-NCSA.txt) covers all other files in it, dxil.dll included.
+# (the complete upstream text in dxcompiler-NCSA.txt) covers all other files in it, dxil.dll
+# included.
 notice = ["licenses/dxcompiler-NCSA.txt", "THIRD_PARTY_NOTICES.md"]
 provisioned_by = "native-deps/fetch-deps.ps1"
 staged_by = "packaging/build-installer.ps1"
-sha256_note = "fixed by the pinned wheel version; not recomputed here"
+sha256_note = "fixed by the exact wheel SHA-256; native-deps/runtime/ORT-PROVISION.txt records that wheel and prevents cache substitution"
 
 # --- espeak-ng: MODIFIED GPL component (the whole reason binaries are GPLv3) -------------
 [[component]]
 name = "espeak-ng.dll"
 shipped_as = "espeak-ng.dll"
-version = "1.52.0 + horse-hoarse revert"
-upstream = "https://github.com/espeak-ng/espeak-ng (tag 1.52.0)"
+version = "1.52.0 commit 4870adfa25b1a32b4361592f1be8a40337c58d6c + horse-hoarse revert"
+upstream = "https://github.com/espeak-ng/espeak-ng (tag 1.52.0, commit 4870adfa25b1a32b4361592f1be8a40337c58d6c)"
 spdx = "GPL-3.0-or-later"
 modified = true
 modification = "phsource/ph_english_us: phoneme o@ reverted from horse-hoarse merger (upstream 5b01dd86), 2026-07-05; see build-espeak.ps1 and THIRD_PARTY_NOTICES.md section 5(a) notice"
+# Upstream COPYING.BSD2 contains only the conditions/disclaimer; the checked-in BSD file
+# also reproduces the NetBSD copyright and contributor notice from src/compat/getopt.c.
 notice = ["licenses/espeak-ng/COPYING", "licenses/espeak-ng/COPYING.APACHE", "licenses/espeak-ng/COPYING.BSD2", "licenses/espeak-ng/COPYING.UCD", "licenses/espeak-ng-BSD-2-Clause.txt", "licenses/GPL-3.0.txt"]
-corresponding_source = "native-deps/build-espeak.ps1 (patch + build recipe); corresponding-source-vX.Y.Z.zip carries the built modified tree"
+corresponding_source = "native-deps/build-espeak.ps1 (patch + build recipe, itself SHA-256-bound to the cache); corresponding-source-X.Y.Z.zip must match the build-time source SHA-256 manifest"
 provisioned_by = "native-deps/fetch-deps.ps1 -> build-espeak.ps1"
 staged_by = "packaging/build-installer.ps1"
 sha256_note = "per-build (built with whatever MSVC vswhere -latest finds; not hash-pinned by design)"
@@ -147,15 +155,15 @@ sha256_note = "per-build (built with whatever MSVC vswhere -latest finds; not ha
 [[component]]
 name = "espeak-ng-data/"
 shipped_as = "espeak-ng-data/"
-version = "1.52.0 + horse-hoarse revert (compiled from the modified phsource)"
-upstream = "https://github.com/espeak-ng/espeak-ng (tag 1.52.0)"
+version = "1.52.0 commit 4870adfa25b1a32b4361592f1be8a40337c58d6c + horse-hoarse revert (compiled from the modified phsource)"
+upstream = "https://github.com/espeak-ng/espeak-ng (tag 1.52.0, commit 4870adfa25b1a32b4361592f1be8a40337c58d6c)"
 spdx = "GPL-3.0-or-later AND Unicode-DFS-2016"
 modified = true
 modification = "derived from the modified phsource above (the o@ revert affects the compiled dictionary data)"
 # COPYING.UCD covers the Unicode Character Database data baked into this directory; it is a
 # DIFFERENT document from licenses/Unicode-3.0.txt (which is for the unicode-ident crate).
 notice = ["licenses/espeak-ng/COPYING", "licenses/espeak-ng/COPYING.UCD", "licenses/GPL-3.0.txt"]
-corresponding_source = "native-deps/build-espeak.ps1; corresponding-source-vX.Y.Z.zip"
+corresponding_source = "native-deps/build-espeak.ps1; corresponding-source-X.Y.Z.zip"
 provisioned_by = "native-deps/fetch-deps.ps1 -> build-espeak.ps1"
 staged_by = "packaging/build-installer.ps1"
 
@@ -271,21 +279,22 @@ staged_by = "packaging/build-installer.ps1"
 [[component]]
 name = "NSIS installer/uninstaller stub"
 shipped_as = "the -setup.exe itself, and the installed Uninstall.exe"
-version = "3.11 (pinned in .github/workflows/installer.yml)"
+version = "3.12 (pinned in .github/workflows/installer.yml)"
 upstream = "https://nsis.sourceforge.io"
 # zlib/libpng for NSIS + zlib module, bzip2 for the bzip2 module, CPL-1.0 (with a linking
 # exception) for the LZMA module this installer uses (SetCompressor /SOLID lzma).
 spdx = "Zlib AND bzip2-1.0.6 AND CPL-1.0"
 modified = false
 notice = ["licenses/nsis/NSIS-COPYING.txt", "THIRD_PARTY_NOTICES.md"]
+corresponding_source = "corresponding-source-X.Y.Z.zip carries the exact hash-verified official NSIS 3.12 source archive"
 staged_by = "packaging/build-installer.ps1 (from the installed NSIS COPYING)"
 
 # --- Model weights: NOT shipped (runtime download) --------------------------------------
 [[component]]
 name = "Kokoro-82M weights + voice embeddings"
 shipped_as = "NOT shipped - downloaded on first run into the user profile"
-version = "onnx-community/Kokoro-82M-v1.0-ONNX (per model-manifest.json checksums)"
-upstream = "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX"
+version = "onnx-community/Kokoro-82M-v1.0-ONNX revision 1939ad2a8e416c0acfeecc08a694d14ef25f2231 (per model-manifest.json checksums)"
+upstream = "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/tree/1939ad2a8e416c0acfeecc08a694d14ef25f2231"
 spdx = "Apache-2.0"
 modified = false
 notice = ["licenses/Apache-2.0.txt", "THIRD_PARTY_NOTICES.md"]

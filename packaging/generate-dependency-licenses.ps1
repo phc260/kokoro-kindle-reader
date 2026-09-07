@@ -40,17 +40,42 @@ $template = Join-Path $here 'about.hbs'
 $config = Join-Path $here 'about.toml'
 $outDir = if ($OutputDir) { $OutputDir } else { Join-Path $here 'dependency-licenses' }
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+. (Join-Path $here 'source-notices.ps1')
+$sourceNotices = @(Read-SourceNoticeRequirements (Join-Path $here 'source-notices.json'))
 
 # cargo-about is the licence-expression gate, but its normalized SPDX fallback text can
 # contain placeholders such as "Copyright (c) <year> <owner>" even when a crate packages
 # the real notice in LICENSE.md. Append those packaged files verbatim so binary
 # redistribution conditions retain the actual copyright holders. The SHA-256 on every
 # heading makes the appendix self-auditing and lets the installer extraction check prove
-# these are harvested source files, not another hand-written summary.
+# these are harvested source files, not another hand-written summary. Each heading also
+# records the rendered-text hash, and a block count detects wholly removed notices.
+# A package can
+# also put its copyright in source headers and ship only an SPDX template as its
+# LICENSE (Slint's permissive helper crates do this). Preserve those headers too.
+# Additional terms embedded after Rust attributes/docs or in native source are
+# separately pinned in source-notices.json, including their complete attribution.
+function Get-LeadingCopyrightNotice([string]$source) {
+    # Only leading ordinary comments, not rustdoc examples or matching strings inside
+    # code. Keep the whole comment, including multi-line holders and licence terms.
+    $header = [regex]::Match($source,
+        '\A\s*(?:(?://(?![!/])[^\r\n]*(?:\r?\n|\z)|/\*(?![*!])[\s\S]*?\*/)\s*)+')
+    if ($header.Success -and $header.Value -match '(?i)copyright|SPDX-FileCopyrightText') {
+        return $header.Value.TrimEnd()
+    }
+    return $null
+}
+
 function Add-PackagedLicenseAppendix([string]$manifest, [string]$triple, [string]$report) {
-    $metadataText = (& cargo metadata --locked --format-version 1 --filter-platform $triple `
-                     --manifest-path $manifest) | Out-String
-    if ($LASTEXITCODE) { throw "cargo metadata failed for $manifest ($triple)" }
+    $previousEncoding = [Console]::OutputEncoding
+    try {
+        [Console]::OutputEncoding = $utf8NoBom
+        $metadataText = (& cargo metadata --locked --format-version 1 --filter-platform $triple `
+                         --manifest-path $manifest) | Out-String
+        if ($LASTEXITCODE) { throw "cargo metadata failed for $manifest ($triple)" }
+    } finally {
+        [Console]::OutputEncoding = $previousEncoding
+    }
     $metadata = $metadataText | ConvertFrom-Json
 
     $resolved = @{}
@@ -62,12 +87,23 @@ function Add-PackagedLicenseAppendix([string]$manifest, [string]$triple, [string
     $body = New-Object System.Text.StringBuilder
     [void]$body.AppendLine('<section id="packaged-license-files" data-license-appendix="1">')
     [void]$body.AppendLine('<h2>Exact packaged licence and notice files</h2>')
-    [void]$body.AppendLine('<p class="intro">Copied verbatim from the dependency packages resolved by Cargo.lock.</p>')
+    [void]$body.AppendLine('<p class="intro">Licence files and copyright/licence comments copied verbatim from the dependency packages resolved by Cargo.lock. Source-comment excerpts are labelled separately; their hashes cover the excerpt, not the whole source file. Additional embedded terms are pinned by dependency version, source path and complete notice hash.</p>')
     $fileCount = 0
     $packageCount = 0
 
     foreach ($package in $packages) {
         $packageDir = Split-Path ([string]$package.manifest_path) -Parent
+        $embedded = @(Get-SourceNoticeRequirements $sourceNotices $package.name $package.version)
+        # This one clarification uses a local copy because cargo-about mishandles
+        # its .git repository suffix. Unlike remote clarifications it cannot follow
+        # .cargo_vcs_info automatically, so refuse to bless a different source.
+        if ($package.name -eq 'dasp_sample') {
+            $vcs = [System.IO.File]::ReadAllText((Join-Path $packageDir '.cargo_vcs_info.json')) | ConvertFrom-Json
+            if ($package.version -ne '0.11.0' -or $vcs.git.dirty -or
+                $vcs.git.sha1 -ne '97c3bb9b2363c0b46ac1633858bf1054fd02a980') {
+                throw 'Re-review the local dasp_sample licence copy for this dependency version/source.'
+            }
+        }
         $files = @()
         $files += Get-ChildItem -LiteralPath $packageDir -File | Where-Object {
             $_.Name -match '(?i)^(LICENSES?|LICENCES?|COPYINGS?|NOTICES?|COPYRIGHTS?|AUTHORS?|CONTRIBUTORS?)(?:$|[._-].*)'
@@ -79,7 +115,25 @@ function Add-PackagedLicenseAppendix([string]$manifest, [string]$triple, [string
             }
         }
         $files = @($files | Sort-Object FullName -Unique)
-        if ($files.Count -eq 0) { continue }
+        $headers = @{}
+        # Registry/git packages are finite source packages. Local path crates have
+        # targets/native caches: scan only src/ and root .rs files for those.
+        $sources = if ($package.source) {
+            @(Get-ChildItem -LiteralPath $packageDir -Recurse -File -Filter '*.rs')
+        } else {
+            @(Get-ChildItem -LiteralPath $packageDir -File -Filter '*.rs')
+            $srcDir = Join-Path $packageDir 'src'
+            if (Test-Path -LiteralPath $srcDir -PathType Container) {
+                Get-ChildItem -LiteralPath $srcDir -Recurse -File -Filter '*.rs'
+            }
+        }
+        foreach ($source in $sources) {
+            $header = Get-LeadingCopyrightNotice ([System.IO.File]::ReadAllText($source.FullName))
+            if (-not $header) { continue }
+            $relative = $source.FullName.Substring($packageDir.Length).TrimStart('\', '/')
+            $headers[$header] = @($headers[$header]) + $relative
+        }
+        if ($files.Count -eq 0 -and $headers.Count -eq 0 -and $embedded.Count -eq 0) { continue }
 
         $packageCount++
         $packageLabel = [System.Net.WebUtility]::HtmlEncode("$($package.name) $($package.version)")
@@ -96,12 +150,44 @@ function Add-PackagedLicenseAppendix([string]$manifest, [string]$triple, [string
             $hash = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLower()
             $text = [System.IO.File]::ReadAllText($file.FullName)
             $encoded = [System.Net.WebUtility]::HtmlEncode($text)
-            [void]$body.AppendLine(('<h4 data-source-sha256="{0}">{1}</h4>' -f $hash, $label))
+            # The file hash includes any encoding preamble; the text hash checks
+            # exactly what a recipient can read after decoding the HTML.
+            $textHash = Get-NoticeTextSha256 $text
+            [void]$body.AppendLine(('<h4 data-source-sha256="{0}" data-text-sha256="{1}">{2}</h4>' -f $hash, $textHash, $label))
             [void]$body.AppendLine("<pre>$encoded</pre>")
+            $fileCount++
+        }
+        foreach ($header in ($headers.Keys | Sort-Object)) {
+            $paths = @($headers[$header] | Where-Object { $_ } | Sort-Object)
+            $label = [System.Net.WebUtility]::HtmlEncode(($paths -join ', ') + ' (leading comment excerpt)')
+            $algorithm = [System.Security.Cryptography.SHA256]::Create()
+            try {
+                $hash = [System.BitConverter]::ToString(
+                    $algorithm.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($header))
+                ).Replace('-', '').ToLowerInvariant()
+            } finally {
+                $algorithm.Dispose()
+            }
+            [void]$body.AppendLine(('<h4 data-source-sha256="{0}" data-text-sha256="{0}">{1}</h4>' -f $hash, $label))
+            [void]$body.AppendLine('<pre>' + [System.Net.WebUtility]::HtmlEncode($header) + '</pre>')
+            $fileCount++
+        }
+        foreach ($notice in $embedded) {
+            $text = Get-SourceNoticeText $notice $packageDir
+            $label = [System.Net.WebUtility]::HtmlEncode(
+                ('{0}:{1}-{2} ({3}; complete embedded notice)' -f
+                 $notice.path, $notice.first_line, $notice.last_line, $notice.license))
+            [void]$body.AppendLine('<section class="source-license">')
+            [void]$body.AppendLine(('<span data-license-crate="{0}" data-license-version="{1}"></span>' -f
+                $notice.crate, $notice.version))
+            [void]$body.AppendLine(('<h4 data-source-sha256="{0}" data-text-sha256="{0}">{1}</h4>' -f $notice.sha256, $label))
+            [void]$body.AppendLine('<pre>' + [System.Net.WebUtility]::HtmlEncode($text) + '</pre>')
+            [void]$body.AppendLine('</section>')
             $fileCount++
         }
         [void]$body.AppendLine('</article>')
     }
+    [void]$body.AppendLine(('<span hidden data-packaged-notice-count="{0}"></span>' -f $fileCount))
     [void]$body.AppendLine('</section>')
 
     if ($packageCount -eq 0 -or $fileCount -eq 0) {
@@ -141,11 +227,19 @@ $targets = @(
 Remove-Item -Recurse -Force $outDir -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $outDir | Out-Null
 
+# cargo-about resolves clarification file paths relative to a registry package.
+# Expand our explicit project-local notice paths without modifying that package.
+# Nothing else in the checked-in config is changed (including the content hashes).
+$effectiveConfig = Join-Path $outDir 'about.generated.toml'
+$configText = [System.IO.File]::ReadAllText($config)
+$configText = $configText.Replace('path = "@project/', 'path = "' + $root.Replace('\', '/') + '/')
+[System.IO.File]::WriteAllText($effectiveConfig, $configText, $utf8NoBom)
+
 foreach ($t in $targets) {
     $manifest = Join-Path $root "$($t.Crate)\Cargo.toml"
     $out = Join-Path $outDir "$($t.Crate).html"
     Write-Host "==> cargo about generate: $($t.Crate) ($($t.Triple))"
-    & cargo about generate -c $config -m $manifest --target $t.Triple --fail $template -o $out
+    & cargo about generate --locked -c $effectiveConfig -m $manifest --target $t.Triple --fail $template -o $out
     if ($LASTEXITCODE) {
         throw ("cargo about generate failed for $($t.Crate) ($($t.Triple)). If this is a " +
                'newly-added dependency under a licence not yet in about.toml''s `accepted` ' +
@@ -155,7 +249,8 @@ foreach ($t in $targets) {
                'go away.')
     }
     $added = Add-PackagedLicenseAppendix $manifest $t.Triple $out
-    Write-Host ("    appended exact packaged notices: {0} file(s) from {1} package(s)" -f `
+    & (Join-Path $here 'verify-dependency-licenses.ps1') -Report $out -Config $config
+    Write-Host ("    appended exact packaged notices: {0} file(s)/excerpt(s) from {1} package(s)" -f `
                 $added.Files, $added.Packages)
 }
 

@@ -81,7 +81,7 @@ notice of record is in the source.
 | **Slint** 1.x | statically linked into `kokoro-panel.exe` | GPL-3.0-only (option chosen) |
 | **ONNX Runtime** (WebGPU build) | `onnxruntime.dll`, `onnxruntime_providers_shared.dll` | MIT |
 | **Dawn / Tint** | statically linked into `onnxruntime.dll` | BSD-3-Clause |
-| **DirectX Shader Compiler** | `dxcompiler.dll`, `dxil.dll` | see below |
+| **DirectX Shader Compiler** | `dxcompiler.dll`, `dxil.dll` | NCSA + bundled third-party terms; see below |
 | **Cargo crates** | statically linked into all five Rust outputs | mostly MIT OR Apache-2.0 — see below for the full generated closure |
 | **Rust Standard Library** | statically linked into all five Rust outputs | primarily MIT OR Apache-2.0, with bundled code under additional terms — exact per-toolchain report below |
 | **NSIS** (installer/uninstaller stub) | the `-setup.exe` itself + the installed `Uninstall.exe` | NSIS license (zlib/libpng + bzip2 + CPL-1.0-w/-exception for the LZMA module) |
@@ -91,7 +91,8 @@ notice of record is in the source.
 
 ### espeak-ng — GPL-3.0-or-later — **modified**
 
-Upstream: <https://github.com/espeak-ng/espeak-ng>, tag `1.52.0`.
+Upstream: <https://github.com/espeak-ng/espeak-ng>, tag `1.52.0`, immutable commit
+`4870adfa25b1a32b4361592f1be8a40337c58d6c`.
 Shipped as `espeak-ng.dll` and the `espeak-ng-data/` directory. Used for phonemization
 only (the Kokoro model produces all audio; espeak-ng synthesizes none of it).
 
@@ -104,19 +105,24 @@ espeak-ng, so the revert is required for correct pronunciation of "four", "hoars
 
 The modification is applied by
 [`native-deps/build-espeak.ps1`](https://github.com/phc260/kokoro-kindle-reader/blob/main/native-deps/build-espeak.ps1)
-in this repository, which is both the patch and the build recipe: it checks out tag
-`1.52.0`, applies the change above, and builds with
+in this repository, which is both the patch and the build recipe: it checks out the immutable
+commit behind tag `1.52.0`, fails if the expected phoneme block cannot be patched or
+verified, and builds with
 `-DBUILD_SHARED_LIBS=ON -DUSE_ASYNC=OFF -DUSE_MBROLA=OFF -DUSE_LIBSONIC=OFF -DUSE_LIBPCAUDIO=OFF -DESPEAK_BUILD_DOC=OFF`.
 Running it against a fresh upstream clone reproduces the modified source and the build
 configuration used for the shipped `espeak-ng.dll` and `espeak-ng-data/`. (It does not
 promise a byte-identical DLL: the script builds with whatever MSVC toolchain
 `vswhere -latest` finds, and the build is not otherwise pinned or hash-verified.)
+`native-deps/fetch-deps.ps1` records a manifest of the exact source tree used for that build;
+the corresponding-source packager compares the archive tree against it and fails on any drift.
 See "Obtaining corresponding source" below.
 
 Parts of the espeak-ng tree carry additional licenses: the `getopt.c` Windows
 compatibility shim is 2-clause BSD
-([`licenses/espeak-ng-BSD-2-Clause.txt`](licenses/espeak-ng-BSD-2-Clause.txt)), the tree
-includes Apache-2.0 code, and the `espeak-ng-data/` directory this installer ships includes
+([`licenses/espeak-ng-BSD-2-Clause.txt`](licenses/espeak-ng-BSD-2-Clause.txt), including
+the NetBSD copyright and contributor notice that upstream's generic `COPYING.BSD2` omits),
+the tree includes Apache-2.0 code, and the `espeak-ng-data/` directory this installer ships
+includes
 **Unicode Character Database (UCD)** data under the Unicode licence. espeak-ng's own
 `COPYING*` set — `COPYING` (GPLv3), `COPYING.APACHE`, `COPYING.BSD2` and `COPYING.UCD` —
 is provisioned from the exact `1.52.0` source by `native-deps/fetch-deps.ps1` and installed
@@ -140,7 +146,11 @@ unmodified.
 Upstream: <https://github.com/microsoft/onnxruntime>. Copyright (c) Microsoft
 Corporation. Shipped unmodified as `onnxruntime.dll` and
 `onnxruntime_providers_shared.dll`, obtained from the official `onnxruntime-webgpu`
-Python wheel.
+Python wheel. The provision is the exact CPython 3.12 Windows wheel
+`onnxruntime_webgpu-1.27.0-cp312-cp312-win_amd64.whl`, SHA-256
+`7ef99275b13e8cb9584bd0db7a6f00ebf76095601eeccf7d34749b89ee991c19`; selecting a wheel
+from the machine's Python version is deliberately not allowed because the release's Windows
+wheel variants contain different native DLL bytes.
 
 > Permission is hereby granted, free of charge, to any person obtaining a copy of this
 > software and associated documentation files (the "Software"), to deal in the Software
@@ -162,7 +172,9 @@ Python wheel.
 ONNX Runtime itself bundles further third-party code — including **Dawn** and **Tint**
 (BSD-3-Clause, <https://dawn.googlesource.com/dawn>), which implement the WebGPU
 execution provider this application runs on; Dawn's licence, which also covers Tint, is in
-[`licenses/dawn-BSD-3-Clause.txt`](licenses/dawn-BSD-3-Clause.txt).
+[`licenses/dawn-BSD-3-Clause.txt`](licenses/dawn-BSD-3-Clause.txt). That file is the exact
+licence from Dawn commit `ec7b457e5bb1fcec6f59733c4f3dd84d2f885a38`, the revision pinned
+by this ORT build, rather than a copy from Dawn's moving main branch.
 
 **ONNX Runtime's own licence and notice files ship in `licenses\onnxruntime\` beside the
 installed application**, taken verbatim from the same wheel the DLLs came out of. (They are
@@ -178,11 +190,12 @@ no notices.
 Upstream: <https://github.com/microsoft/DirectXShaderCompiler>. Copyright (c) Microsoft
 Corporation. Redistributed unmodified, exactly as obtained from the official
 `onnxruntime-webgpu` wheel; required by the WebGPU execution provider to compile
-shaders. The DirectX Shader Compiler is published under the University of
-Illinois/NCSA Open Source License — full text, including the licences of the components it
-in turn bundles, in [`licenses/dxcompiler-NCSA.txt`](licenses/dxcompiler-NCSA.txt). That
-licence requires its notice accompany binary redistributions, which is why the text is here
-and not merely named. `dxil.dll` is the DirectX Shader Compiler's validator binary from the
+shaders. DXC's top-level work is published under the University of Illinois/NCSA Open
+Source License, and its upstream `LICENSE.TXT` also includes the permissive and public-domain
+terms for components DXC bundles. That complete upstream file is in
+[`licenses/dxcompiler-NCSA.txt`](licenses/dxcompiler-NCSA.txt); the NCSA terms require their
+notice to accompany binary redistributions, which is why the text is here and not merely
+named. `dxil.dll` is the DirectX Shader Compiler's validator binary from the
 same official redistributable package as `dxcompiler.dll`; Microsoft's terms for that
 package (the `Microsoft.Direct3D.DXC` redistributable) state that `LICENSE-LLVM.txt`
 applies to all other files in it, which covers `dxil.dll` too. It is therefore covered by
@@ -250,17 +263,51 @@ up," not a person re-reading the whole tree by hand.
 the Cargo closure moves with ordinary `cargo update`s in a way a pinned wheel doesn't) and
 stages its output into `licenses\dependencies\` beside the installed application. That
 directory, like `licenses\onnxruntime\`, exists in an install and not in this source tree.
+The tray menu and Settings panel both offer **About & licenses**, opening the installed
+`legal.html` page with copyright, warranty, GPL redistribution terms and links to these
+local notices, the GPL text and the matching release's source-download location.
 To reproduce it yourself: `cargo install cargo-about --locked --features cli`, then
 `packaging\generate-dependency-licenses.ps1`.
 
 Each report also appends the exact `LICENSE*`, `LICENCE*`, `COPYING*`, `NOTICE*`,
 `COPYRIGHT*`, `AUTHORS*`, and `CONTRIBUTORS*` files from every resolved dependency that
-packages them, with a SHA-256 beside each file. This is deliberate: a normalized SPDX
+packages them, with source-file and rendered-text SHA-256s beside each file. Verification
+checks every decoded text and the recorded number of appendix blocks, so a changed notice
+or an entirely removed block fails before staging and after installer extraction.
+This is deliberate: a normalized SPDX
 fallback can contain placeholders even when the crate package carries the real copyright
 notice, and the packaged file is the notice that must accompany a binary redistribution.
+Leading Rust source comments that carry copyright notices are retained as labelled,
+hash-checked excerpts too; some packages put the real holder only in those headers.
+Additional terms embedded after Rust attributes/documentation or in native source are
+extracted using the version, path, line range and SHA-256 in
+[`packaging/source-notices.json`](packaging/source-notices.json). A changed version or
+excerpt fails generation until the complete upstream notice is reviewed. The same
+notice hashes are required in the rendered reports, including after installer extraction.
 
-Two terms in that closure are **not** alternatives you can decline by picking MIT or
-Apache-2.0, so their text has to ship on its own:
+For packages that omit their upstream licence files, `about.toml` pins complete upstream
+texts by SHA-256 and retrieves them at the package's own source commit. The rendered
+reports are checked again by `verify-dependency-licenses.ps1`, including after installer
+extraction: a failed retrieval or hash check must not silently become a generic template.
+The exact RustAudio notice for `dasp_sample` 0.11.0 is also kept locally in
+[`licenses/dasp_sample-MIT.txt`](licenses/dasp_sample-MIT.txt), copied from
+[its published source revision](https://github.com/rustaudio/dasp/blob/97c3bb9b2363c0b46ac1633858bf1054fd02a980/LICENSE-MIT),
+because the licence tool cannot fetch that package's `.git`-suffixed repository address.
+
+Examples of terms in that closure which are **not** alternatives you can decline by
+picking MIT or Apache-2.0, so their notices must also ship:
+
+- `tao` 0.30.8 and `winit` 0.30.13 embed W3C keyboard definitions in
+  `src/keyboard.rs`; `cursor-icon` 1.2.0 embeds W3C cursor definitions in `src/lib.rs`.
+  Their **W3C-20150513** terms apply to those portions in addition to the packages'
+  MIT/Apache-2.0 choices. The generated reports preserve the full embedded terms,
+  short notice, source-document attribution and modification statement.
+- `ring` 0.17.14's `crypto/fipsmodule/ec/ecp_nistz384.inl`, included in its P-384
+  implementation, carries Intel Corporation's **ISC** notice. The panel's generated
+  report preserves that complete embedded notice alongside Ring's packaged licences.
+- AccessKit's Chromium-derived portions remain **BSD-3-Clause** alongside its own
+  `MIT OR Apache-2.0` choice. The generated reports retain its upstream `LICENSE.chromium`
+  and copyright headers, as well as AccessKit's `AUTHORS` and MIT licence text.
 
 - `unicode-ident` — a dependency of six of the seven crate lockfiles, and so of nearly
   every binary here — is `(MIT OR Apache-2.0) AND Unicode-3.0`. The `AND` is the point:
@@ -303,8 +350,9 @@ recorded in its generated report.
 
 ### Kokoro-82M — Apache-2.0 — *not shipped*
 
-Model: <https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX> (an ONNX conversion
-of <https://huggingface.co/hexgrad/Kokoro-82M>). The weights and voice embeddings are
+Model: <https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/tree/1939ad2a8e416c0acfeecc08a694d14ef25f2231>
+(immutable revision `1939ad2a8e416c0acfeecc08a694d14ef25f2231`; an ONNX conversion of
+<https://huggingface.co/hexgrad/Kokoro-82M>). The weights and voice embeddings are
 **not** included in the installer — the settings panel downloads them from Hugging Face
 when you click **Download**, into your own user profile, per the checksums in
 [`model-manifest.json`](https://github.com/phc260/kokoro-kindle-reader/blob/main/model-manifest.json).
@@ -325,6 +373,13 @@ verbatim in **`licenses\nsis\NSIS-COPYING.txt`** beside the application, taken f
 exact NSIS toolchain version the release was built with (pinned in CI); like the ORT and
 espeak notices it is provisioned at build time rather than checked into this tree.
 
+Source code for the unmodified NSIS 3.12 code in those stubs is available from this
+distributor in the matching release's `corresponding-source-X.Y.Z.zip` as
+`nsis-3.12-src.tar.bz2` (SHA-256
+`f3ed7a8e4aa2cf4e8cf47d3b563a02559e0cb4934db2662b2f9661b824e2b186`). The same official
+archive is available directly from
+<https://sourceforge.net/projects/nsis/files/NSIS%203/3.12/nsis-3.12-src.tar.bz2/download>.
+
 ---
 
 ## Obtaining corresponding source
@@ -332,11 +387,12 @@ espeak notices it is provisioned at build time rather than checked into this tre
 For the GPL-licensed components in any binary release, the complete corresponding source is
 provided at no charge, from the same place as the binary (GPLv3 §6(d)): each release on
 <https://github.com/phc260/kokoro-kindle-reader/releases> carries a
-**`corresponding-source-vX.Y.Z.zip`** beside the installer. It contains the project source
+**`corresponding-source-X.Y.Z.zip`** beside the installer. It contains the project source
 at that tag (with Git-LFS assets resolved), all lockfiles and build/install scripts, the
 **modified** espeak-ng 1.52.0 tree that was actually built (with a SHA-256 manifest), the
 exact `rust-src` Standard Library tree used by the build (also with a SHA-256 manifest), and
-a rebuild README with tool versions and immutable commits. It is produced by
+the exact NSIS 3.12 source archive, and a rebuild README with tool versions and immutable
+commits. It is produced by
 [`packaging/build-corresponding-source.ps1`](https://github.com/phc260/kokoro-kindle-reader/blob/main/packaging/build-corresponding-source.ps1).
 
 The build workflow never uploads the installer by itself: its Actions artifact contains this

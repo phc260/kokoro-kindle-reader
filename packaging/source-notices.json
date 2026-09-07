@@ -1,0 +1,38 @@
+[
+  {
+    "crate": "tao",
+    "version": "0.30.8",
+    "path": "src/keyboard.rs",
+    "first_line": 7,
+    "last_line": 74,
+    "license": "W3C-20150513",
+    "sha256": "504cd042f28d672ee353a3521ff4a9a6f571e85deb01b5f9b69069fc49fa0ab3"
+  },
+  {
+    "crate": "winit",
+    "version": "0.30.13",
+    "path": "src/keyboard.rs",
+    "first_line": 3,
+    "last_line": 70,
+    "license": "W3C-20150513",
+    "sha256": "f3a88477725ebf227d167c58e3d02b32d250e71e9f864680e71afcd3c82639ba"
+  },
+  {
+    "crate": "cursor-icon",
+    "version": "1.2.0",
+    "path": "src/lib.rs",
+    "first_line": 34,
+    "last_line": 102,
+    "license": "W3C-20150513",
+    "sha256": "853a625f3e4cd57f28108930df2700efb74fa82081d2d691f5ac00e8bb445cf4"
+  },
+  {
+    "crate": "ring",
+    "version": "0.17.14",
+    "path": "crypto/fipsmodule/ec/ecp_nistz384.inl",
+    "first_line": 1,
+    "last_line": 22,
+    "license": "ISC",
+    "sha256": "f8065b411b7206dc40f802b57e5e5b20a6ecc3e4b7623ac15691ea0d543e74fb"
+  }
+]

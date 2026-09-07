@@ -114,6 +114,7 @@ $componentNotices = @(Get-ComponentNoticePaths (Join-Path $here 'components.toml
 $required = @(
     'LICENSE',
     'THIRD_PARTY_NOTICES.md',
+    'legal.html',
     'licenses\Unicode-3.0.txt'
 ) + $componentNotices
 $required = @($required | Sort-Object -Unique)
@@ -127,6 +128,29 @@ foreach ($r in $required) {
 }
 
 $groupErrors = @()
+# The UI's local legal page must lead to files at their actual install-relative paths,
+# not just namesakes elsewhere in 7-Zip's extracted tree.
+$legalPage = Find-Shipped 'legal.html'
+if ($legalPage) {
+    $links = [regex]::Matches([System.IO.File]::ReadAllText($legalPage.FullName), 'href="(?<path>[^"]+)"')
+    foreach ($link in $links) {
+        $relative = $link.Groups['path'].Value
+        if ($relative.StartsWith('https://')) { continue }
+        $destination = Join-Path $installRoot $relative
+        if (-not (Test-Path -LiteralPath $destination -PathType Leaf) -or
+            (Get-Item -LiteralPath $destination).Length -eq 0) {
+            $groupErrors += "legal.html link is missing or empty: $relative"
+        }
+    }
+}
+# Presence is insufficient for the fixed, checked-in texts: verify that the installer
+# contains the reviewed bytes, not a truncated or wrong-revision file. Provisioned notice
+# trees are checked below/by components.toml and are intentionally allowed as additions.
+try {
+    & (Join-Path $here 'verify-license-texts.ps1') -Root $installRoot -AllowAdditional
+} catch {
+    $groupErrors += 'checked-in licence texts do not match packaging/license-texts.sha256'
+}
 # ORT's own LICENSE + ThirdPartyNotices now come from exact canonical paths in
 # components.toml, not a directory marker: a co-location check can be satisfied by an
 # unrelated namesake in a sibling subtree after ORT's real notice is dropped.
@@ -167,6 +191,11 @@ foreach ($reportName in 'kokoro-host.html', 'kokoro-panel.html', 'kokoro-sapi.ht
     if (-not $reportText.Contains('data-license-appendix="1"') -or
         -not $reportText.Contains('data-source-sha256=')) {
         $groupErrors += "$relative (missing exact packaged licence-file appendix)"
+    }
+    try {
+        & (Join-Path $here 'verify-dependency-licenses.ps1') -Report $report.FullName
+    } catch {
+        $groupErrors += "$relative (clarified/embedded licence texts missing or changed: $_)"
     }
 }
 

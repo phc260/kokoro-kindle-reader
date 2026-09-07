@@ -27,17 +27,25 @@
   non-Cargo bundled components.
 </p>
 <p class="intro">
-  The exact licence, notice, copyright, and authorship files packaged by each dependency
-  that supplies them are appended below by the generator. Those verbatim files are
+  The exact licence, notice, copyright, and authorship files packaged by each dependency,
+  plus leading source-comment excerpts and pinned complete embedded notices, are appended below.
+  Each appendix text is checked against its rendered-text hash, and a recorded block
+  count detects deleted notices. Raw source-file hashes are retained separately.
+  Those verbatim notices are
   authoritative when a normalized SPDX text above contains placeholders or omits a
   package-specific notice.
 </p>
+<div id="dependency-inventory" hidden>
+{{#each crates}}<span data-report-crate="{{this.package.name}}" data-report-version="{{this.package.version}}"></span>
+{{/each}}</div>
 {{#each licenses}}
+<section class="resolved-license">
 <h2>{{this.name}} ({{this.id}})</h2>
 <p class="used-by">Used by:
-{{#each this.used_by}}{{this.crate.name}} {{this.crate.version}}{{#unless @last}}, {{/unless}}{{/each}}
+{{#each this.used_by}}<span data-license-crate="{{this.crate.name}}" data-license-version="{{this.crate.version}}">{{this.crate.name}} {{this.crate.version}}</span>{{#unless @last}}, {{/unless}}{{/each}}
 </p>
 <pre>{{this.text}}</pre>
+</section>
 {{/each}}
 </body>
 </html>

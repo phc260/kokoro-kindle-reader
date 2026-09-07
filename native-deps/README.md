@@ -4,10 +4,19 @@
 Populates the gitignored dep folders alongside them (`runtime/` + `espeak-ng-src/`;
 re-created by the scripts):
 
-- the **Dawn/WebGPU runtime DLLs** from the `onnxruntime-webgpu` pip wheel
+- the **Dawn/WebGPU runtime DLLs** from the exact SHA-256-pinned
+  `onnxruntime-webgpu` CPython 3.12 Windows wheel
   (`onnxruntime.dll` + `onnxruntime_providers_shared.dll` + `dxcompiler.dll` + `dxil.dll`)
 - an **espeak-ng x64 build** (`espeak-ng.dll` + import lib + `espeak-ng-data`)
 - the **Cloud Reader OCR models** (`ocr/`), by a second script
+
+`runtime/ORT-PROVISION.txt` and `runtime/ESPEAK-PROVISION.txt` identify the exact cached
+recipes. A missing or mismatched marker forces re-provisioning instead of silently reusing
+binaries from an older version. The espeak marker includes the newline-normalized SHA-256 of
+`build-espeak.ps1`, so a build-flag or patch-recipe edit also invalidates the cache. Its
+provision records a SHA-256 manifest of the source tree used for the build;
+corresponding-source packaging refuses a tree that no longer
+matches it.
 
 ## Run this first
 
@@ -22,9 +31,10 @@ building the host. It also stages the 5 runtime DLLs next to the exe. The ONNX m
 on the `ort` crate's WebGPU EP via load-dynamic, so `onnxruntime.dll` is loaded at runtime
 (not linked) — no ORT headers/import lib needed.
 
-Requires Python+pip (for `pip download` of the wheel), CMake + MSVC (to build espeak), and
-network. `build-espeak.ps1` is called by `fetch-deps.ps1`; it builds espeak-ng
-1.52.0 x64 with the horse-hoarse phoneme revert this model expects.
+Requires CMake + MSVC (to build espeak) and network. `build-espeak.ps1` is called by
+`fetch-deps.ps1`; it builds espeak-ng
+1.52.0 commit `4870adfa25b1a32b4361592f1be8a40337c58d6c` x64 with the horse-hoarse
+phoneme revert this model expects.
 
 ## fetch-ocr-models.ps1
 

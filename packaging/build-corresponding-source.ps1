@@ -9,20 +9,21 @@
 #
 # "Complete corresponding source" here is: the modified GPL component (espeak-ng) carried IN
 # FULL in this archive, the exact Rust standard-library source statically linked by the active
-# toolchain, plus GPLv3 section 6(d) clear-directions/equivalent-access pointers for the pieces
-# whose upstream source is immutable and public - the Cargo crates (crates.io, which forbids
-# republishing a version), NSIS, and the permissively-licensed native runtime ORT/Dawn/DXC pull
-# in dynamically (their exact versions are pinned in components.toml). The archive is therefore
-# not fully self-contained by design; the README below spells out where each off-archive piece
-# is obtained so a section 6 recipient never depends on a mutable tag.
+# toolchain, and the official NSIS 3.12 source archive for its CPL-covered LZMA module, plus
+# GPLv3 section 6(d) clear-directions/equivalent-access pointers for the pieces whose upstream
+# source is immutable and public - the Cargo crates (crates.io, which forbids republishing a
+# version) and the permissively-licensed native runtime ORT/Dawn/DXC pulled in dynamically
+# (their exact versions are pinned in components.toml). The archive is therefore not fully
+# self-contained by design; the README below spells out where each off-archive piece is obtained
+# so a section 6 recipient never depends on a mutable tag.
 #
 #   packaging\build-corresponding-source.ps1                 # version from installer.nsi
 #   packaging\build-corresponding-source.ps1 -Version 0.4.0  # explicit
 #
 # Output: packaging\corresponding-source-<version>.zip
 #
-# ASCII only (PS 5.1 - see CLAUDE.md). Run AFTER fetch-deps.ps1 (needs the built modified
-# espeak-ng tree under native-deps\espeak-ng-src).
+# ASCII only (PS 5.1 - see CLAUDE.md). Run AFTER build-installer.ps1 (needs its staged Rust
+# toolchain record, plus the built modified espeak-ng tree provisioned by fetch-deps.ps1).
 #
 # RELEASE INTEGRITY: the archive's project source is exactly `git ls-files` at HEAD - tracked
 # files only. So an untracked build input (a new manifest, a new packaging script) is silently
@@ -37,6 +38,34 @@ $ErrorActionPreference = 'Stop'
 
 $here = $PSScriptRoot
 $root = Split-Path $here -Parent
+
+function Get-ProjectSourceManifestLines([string]$RepositoryRoot) {
+    $trackedPaths = @(& git -C $RepositoryRoot ls-files)
+    if ($LASTEXITCODE -ne 0 -or $trackedPaths.Count -eq 0) {
+        throw 'git ls-files failed while checking installer source provenance.'
+    }
+    foreach ($relative in @($trackedPaths | Sort-Object)) {
+        $path = Join-Path $RepositoryRoot $relative
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+            throw "Tracked source file is missing: $relative"
+        }
+        "{0}  {1}" -f (Get-FileHash $path -Algorithm SHA256).Hash.ToLower(), $relative
+    }
+}
+
+function Get-NormalizedTextSha256([string]$Path) {
+    $encoding = New-Object System.Text.UTF8Encoding($false, $true)
+    $text = $encoding.GetString([System.IO.File]::ReadAllBytes($Path))
+    $normalized = $text.Replace("`r`n", "`n").Replace("`r", "`n")
+    $algorithm = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        return [System.BitConverter]::ToString(
+            $algorithm.ComputeHash($encoding.GetBytes($normalized))
+        ).Replace('-', '').ToLower()
+    } finally {
+        $algorithm.Dispose()
+    }
+}
 
 if (-not $Version) {
     # Derive from installer.nsi's !define VERSION, so this matches what build-installer ships.
@@ -93,6 +122,17 @@ if ($rustcInfoText -notmatch '(?m)^commit-hash:\s+([0-9a-f]{40})\s*$') {
     throw 'Could not read the immutable Rust commit from rustc --version --verbose.'
 }
 $rustCommit = $Matches[1]
+$builtRustToolchain = Join-Path $here 'staging\licenses\rust\TOOLCHAIN.txt'
+if (-not (Test-Path -LiteralPath $builtRustToolchain -PathType Leaf)) {
+    throw ('The installer build toolchain record is missing. Run packaging\build-installer.ps1 ' +
+           'before creating its corresponding-source archive.')
+}
+$builtRustText = [System.IO.File]::ReadAllText($builtRustToolchain).Replace("`r`n", "`n").TrimEnd("`n")
+$currentRustText = $rustcInfoText.Replace("`r`n", "`n").TrimEnd("`n")
+if ($builtRustText -cne $currentRustText) {
+    throw ('The active Rust toolchain differs from the one that built the installer. Restore ' +
+           'the recorded toolchain before creating corresponding source.')
+}
 $rustSysroot = (& rustc --print sysroot)
 if ($LASTEXITCODE -or -not $rustSysroot) { throw 'rustc --print sysroot failed.' }
 $rustSysroot = $rustSysroot.Trim()
@@ -123,6 +163,33 @@ Push-Location $root
 $tracked = & git ls-files
 if ($LASTEXITCODE) { Pop-Location; throw 'git ls-files failed' }
 Pop-Location
+$installerStage = Join-Path $here 'staging'
+$stageProvenance = Join-Path $installerStage 'provenance'
+$projectBuildManifest = Join-Path $stageProvenance 'kkr-project-source.SHA256SUMS.txt'
+if (-not (Test-Path -LiteralPath $projectBuildManifest -PathType Leaf)) {
+    throw ('Installer project-source provenance is missing. Run packaging\build-installer.ps1 ' +
+           'before creating corresponding source.')
+}
+$builtProjectText = ([System.IO.File]::ReadAllLines($projectBuildManifest) -join "`n")
+$currentProjectText = ([string[]](Get-ProjectSourceManifestLines $root) -join "`n")
+if ($builtProjectText -cne $currentProjectText) {
+    throw ('The tracked project source changed after the installer binaries were built. ' +
+           'Rebuild the installer before creating corresponding source.')
+}
+$outputBuildRecord = Join-Path $stageProvenance 'kkr-build-outputs.SHA256SUMS.txt'
+if (-not (Test-Path -LiteralPath $outputBuildRecord -PathType Leaf)) {
+    throw 'Installer output provenance is missing; rebuild the installer before creating source.'
+}
+$stagedOutputManifest = [string[]]@(
+    foreach ($exeName in 'kokoro-host.exe', 'kokoro-panel.exe') {
+        $exePath = Join-Path $installerStage $exeName
+        "{0}  {1}" -f (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).Hash.ToLower(), $exeName
+    }
+)
+if (([System.IO.File]::ReadAllLines($outputBuildRecord) -join "`n") -cne
+    ($stagedOutputManifest -join "`n")) {
+    throw 'Staged executables differ from their build records; rebuild the installer.'
+}
 $srcDir = Join-Path $stage 'kokoro-kindle-reader'
 foreach ($rel in $tracked) {
     if (-not $rel) { continue }
@@ -151,7 +218,23 @@ if (Test-Path $icon) {
 $espkSrc = Join-Path $root 'native-deps\espeak-ng-src'
 if (-not (Test-Path (Join-Path $espkSrc 'phsource\ph_english_us'))) {
     throw ("Modified espeak-ng source not found at $espkSrc - run native-deps\fetch-deps.ps1 " +
-           'first (it clones tag 1.52.0 and build-espeak.ps1 applies the horse-hoarse revert).')
+           'first (it fetches the 1.52.0 commit and applies the horse-hoarse revert).')
+}
+$espkProvision = Join-Path $stageProvenance 'ESPEAK-PROVISION.txt'
+$espkBuildScriptHash = Get-NormalizedTextSha256 (Join-Path $root 'native-deps\build-espeak.ps1')
+$espkProvisionExpected = ('espeak-ng=1.52.0+horse-hoarse-revert;' +
+                          'base=4870adfa25b1a32b4361592f1be8a40337c58d6c' + "`n" +
+                          "build-script-sha256=$espkBuildScriptHash")
+$espkProvisionActual = if (Test-Path -LiteralPath $espkProvision -PathType Leaf) {
+    [System.IO.File]::ReadAllText($espkProvision).Replace("`r`n", "`n").Replace("`r", "`n").TrimEnd("`n")
+} else { '' }
+$builtEspkManifest = Join-Path $stageProvenance 'espeak-ng-source.SHA256SUMS.txt'
+if (-not (Test-Path -LiteralPath $espkProvision -PathType Leaf) -or
+    $espkProvisionActual -cne $espkProvisionExpected -or
+    -not (Test-Path -LiteralPath $builtEspkManifest -PathType Leaf) -or
+    (Get-Item -LiteralPath $builtEspkManifest).Length -eq 0) {
+    throw ('The installer has no matching espeak-ng provenance/source manifest. Run ' +
+           'native-deps\fetch-deps.ps1 and rebuild the installer before creating source.')
 }
 Write-Host '==> Copying modified espeak-ng source (excluding .git and build output)'
 $espkDest = Join-Path $stage 'espeak-ng-modified-1.52.0'
@@ -163,10 +246,16 @@ Get-ChildItem $espkSrc -Force | Where-Object { $excluded -notcontains $_.Name } 
 # exact modified tree (the DLL itself is not byte-pinned - see THIRD_PARTY_NOTICES.md).
 Write-Host '==> Hashing espeak-ng source tree'
 $manifest = Join-Path $stage 'espeak-ng-modified-1.52.0.SHA256SUMS.txt'
-Get-ChildItem $espkDest -Recurse -File | ForEach-Object {
-    $rel = $_.FullName.Substring($espkDest.Length).TrimStart('\', '/')
+Get-ChildItem $espkDest -Recurse -Force -File | Sort-Object FullName | ForEach-Object {
+    $rel = $_.FullName.Substring($espkDest.Length).TrimStart('\', '/').Replace('\', '/')
     "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $rel
 } | Set-Content -Encoding ascii $manifest
+$builtManifestText = [System.IO.File]::ReadAllText($builtEspkManifest).Replace("`r`n", "`n")
+$archiveManifestText = [System.IO.File]::ReadAllText($manifest).Replace("`r`n", "`n")
+if ($archiveManifestText -cne $builtManifestText) {
+    throw ('The espeak-ng source tree differs from the one staged in the installer. Restore ' +
+           'that source, or re-provision and rebuild the installer before creating source.')
+}
 
 # 3. The exact Rust standard-library source linked into all five Rust outputs. rust-src is
 #    target-independent, so one copy covers both the x64 and x86 precompiled standard libraries
@@ -193,7 +282,29 @@ Get-ChildItem $rustDest -Recurse -File | ForEach-Object {
     "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $rel
 } | Set-Content -Encoding ascii $rustManifest
 
-# 4. The README with deterministic-build directions and the lockfile-immutability note that
+# 4. NSIS's LZMA compression module is CPL-1.0 with a linking exception. The exception keeps
+#    the installed application out of CPL, but the module itself remains CPL and its object-code
+#    terms require us to state that source is available and explain how to obtain it. Carry the
+#    exact official 3.12 source archive here instead of relying only on an upstream link that can
+#    move. Hash it so a SourceForge error page or substituted download fails the release.
+$nsisSourceUrl = 'https://downloads.sourceforge.net/nsis/nsis-3.12-src.tar.bz2'
+$nsisSourceExpected = 'f3ed7a8e4aa2cf4e8cf47d3b563a02559e0cb4934db2662b2f9661b824e2b186'
+$nsisSourceDest = Join-Path $stage 'nsis-3.12-src.tar.bz2'
+Write-Host '==> Downloading NSIS 3.12 source'
+$webClient = New-Object System.Net.WebClient
+$webClient.Headers['User-Agent'] = 'Kokoro-Kindle-Reader-source-packager/1.0'
+try {
+    $webClient.DownloadFile($nsisSourceUrl, $nsisSourceDest)
+} finally {
+    $webClient.Dispose()
+}
+$nsisSourceActual = (Get-FileHash -LiteralPath $nsisSourceDest -Algorithm SHA256).Hash.ToLower()
+if ($nsisSourceActual -cne $nsisSourceExpected) {
+    throw ("NSIS 3.12 source SHA-256 is $nsisSourceActual, expected $nsisSourceExpected. " +
+           'Refusing to publish an unverified or non-source download.')
+}
+
+# 5. The README with deterministic-build directions and the lockfile-immutability note that
 #    stands in for `cargo vendor` (the crates.io versions pinned in the committed Cargo.lock
 #    files ARE the corresponding source; crates.io is immutable).
 $provenance = if ($releaseClean) {
@@ -226,6 +337,8 @@ Contents
                                    $rustRelease, commit $rustCommit, plus that toolchain's
                                    generated COPYRIGHT-library.html and TOOLCHAIN.txt.
 - rust-standard-library-$rustPathVersion.SHA256SUMS.txt   SHA-256 of every file in that tree.
+- nsis-3.12-src.tar.bz2           The exact official NSIS 3.12 source archive, including the
+                                   CPL-1.0 LZMA compression module used by the installer stub.
 
 Cargo dependencies
 ------------------
@@ -245,21 +358,24 @@ licence and copyright inventory for that library source and its bundled dependen
 
 NSIS
 ----
-The installer/uninstaller stub is built with NSIS 3.11 (pinned in
+The installer/uninstaller stub is built with NSIS 3.12 (pinned in
 .github/workflows/installer.yml). NSIS is not GPL and not linked into the executables; its
-source for that version is at https://sourceforge.net/projects/nsis/files/NSIS%203/3.11/ and
-its licence (incl. the LZMA CPL-1.0 linking exception) ships as licenses/nsis/NSIS-COPYING.txt
-in the installer.
+exact official source is the included nsis-3.12-src.tar.bz2 (SHA-256
+$nsisSourceExpected). Its licence (incl. the LZMA CPL-1.0 linking exception) ships as
+licenses/nsis/NSIS-COPYING.txt in the installer.
 
 Native runtime (ONNX Runtime / Dawn / DXC)
 ------------------------------------------
 The synth loads onnxruntime.dll (+ onnxruntime_providers_shared.dll, dxcompiler.dll,
 dxil.dll) dynamically at runtime; Dawn/Tint are statically linked inside onnxruntime.dll.
-These are permissively licensed (ORT: MIT; Dawn/Tint: BSD-3-Clause; DXC: NCSA - see
-licenses/ in the installer), not GPL, and are not modified by this project. They are
-identified below by IMMUTABLE commit / version IDs - not a git tag, which can be retargeted
+These are permissively licensed (ORT: MIT; Dawn/Tint: BSD-3-Clause; DXC: NCSA plus bundled
+third-party terms - see licenses/ in the installer), not GPL, and are not modified by this
+project. They are identified below by IMMUTABLE commit / version IDs - not a git tag, which
+can be retargeted
 (this script's own header warns of exactly that) - so the exact source stays recoverable:
-  - ONNX Runtime 1.27.0 = git commit 8f0278c77bf44b0cc83c098c6c722b92a36ac4b5 at
+  - ONNX Runtime 1.27.0 = the cp312 win_amd64 wheel named in components.toml, SHA-256
+    7ef99275b13e8cb9584bd0db7a6f00ebf76095601eeccf7d34749b89ee991c19; source is git
+    commit 8f0278c77bf44b0cc83c098c6c722b92a36ac4b5 at
     https://github.com/microsoft/onnxruntime (the shipped DLL's build string
     1.27.20260615.2.8f0278c embeds that commit). ORT pins its OWN native deps by commit +
     archive hash in cmake/deps.txt at that commit; that file is the authoritative record of
@@ -280,11 +396,20 @@ source above).
 
 Rebuilding
 ----------
-1. Install: Rust (stable, with rust-src and the i686-pc-windows-msvc target), Python 3.12, CMake + MSVC,
-   NSIS 3.11, and ``cargo install cargo-about --version 0.9.1 --locked --features cli``.
-2. From kokoro-kindle-reader/: run ``native-deps\fetch-deps.ps1`` and
-   ``native-deps\fetch-ocr-models.ps1`` (or reuse espeak-ng-modified-1.52.0/ here for the
-   GPL component), then ``packaging\build-installer.ps1``.
+1. Install Git, CMake + MSVC, NSIS 3.12, and rustup. Install the recorded Rust toolchain:
+   ``rustup toolchain install $rustRelease --component rust-src --target i686-pc-windows-msvc``.
+2. Open PowerShell in the extracted kokoro-kindle-reader/ directory and run
+   ``rustup override set $rustRelease``. Verify ``rustc --version --verbose`` reports
+   commit $rustCommit. Then install
+   ``cargo install cargo-about --version 0.9.1 --locked --features cli``.
+3. This source archive has resolved Git-LFS assets but no .git directory. Initialize the
+   local file index needed by the packaging scripts: ``git init`` then ``git add --all``.
+   No commit, user identity, or remote is required to build the installer.
+4. Run ``native-deps\fetch-deps.ps1`` and then ``packaging\build-installer.ps1``. The
+   provisioner fetches the exact upstream espeak commit and reapplies the documented patch;
+   it also downloads the pinned ORT wheel. OCR models download at app runtime.
+   The included espeak-ng-modified-1.52.0/ is the matching modified source for inspection
+   and modification, not a Git checkout to copy over native-deps/espeak-ng-src/.
 See ARCHITECTURE.md and packaging/README.md in the project source for detail.
 
 The build is not bit-for-bit reproducible (espeak-ng is built with whatever MSVC the runner
@@ -293,7 +418,7 @@ functionally identical build.
 "@
 Set-Content -Encoding ascii (Join-Path $stage 'README.txt') $readme
 
-# 5. Zip it.
+# 6. Zip it.
 Write-Host '==> Compressing'
 Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $out -Force
 Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue

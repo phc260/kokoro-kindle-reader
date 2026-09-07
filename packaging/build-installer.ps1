@@ -12,9 +12,38 @@ $ErrorActionPreference = 'Stop'
 
 $here = $PSScriptRoot
 $root = Split-Path $here -Parent
+$nativeRuntime = Join-Path $root 'native-deps\runtime'
 $hostRel = Join-Path $root 'kokoro-host\target\release'
 $panelRel = Join-Path $root 'kokoro-panel\target\release'
 $sapiRs = Join-Path $root 'kokoro-sapi'
+
+function Get-ProjectSourceManifestLines([string]$RepositoryRoot) {
+    $tracked = @(& git -C $RepositoryRoot ls-files)
+    if ($LASTEXITCODE -ne 0 -or $tracked.Count -eq 0) {
+        throw 'git ls-files failed while recording installer source provenance.'
+    }
+    foreach ($relative in @($tracked | Sort-Object)) {
+        $path = Join-Path $RepositoryRoot $relative
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+            throw "Tracked build input is missing: $relative"
+        }
+        "{0}  {1}" -f (Get-FileHash $path -Algorithm SHA256).Hash.ToLower(), $relative
+    }
+}
+
+function Get-NormalizedTextSha256([string]$Path) {
+    $encoding = New-Object System.Text.UTF8Encoding($false, $true)
+    $text = $encoding.GetString([System.IO.File]::ReadAllBytes($Path))
+    $normalized = $text.Replace("`r`n", "`n").Replace("`r", "`n")
+    $algorithm = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        return [System.BitConverter]::ToString(
+            $algorithm.ComputeHash($encoding.GetBytes($normalized))
+        ).Replace('-', '').ToLower()
+    } finally {
+        $algorithm.Dispose()
+    }
+}
 
 # 0. Fail fast on inventory drift: the in-repo assets pinned in components.toml (the five
 #    Material Symbols SVGs compiled into kokoro-panel.exe) must still hash to their recorded
@@ -25,9 +54,79 @@ $sapiRs = Join-Path $root 'kokoro-sapi'
 Write-Host '==> Verifying non-Cargo component hashes (components.toml)'
 & (Join-Path $here 'verify-component-hashes.ps1')  # throws on drift ($ErrorActionPreference=Stop)
 
+#    The static licence texts are pinned separately from the component payloads. A file can
+#    be present and non-empty while still being truncated or copied from the wrong upstream
+#    revision; verify their reviewed content before spending time on any build.
+Write-Host '==> Verifying checked-in licence texts'
+& (Join-Path $here 'verify-license-texts.ps1')
+
+#    Check the installer toolchain before compiling any Rust output. Its stub,
+#    COPYING, and corresponding-source archive must all describe NSIS 3.12.
+Write-Host '==> Checking NSIS toolchain (3.12)'
+$makensis = 'C:\Program Files (x86)\NSIS\makensis.exe'
+if (-not (Test-Path $makensis)) { throw "makensis not found at $makensis - install NSIS." }
+$nsisVersion = (& $makensis /VERSION)
+$nsisVersionText = (($nsisVersion | Out-String).Trim())
+if ($LASTEXITCODE -ne 0 -or $nsisVersionText -cne 'v3.12') {
+    throw ("NSIS version mismatch at $makensis (found '$nsisVersionText', expected " +
+           "'v3.12'). Install the pinned 3.12 toolchain so the stub and staged COPYING match " +
+           'packaging/components.toml and the corresponding-source instructions.')
+}
+$nsisCopying = Join-Path (Split-Path $makensis -Parent) 'COPYING'
+if (-not (Test-Path -LiteralPath $nsisCopying -PathType Leaf) -or
+    (Get-Item -LiteralPath $nsisCopying -ErrorAction SilentlyContinue).Length -eq 0) {
+    throw ("NSIS COPYING not found at $nsisCopying - the installed NSIS is missing its " +
+           'licence file; the LZMA-compressed stub must ship NSIS''s licence terms.')
+}
+
 #    Provisioned notices must be current too. Check the canonical ORT anchors before any
 #    cargo build so a stale dependency cache costs seconds, not a full release build.
-$ortNotices = Join-Path $root 'native-deps\runtime\notices'
+$ortNotices = Join-Path $nativeRuntime 'notices'
+$ortProvision = Join-Path $nativeRuntime 'ORT-PROVISION.txt'
+$ortProvisionExpected = ('onnxruntime-webgpu=1.27.0' + "`n" +
+                         'wheel=onnxruntime_webgpu-1.27.0-cp312-cp312-win_amd64.whl' + "`n" +
+                         'wheel-sha256=7ef99275b13e8cb9584bd0db7a6f00ebf76095601eeccf7d34749b89ee991c19')
+$ortProvisionActual = if (Test-Path -LiteralPath $ortProvision -PathType Leaf) {
+    [System.IO.File]::ReadAllText($ortProvision).Replace("`r`n", "`n").Replace("`r", "`n").TrimEnd("`n")
+} else { '' }
+if (-not (Test-Path -LiteralPath $ortProvision -PathType Leaf) -or
+    $ortProvisionActual -cne $ortProvisionExpected) {
+    throw ("ONNX Runtime provision is not $ortProvisionExpected - run " +
+           'native-deps\fetch-deps.ps1 so the binaries and notices match components.toml.')
+}
+$espkProvision = Join-Path $nativeRuntime 'ESPEAK-PROVISION.txt'
+$espkBuildScriptHash = Get-NormalizedTextSha256 (Join-Path $root 'native-deps\build-espeak.ps1')
+$espkProvisionExpected = ('espeak-ng=1.52.0+horse-hoarse-revert;' +
+                          'base=4870adfa25b1a32b4361592f1be8a40337c58d6c' + "`n" +
+                          "build-script-sha256=$espkBuildScriptHash")
+$espkProvisionActual = if (Test-Path -LiteralPath $espkProvision -PathType Leaf) {
+    [System.IO.File]::ReadAllText($espkProvision).Replace("`r`n", "`n").Replace("`r", "`n").TrimEnd("`n")
+} else { '' }
+$espkSourceManifest = Join-Path $nativeRuntime 'espeak-ng-source.SHA256SUMS.txt'
+$espkRuntimeData = Join-Path $nativeRuntime 'espeak-ng-data'
+if (-not (Test-Path -LiteralPath $espkProvision -PathType Leaf) -or
+    $espkProvisionActual -cne $espkProvisionExpected -or
+    -not (Test-Path -LiteralPath $espkSourceManifest -PathType Leaf) -or
+    (Get-Item -LiteralPath $espkSourceManifest -ErrorAction SilentlyContinue).Length -eq 0 -or
+    -not (Test-Path -LiteralPath $espkRuntimeData -PathType Container) -or
+    $null -eq (Get-ChildItem -LiteralPath $espkRuntimeData -Recurse -File |
+               Select-Object -First 1)) {
+    throw ("espeak-ng provision is not $espkProvisionExpected with a source manifest - run " +
+           'native-deps\fetch-deps.ps1 so the binary and corresponding source stay paired.')
+}
+$missingRuntimeDlls = @()
+foreach ($dllName in 'onnxruntime.dll', 'onnxruntime_providers_shared.dll', 'dxcompiler.dll',
+                      'dxil.dll', 'espeak-ng.dll') {
+    $dllPath = Join-Path $nativeRuntime $dllName
+    if (-not (Test-Path -LiteralPath $dllPath -PathType Leaf) -or
+        (Get-Item -LiteralPath $dllPath -ErrorAction SilentlyContinue).Length -eq 0) {
+        $missingRuntimeDlls += $dllName
+    }
+}
+if ($missingRuntimeDlls.Count) {
+    throw ("Native runtime provision is incomplete at $nativeRuntime (missing or empty: " +
+           "$($missingRuntimeDlls -join ', ')) - run native-deps\fetch-deps.ps1.")
+}
 $missingOrtNotices = @()
 foreach ($noticeName in 'ORT-LICENSE.txt', 'ORT-ThirdPartyNotices.txt') {
     $noticePath = Join-Path $ortNotices $noticeName
@@ -72,6 +171,57 @@ if (-not $SkipBuild) {
     Push-Location (Join-Path $root 'kokoro-panel'); cargo build --release; if ($LASTEXITCODE) { throw 'panel build failed' }; Pop-Location
 }
 
+# `-SkipBuild` is safe only when the reusable host/panel outputs were built from this exact
+# tracked tree and Rust toolchain. Without these records, a clean release checkout could pair
+# old target/ binaries with newer corresponding source while every Git check still passed.
+$projectBuildManifest = Join-Path $hostRel 'kkr-project-source.SHA256SUMS.txt'
+$rustBuildRecord = Join-Path $hostRel 'kkr-build-rustc.txt'
+$outputBuildRecord = Join-Path $hostRel 'kkr-build-outputs.SHA256SUMS.txt'
+$currentProjectManifest = [string[]](Get-ProjectSourceManifestLines $root)
+$currentRustc = @(& rustc --version --verbose)
+if ($LASTEXITCODE -ne 0 -or $currentRustc.Count -eq 0) { throw 'rustc --version --verbose failed.' }
+# A standalone cargo build can replace either exe without touching the source/toolchain
+# records. Bind those records to the actual outputs before accepting -SkipBuild.
+$currentOutputManifest = [string[]]@(
+    foreach ($exePath in (Join-Path $hostRel 'kokoro-host.exe'),
+                        (Join-Path $panelRel 'kokoro-panel.exe')) {
+        "{0}  {1}" -f (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).Hash.ToLower(),
+                       (Split-Path $exePath -Leaf)
+    }
+)
+if ($SkipBuild) {
+    if (-not (Test-Path -LiteralPath $projectBuildManifest -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $rustBuildRecord -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $outputBuildRecord -PathType Leaf)) {
+        throw '-SkipBuild requires provenance from a prior successful full build.'
+    }
+    $builtProjectText = ([System.IO.File]::ReadAllLines($projectBuildManifest) -join "`n")
+    $currentProjectText = ($currentProjectManifest -join "`n")
+    $builtRustcText = ([System.IO.File]::ReadAllLines($rustBuildRecord) -join "`n")
+    $currentRustcText = ($currentRustc -join "`n")
+    $builtOutputText = ([System.IO.File]::ReadAllLines($outputBuildRecord) -join "`n")
+    if ($builtProjectText -cne $currentProjectText -or $builtRustcText -cne $currentRustcText -or
+        $builtOutputText -cne ($currentOutputManifest -join "`n")) {
+        throw '-SkipBuild provenance does not match this source tree/toolchain/output; run a full build.'
+    }
+} else {
+    [System.IO.File]::WriteAllLines(
+        $projectBuildManifest,
+        $currentProjectManifest,
+        [System.Text.Encoding]::ASCII
+    )
+    [System.IO.File]::WriteAllLines(
+        $rustBuildRecord,
+        [string[]]$currentRustc,
+        [System.Text.Encoding]::ASCII
+    )
+    [System.IO.File]::WriteAllLines(
+        $outputBuildRecord,
+        $currentOutputManifest,
+        [System.Text.Encoding]::ASCII
+    )
+}
+
 # 3. Stage the bundle.
 $stage = Join-Path $here 'staging'
 Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
@@ -79,11 +229,23 @@ New-Item -ItemType Directory -Force $stage, (Join-Path $stage 'resources') | Out
 
 Copy-Item (Join-Path $hostRel 'kokoro-host.exe') $stage
 Copy-Item (Join-Path $panelRel 'kokoro-panel.exe') $stage
+# Installer staging reads the provision directly, not the host target directory. With
+# -SkipBuild, the latter can contain DLLs copied by an older host build and therefore bypass
+# the version markers checked above.
 foreach ($d in 'onnxruntime.dll', 'onnxruntime_providers_shared.dll', 'dxcompiler.dll', 'dxil.dll', 'espeak-ng.dll') {
-    Copy-Item (Join-Path $hostRel $d) $stage
+    Copy-Item (Join-Path $nativeRuntime $d) $stage
 }
-Copy-Item -Recurse (Join-Path $hostRel 'espeak-ng-data') $stage
+Copy-Item -Recurse $espkRuntimeData $stage
 Copy-Item (Join-Path $root 'icons\icon.ico') (Join-Path $stage 'icon.ico')
+
+# Freeze the build records beside this staging tree. Source packaging must describe this
+# installer even if another build or native provision replaces target/runtime in between.
+# This directory is packaging metadata; installer.nsi does not install it.
+$stageProvenance = Join-Path $stage 'provenance'
+New-Item -ItemType Directory -Force $stageProvenance | Out-Null
+foreach ($record in $projectBuildManifest, $outputBuildRecord, $espkProvision, $espkSourceManifest) {
+    Copy-Item -LiteralPath $record -Destination $stageProvenance -Force
+}
 
 # 3a. The Cloud Reader OCR models are NOT bundled. Like the Kokoro voice model, they are
 #     DOWNLOADED at first run - by the panel, into <app_data>/ocr/, per ocr-manifest.json and
@@ -97,9 +259,10 @@ Copy-Item (Join-Path $root 'icons\icon.ico') (Join-Path $stage 'icon.ico')
 #     native-deps\build-espeak.ps1) and Slint under its GPL-3.0-only option, so the
 #     installed app as a whole is conveyed under GPLv3: the notices + the GPL text must
 #     ship WITH the binaries, not just live in the repo. THIRD_PARTY_NOTICES.md links
-#     LICENSE and licenses\*, so keep all three together and keep the layout.
+#     LICENSE and licenses\*; the tray/panel open legal.html alongside them.
 Copy-Item (Join-Path $root 'LICENSE') $stage
 Copy-Item (Join-Path $root 'THIRD_PARTY_NOTICES.md') $stage
+Copy-Item (Join-Path $root 'legal.html') $stage
 Copy-Item -Recurse (Join-Path $root 'licenses') $stage
 
 #     ONNX Runtime's own licence + notice set, staged from native-deps rather than kept in
@@ -122,9 +285,18 @@ Copy-Item (Join-Path $ortNotices '*') $ortStage -Force -Recurse
 #     espeak-ng-data/ and is a DIFFERENT document from licenses\Unicode-3.0.txt. Same
 #     fail-loud contract as the ORT notices: missing text looks complete and is not.
 $espkNotices = Join-Path $root 'native-deps\espeak-ng-notices'
-if (-not (Test-Path (Join-Path $espkNotices '*'))) {
-    throw ("No espeak-ng notices at $espkNotices - run native-deps\fetch-deps.ps1 " +
-           '(it provisions COPYING* alongside the espeak build).')
+$missingEspkNotices = @()
+foreach ($noticeName in 'COPYING', 'COPYING.APACHE', 'COPYING.BSD2', 'COPYING.UCD') {
+    $noticePath = Join-Path $espkNotices $noticeName
+    if (-not (Test-Path -LiteralPath $noticePath -PathType Leaf) -or
+        (Get-Item -LiteralPath $noticePath -ErrorAction SilentlyContinue).Length -eq 0) {
+        $missingEspkNotices += $noticeName
+    }
+}
+if ($missingEspkNotices.Count) {
+    throw ("Incomplete espeak-ng notices at $espkNotices - run native-deps\fetch-deps.ps1 " +
+           "(missing or empty: $($missingEspkNotices -join ', ')). It provisions the " +
+           'exact COPYING* set alongside the espeak build.')
 }
 $espkStage = Join-Path $stage 'licenses\espeak-ng'
 New-Item -ItemType Directory -Force $espkStage | Out-Null
@@ -135,7 +307,7 @@ Copy-Item (Join-Path $espkNotices '*') $espkStage -Force
 #     list (see generate-dependency-licenses.ps1 for why, and THIRD_PARTY_NOTICES.md's
 #     "Cargo crates" section for the human-readable pointer to it). Regenerating on every
 #     build, rather than provisioning once like the ORT notices, is deliberate: this
-#     closure moves with ordinary `cargo update`s in a way the ORT wheel version does
+#     closure moves with ordinary `cargo update`s in a way the exact pinned ORT wheel does
 #     not, and a stale copy here is exactly the kind of drift this mechanism exists to
 #     catch instead of silently missing.
 Write-Host '==> Generating Rust dependency licence notices'
@@ -144,7 +316,7 @@ if ($LASTEXITCODE) { throw 'generate-dependency-licenses.ps1 failed' }
 $depLicSrc = Join-Path $here 'dependency-licenses'
 $depLicStage = Join-Path $stage 'licenses\dependencies'
 New-Item -ItemType Directory -Force $depLicStage | Out-Null
-Copy-Item (Join-Path $depLicSrc '*') $depLicStage -Force
+Copy-Item (Join-Path $depLicSrc '*.html') $depLicStage -Force
 
 #     The Rust standard library is statically linked into every Rust output but is NOT a
 #     Cargo package, so cargo-about cannot see it. Rust ships a generated per-toolchain
@@ -186,20 +358,12 @@ Copy-Item (Join-Path $sapiRs 'kindle-voice-guard.ps1') $res
 Copy-Item (Join-Path $sapiRs 'voice-setup.ps1') $res
 
 # 4. Compile the installer.
-$makensis = 'C:\Program Files (x86)\NSIS\makensis.exe'
-if (-not (Test-Path $makensis)) { throw "makensis not found at $makensis - install NSIS." }
-
 #     NSIS's own licence. The installer/uninstaller stub is NSIS, compressed with LZMA
 #     (installer.nsi: SetCompressor /SOLID lzma), so the shipped stub carries NSIS's
 #     zlib/libpng + bzip2 + CPL-1.0 (LZMA module, with its linking exception) terms. Ship
 #     NSIS's own COPYING verbatim from the installed toolchain, so it always matches the
 #     NSIS version this build used (pinned in CI) rather than a checked-in copy that goes
 #     stale on a version bump - same reasoning as the ORT/espeak notices.
-$nsisCopying = Join-Path (Split-Path $makensis -Parent) 'COPYING'
-if (-not (Test-Path $nsisCopying)) {
-    throw ("NSIS COPYING not found at $nsisCopying - the installed NSIS is missing its " +
-           'licence file; the LZMA-compressed stub must ship NSIS''s licence terms.')
-}
 $nsisStage = Join-Path $stage 'licenses\nsis'
 New-Item -ItemType Directory -Force $nsisStage | Out-Null
 Copy-Item $nsisCopying (Join-Path $nsisStage 'NSIS-COPYING.txt') -Force

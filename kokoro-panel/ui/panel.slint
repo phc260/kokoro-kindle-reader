@@ -311,7 +311,7 @@ export component AppWindow inherits Window {
     in property <bool> bench-cpu-wins;
     in property <string> bench-verdict;  // what was measured and what got selected
 
-    // ONE gate for everything below the Kindle-narration checkbox — narrator, sliders,
+    // ONE gate for narration controls below the Kindle-narration checkbox — narrator, sliders,
     // transport, engine picker, speed test. They light up together and go dark together.
     //
     // `host-online` is in here even for the settings. The narrator and sliders would
@@ -346,6 +346,7 @@ export component AppWindow inherits Window {
     callback bench-start();            // run the test
     callback bench-stop();             // stop after the engine currently being timed
     callback bench-close();
+    callback legal-open();
 
     VerticalLayout {
         padding: 20px;
@@ -636,11 +637,20 @@ export component AppWindow inherits Window {
             wrap: word-wrap;
         }
 
-        Text {
-            text: "Keep Kokoro Kindle Reader running (tray) for Kindle to narrate.";
-            font-size: 13px;
-            color: #a0a0a0;
-            wrap: word-wrap;
+        HorizontalLayout {
+            spacing: 12px;
+            Text {
+                text: "Keep Kokoro Kindle Reader running (tray) for Kindle to narrate.";
+                font-size: 13px;
+                color: #a0a0a0;
+                wrap: word-wrap;
+                horizontal-stretch: 1;
+            }
+            // Legal notices stay available with no model, host or Kindle.
+            Button {
+                text: "About & licenses";
+                clicked => { root.legal-open(); }
+            }
         }
     }
 

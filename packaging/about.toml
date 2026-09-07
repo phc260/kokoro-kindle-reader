@@ -47,3 +47,141 @@ accepted = ["GPL-3.0-only"]
 accepted = ["GPL-3.0-only"]
 [i-slint-renderer-software]
 accepted = ["GPL-3.0-only"]
+
+# These published crates omit their upstream licence files. Without clarification,
+# cargo-about succeeds but emits an MIT template with copyright placeholders.
+# Fetch from each package's .cargo_vcs_info.json commit, NOT a branch or a fixed
+# override that could silently survive a dependency update. Hashes cover the entire
+# upstream files, including attribution. verify-dependency-licenses.ps1 also checks
+# the rendered texts: cargo-about 0.9.1 only WARNS when a clarification fails.
+
+# taffy 0.10.1, 639f0acdd20f914f847abffbeaa903d66cae4882 (Visly/stretch origin).
+[taffy.clarify]
+license = "MIT"
+[[taffy.clarify.git]]
+path = "LICENSE.md"
+checksum = "a7083ef3dd41a65eeb2162c2c091b0082e2724fb4c6ed029b363c7840d244ecd"
+
+# dasp_sample 0.11.0, 97c3bb9b2363c0b46ac1633858bf1054fd02a980.
+# cargo-about 0.9.1 does not strip the repository's .git suffix for raw GitHub
+# requests. The generator expands @project/ to this checkout's absolute path.
+# Keep the local copy exact; its content is also pinned in license-texts.sha256.
+[dasp_sample.clarify]
+license = "MIT OR Apache-2.0"
+[[dasp_sample.clarify.files]]
+path = "@project/licenses/dasp_sample-MIT.txt"
+license = "MIT"
+checksum = "b1d6df41ed3aa96806e74c729444d7c121d90e6660a6aed01d298e03fde475a0"
+
+# integer-sqrt 0.1.5, 282d0d4e26fd41d888894f5578b9d7553f7be0c8.
+[integer-sqrt.clarify]
+license = "MIT OR Apache-2.0"
+[[integer-sqrt.clarify.git]]
+path = "LICENSE-MIT"
+license = "MIT"
+checksum = "0029ee19467a3fc365e6f0fe61b95ad2525f2b55478ec1159bfc570657273111"
+
+# lyon_algorithms 1.0.20, 66b9ea7f4ab935763970e828781d8fd5e9305542;
+# lyon_extra 1.1.0 / lyon_geom and lyon_path 1.0.19,
+# 56219c95c658d4f39de7b190d98e57d5773ba241. The root notice is identical.
+[lyon_algorithms.clarify]
+license = "MIT OR Apache-2.0"
+[[lyon_algorithms.clarify.git]]
+path = "LICENSE-MIT"
+license = "MIT"
+checksum = "80f275e90d799911ed3830a7f242a2ef5a4ade2092fe0aa07bfb2d2cf2f2b95e"
+[lyon_extra.clarify]
+license = "MIT OR Apache-2.0"
+[[lyon_extra.clarify.git]]
+path = "LICENSE-MIT"
+license = "MIT"
+checksum = "80f275e90d799911ed3830a7f242a2ef5a4ade2092fe0aa07bfb2d2cf2f2b95e"
+[lyon_geom.clarify]
+license = "MIT OR Apache-2.0"
+[[lyon_geom.clarify.git]]
+path = "LICENSE-MIT"
+license = "MIT"
+checksum = "80f275e90d799911ed3830a7f242a2ef5a4ade2092fe0aa07bfb2d2cf2f2b95e"
+[lyon_path.clarify]
+license = "MIT OR Apache-2.0"
+[[lyon_path.clarify.git]]
+path = "LICENSE-MIT"
+license = "MIT"
+checksum = "80f275e90d799911ed3830a7f242a2ef5a4ade2092fe0aa07bfb2d2cf2f2b95e"
+
+# profiling / profiling-procmacros 1.0.18, 8271551172eb6fa4cba47369aedd93790c623df9.
+[profiling.clarify]
+license = "MIT OR Apache-2.0"
+[[profiling.clarify.git]]
+path = "LICENSE-MIT"
+license = "MIT"
+checksum = "c8167fdeeed46d3f244d3f85c5bf998ce889343691c32be2c61a8bc4b5c08333"
+[profiling-procmacros.clarify]
+license = "MIT OR Apache-2.0"
+[[profiling-procmacros.clarify.git]]
+path = "LICENSE-MIT"
+license = "MIT"
+checksum = "c8167fdeeed46d3f244d3f85c5bf998ce889343691c32be2c61a8bc4b5c08333"
+
+# pulp-wasm-simd-flag 0.1.1, 5eb07fd7b68edf0a5e19f71737d315f72a510295.
+[pulp-wasm-simd-flag.clarify]
+license = "MIT"
+[[pulp-wasm-simd-flag.clarify.git]]
+path = "LICENSE"
+checksum = "d64f878c89bd5f1e5ada7e4aad57690b122727cf5229b7b87ea1980c188da1d9"
+
+# rspolib 0.1.2, 8170d99ebad29d894712ccb3dc6d0be2198d3055.
+[rspolib.clarify]
+license = "MIT"
+[[rspolib.clarify.git]]
+path = "LICENSE"
+checksum = "4fe9b5fce8fd028261959d039d19ef66182be088ab48ffa97dbeaef7b35e39c3"
+
+# AccessKit's MIT/Apache choice does NOT remove the independently BSD-licensed
+# Chromium-derived portions (see the source headers). Keep MIT, its AUTHORS list,
+# and Chromium's notice. Per-file copyright headers are harvested separately.
+# accesskit 0.24.1: a55d3e1a18bb9ef0e4bccc9083fb13c3e0ad8969;
+# accesskit_consumer 0.38.0 / accesskit_windows 0.34.0:
+# c88605b96d04431f9c3c792464a0f2f253480e94. All three root files are identical.
+[accesskit.clarify]
+license = "(MIT OR Apache-2.0) AND BSD-3-Clause"
+[[accesskit.clarify.git]]
+path = "LICENSE-MIT"
+license = "MIT"
+checksum = "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+[[accesskit.clarify.git]]
+path = "AUTHORS"
+license = "MIT"
+checksum = "3bab8c36f6a85657504aaefb37c7ff34e29b8c917290f3d28a1f0920c992e502"
+[[accesskit.clarify.git]]
+path = "LICENSE.chromium"
+license = "BSD-3-Clause"
+checksum = "845022e0c1db1abb41a6ba4cd3c4b674ec290f3359d9d3c78ae558d4c0ed9308"
+[accesskit_consumer.clarify]
+license = "(MIT OR Apache-2.0) AND BSD-3-Clause"
+[[accesskit_consumer.clarify.git]]
+path = "LICENSE-MIT"
+license = "MIT"
+checksum = "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+[[accesskit_consumer.clarify.git]]
+path = "AUTHORS"
+license = "MIT"
+checksum = "3bab8c36f6a85657504aaefb37c7ff34e29b8c917290f3d28a1f0920c992e502"
+[[accesskit_consumer.clarify.git]]
+path = "LICENSE.chromium"
+license = "BSD-3-Clause"
+checksum = "845022e0c1db1abb41a6ba4cd3c4b674ec290f3359d9d3c78ae558d4c0ed9308"
+[accesskit_windows.clarify]
+license = "(MIT OR Apache-2.0) AND BSD-3-Clause"
+[[accesskit_windows.clarify.git]]
+path = "LICENSE-MIT"
+license = "MIT"
+checksum = "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+[[accesskit_windows.clarify.git]]
+path = "AUTHORS"
+license = "MIT"
+checksum = "3bab8c36f6a85657504aaefb37c7ff34e29b8c917290f3d28a1f0920c992e502"
+[[accesskit_windows.clarify.git]]
+path = "LICENSE.chromium"
+license = "BSD-3-Clause"
+checksum = "845022e0c1db1abb41a6ba4cd3c4b674ec290f3359d9d3c78ae558d4c0ed9308"

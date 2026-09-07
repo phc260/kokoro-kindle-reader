@@ -261,6 +261,17 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
   installed in CI (pinned in `installer.yml`; also gated on PRs by `license-check.yml`) or
   the build throws. `GPL-3.0-only` is accepted for the Slint crates ONLY (per-crate entries
   in `about.toml`), so a GPL dep through anything else fails `--fail`.
+  Preserve the packaged-file/source-header appendices and the hash-pinned upstream
+  clarifications. `cargo-about` only warns if a clarification fails; the separate
+  `verify-dependency-licenses.ps1` check must reject missing texts in the generated AND
+  extracted reports. MIT placeholders are not a substitute for upstream copyrights.
+  `source-notices.json` pins complete W3C terms from Tao/Winit/cursor-icon and Intel's ISC
+  notice from Ring's native P-384 source; unreviewed versions or changed excerpts fail
+  generation, and their hashes are required in generated and extracted reports.
+  Ordinary appendix files/headers must also pass decoded-text hashes and the recorded
+  block count; checking only special clarifications misses changed or deleted notices.
+  The tray and Settings must keep **About & licenses** available independently of narration;
+  it opens installed `legal.html`, whose content and local links are checked in packaging.
 - **Provisioned notices that must ship, and the checks that prove they do.** Besides the ORT
   wheel notices, `fetch-deps.ps1` provisions espeak-ng's own `COPYING*` (incl. `COPYING.UCD`,
   which is NOT `licenses/Unicode-3.0.txt`) and `build-installer.ps1` stages NSIS's `COPYING`
@@ -269,11 +280,34 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
   missing/empty notice. The Rust Standard Library is outside Cargo's graph too:
   `build-installer.ps1` stages the exact toolchain's generated `COPYRIGHT-library.html` plus
   its release/commit, CI installs `rust-src`, and the corresponding-source archive carries
-  that full `library/` tree. `packaging/components.toml` inventories every non-Cargo shipped
+  that full `library/` tree after matching the active toolchain to the installer's staged
+  `TOOLCHAIN.txt`. `packaging/components.toml` inventories every non-Cargo shipped
   component; `LICENSING.md` is the authoritative per-artifact map + §6 procedure.
+- **Checked-in licence texts are content-pinned.** `packaging/license-texts.sha256` covers
+  `LICENSE`, `THIRD_PARTY_NOTICES.md`, and every file under `licenses/` after newline
+  normalization; `verify-license-texts.ps1` runs in PR CI, before an installer build, and
+  against the extracted installer. Update a hash only after comparing the complete replacement
+  with the pinned upstream revision. Provisioned notices must be exact named, non-empty files.
+- **Native caches carry provenance.** `fetch-deps.ps1` pins ORT's exact cp312 win_amd64 wheel
+  by filename and PyPI SHA-256 (the 1.27.0 wheels contain different native DLL bytes), and
+  writes ORT/espeak recipe markers only after all expected outputs and notices exist. A missing
+  or mismatched marker forces a fresh provision, and installer staging reads that cache directly.
+  The espeak marker pins immutable
+  commit `4870adfa25b1a32b4361592f1be8a40337c58d6c`, the modification, and the normalized
+  `build-espeak.ps1` SHA-256; its build-time source manifest must match the corresponding-source
+  tree exactly.
+- **`-SkipBuild` still proves source identity.** A full installer build records SHA-256s for
+  every tracked source file, both x64 executables, and the Rust toolchain beside the host output.
+  Reuse requires all to match; corresponding-source packaging uses the records frozen in
+  `staging/provenance/` (including espeak's source manifest) and checks the tracked tree again; never let
+  a clean tag bless arbitrary stale binaries from `target/`.
+- **NSIS is pinned in code as well as CI.** `build-installer.ps1` rejects `makensis` unless
+  `/VERSION` reports 3.12, keeping the stub, its staged `COPYING`, `components.toml`, and the
+  corresponding-source instructions on the same toolchain.
 - **GPL binaries ship corresponding source.** `build-corresponding-source.ps1` produces
-  `corresponding-source-vX.Y.Z.zip` (LFS-resolved source, lockfiles/scripts, the modified
-  espeak-ng tree and the exact Rust Standard Library source, both with SHA-256 manifests)
+  `corresponding-source-X.Y.Z.zip` (LFS-resolved source, lockfiles/scripts, the modified
+  espeak-ng tree and the exact Rust Standard Library source, both with SHA-256 manifests,
+  plus the hash-verified official NSIS 3.12 source for its CPL-covered LZMA module)
   and `installer.yml` pairs it with the installer in both Actions artifacts and tagged
   releases. `sapi.yml` build-tests its intermediate DLL but does not upload it bare. Never
   ship an installer or intermediate binary alone.

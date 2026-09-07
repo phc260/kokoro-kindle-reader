@@ -22,6 +22,22 @@ habit of not being checked at all.
 
 ---
 
+## Packaging notice regression checks
+
+`powershell -NoProfile -File packaging/test-dependency-licenses.ps1` runs 26 small offline
+checks with invented notices. It covers exact UTF-8/HTML round trips, failed-clarification
+fallbacks, changed/missing text, wrong-crate and wrong-version attribution, missing graph
+inventory, malformed hashes, and leading-comment extraction without collecting strings
+or documentation examples from code. The full appendix generator is also exercised with
+invented Rust notices after attributes/docs and a native `.inl` notice, including source
+drift and dependency upgrades that require renewed notice review. Ordinary packaged licences
+and source headers are checked independently of those special requirements, including a
+BOM/CRLF licence, changed text, deleted whole blocks and missing/duplicate inventories.
+It neither builds nor
+runs the application. The
+licence PR workflow runs these checks on Windows PowerShell 5.1; normal report generation
+also verifies all configured upstream text hashes, as does installer extraction.
+
 ## A standing rule for every fixture here
 
 **Public domain or invented — never the book you are testing against.** The furniture rules and the
@@ -273,7 +289,7 @@ Recorded here rather than left implicit.
 ### Nothing in CI runs any of these
 
 The four workflows are `installer.yml` (builds the package on a `v*` tag or manual dispatch),
-`license-check.yml` (runs the Cargo licence gate), `sapi.yml` (builds the x86 DLL and runs the
+`license-check.yml` (runs the Cargo licence gate plus component/notice integrity checks), `sapi.yml` (builds the x86 DLL and runs the
 COM smoke test), and `hook.yml` (compile-checks the x86 hook and injector).
 **None of them runs `bun test` or `cargo test`.** Every one of the 246 tests above passes or fails
 only when somebody runs it locally.

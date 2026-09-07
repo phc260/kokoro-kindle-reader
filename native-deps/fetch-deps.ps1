@@ -14,8 +14,7 @@
 # The ONNX model runs on the `ort` crate's WebGPU EP via load-dynamic, so onnxruntime.dll
 # is loaded at runtime (not linked) - no ORT headers/import lib needed.
 #
-# Requires: Python+pip (for `pip download` of the wheel), CMake + MSVC (espeak),
-# and network. Idempotent: pass -Force to re-provision.
+# Requires: CMake + MSVC (espeak) and network. Idempotent: pass -Force to re-provision.
 param(
     [string]$OrtVersion = '1.27.0',
     [switch]$Force
@@ -26,10 +25,77 @@ New-Item -ItemType Directory -Force $tp | Out-Null
 
 $ProgressPreference = 'SilentlyContinue'   # fast Invoke-WebRequest
 
+# Pin one exact Windows wheel, not only the release number. PyPI publishes distinct cp311,
+# cp312, cp313 and cp314 wheels for 1.27.0, and their native DLL bytes differ even though
+# their embedded source/version IDs agree. Selecting by the machine's Python would therefore
+# make the shipped payload vary while components.toml continued to describe one provision.
+if ($OrtVersion -cne '1.27.0') {
+    throw ("Unsupported ORT version $OrtVersion. Add its exact win_amd64 wheel URL and " +
+           'SHA-256 here and update packaging/components.toml before provisioning it.')
+}
+$ortWheelName = 'onnxruntime_webgpu-1.27.0-cp312-cp312-win_amd64.whl'
+$ortWheelUrl = ('https://files.pythonhosted.org/packages/df/28/' +
+                '016260c51c877ba5b3eba823b43107e894659e73e0ecf250eb07e801e3c2/' +
+                $ortWheelName)
+$ortWheelExpectedSha256 = '7ef99275b13e8cb9584bd0db7a6f00ebf76095601eeccf7d34749b89ee991c19'
+
+function Test-NonEmptyFile([string]$Path) {
+    return (Test-Path -LiteralPath $Path -PathType Leaf) -and
+           ((Get-Item -LiteralPath $Path -ErrorAction SilentlyContinue).Length -gt 0)
+}
+
+function Test-ExactAsciiText([string]$Path, [string]$Expected) {
+    if (-not (Test-NonEmptyFile $Path)) { return $false }
+    $actual = [System.IO.File]::ReadAllText($Path).Replace("`r`n", "`n").Replace("`r", "`n").TrimEnd("`n")
+    return $actual -ceq $Expected.Replace("`r`n", "`n").Replace("`r", "`n").TrimEnd("`n")
+}
+
+function Test-NonEmptyDirectory([string]$Path) {
+    return (Test-Path -LiteralPath $Path -PathType Container) -and
+           $null -ne (Get-ChildItem -LiteralPath $Path -Recurse -File |
+                      Select-Object -First 1)
+}
+
+function Get-EspkSourceManifestLines([string]$SourceRoot) {
+    $prefix = $SourceRoot.TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
+    $excluded = @('.git', 'build-x64', 'build')
+    Get-ChildItem -LiteralPath $SourceRoot -Recurse -Force -File | Where-Object {
+        $relative = $_.FullName.Substring($prefix.Length)
+        $top = ($relative -split '[\\/]', 2)[0]
+        $excluded -notcontains $top
+    } | Sort-Object FullName | ForEach-Object {
+        $relative = $_.FullName.Substring($prefix.Length).Replace('\', '/')
+        "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $relative
+    }
+}
+
+function Get-NormalizedTextSha256([string]$Path) {
+    $encoding = New-Object System.Text.UTF8Encoding($false, $true)
+    $text = $encoding.GetString([System.IO.File]::ReadAllBytes($Path))
+    $normalized = $text.Replace("`r`n", "`n").Replace("`r", "`n")
+    $algorithm = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        return [System.BitConverter]::ToString(
+            $algorithm.ComputeHash($encoding.GetBytes($normalized))
+        ).Replace('-', '').ToLower()
+    } finally {
+        $algorithm.Dispose()
+    }
+}
+
 # --- 1. onnxruntime-webgpu wheel: the Dawn runtime DLLs + their notices ------
 $runtime = Join-Path $tp 'runtime'
 $notices = Join-Path $runtime 'notices'
 New-Item -ItemType Directory -Force $runtime | Out-Null
+$requiredOrtDlls = @('onnxruntime.dll', 'onnxruntime_providers_shared.dll',
+                     'dxcompiler.dll', 'dxil.dll')
+$missingOrtDlls = @($requiredOrtDlls | Where-Object {
+    -not (Test-NonEmptyFile (Join-Path $runtime $_))
+})
+$ortProvision = Join-Path $runtime 'ORT-PROVISION.txt'
+$ortProvisionExpected = ("onnxruntime-webgpu=$OrtVersion`n" +
+                         "wheel=$ortWheelName`n" +
+                         "wheel-sha256=$ortWheelExpectedSha256")
 # Re-fetch when ANY expected piece is missing, not just the DLLs. Each of these was added
 # after the DLLs, so an existing provision predating it has the DLLs and not it, and gating
 # that on -Force is how an installer build ends up staging licence text that was never
@@ -37,25 +103,51 @@ New-Item -ItemType Directory -Force $runtime | Out-Null
 #   - notices\*                        (the wheel's own notice tree)
 #   - notices\ORT-LICENSE.txt          (canonical ORT anchor, this round)
 #   - notices\ORT-ThirdPartyNotices.txt
-if ($Force -or -not (Test-Path (Join-Path $runtime 'onnxruntime.dll')) -or
+if ($Force -or $missingOrtDlls.Count -or
+    -not (Test-ExactAsciiText $ortProvision $ortProvisionExpected) -or
     -not (Test-Path (Join-Path $notices '*')) -or
-    -not (Test-Path (Join-Path $notices 'ORT-LICENSE.txt')) -or
-    -not (Test-Path (Join-Path $notices 'ORT-ThirdPartyNotices.txt'))) {
+    -not (Test-NonEmptyFile (Join-Path $notices 'ORT-LICENSE.txt')) -or
+    -not (Test-NonEmptyFile (Join-Path $notices 'ORT-ThirdPartyNotices.txt'))) {
     Write-Host "==> Fetching onnxruntime-webgpu $OrtVersion wheel (Dawn DLLs)"
+    Remove-Item -LiteralPath $ortProvision -Force -ErrorAction SilentlyContinue
     $wdir = Join-Path $env:TEMP "ort-webgpu-$OrtVersion"
-    Remove-Item -Recurse -Force $wdir -ErrorAction SilentlyContinue
+    $tempPrefix = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd('\') + '\'
+    $wdir = [System.IO.Path]::GetFullPath($wdir)
+    if (-not $wdir.StartsWith($tempPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Unsafe ORT extraction path outside the temporary directory: $wdir"
+    }
+    Remove-Item -LiteralPath $wdir -Recurse -Force -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force $wdir | Out-Null
-    # pip resolves the right cpXX wheel for the runner's Python.
-    & python -m pip download "onnxruntime-webgpu==$OrtVersion" --only-binary=:all: --no-deps -d $wdir
-    if ($LASTEXITCODE) { throw 'pip download onnxruntime-webgpu failed' }
-    $whl = Get-ChildItem $wdir -Filter '*.whl' | Select-Object -First 1
+    $wheelPath = Join-Path $wdir $ortWheelName
+    $webClient = New-Object System.Net.WebClient
+    $webClient.Headers['User-Agent'] = 'Kokoro-Kindle-Reader-dependency-provisioner/1.0'
+    try {
+        $webClient.DownloadFile($ortWheelUrl, $wheelPath)
+    } finally {
+        $webClient.Dispose()
+    }
+    $ortWheelActualSha256 = (Get-FileHash -LiteralPath $wheelPath -Algorithm SHA256).Hash.ToLower()
+    if ($ortWheelActualSha256 -cne $ortWheelExpectedSha256) {
+        throw ("onnxruntime-webgpu wheel SHA-256 is $ortWheelActualSha256, expected " +
+               "$ortWheelExpectedSha256. Refusing an unverified or wrong-ABI wheel.")
+    }
+    $whl = Get-Item -LiteralPath $wheelPath
     $zip = [System.IO.Path]::ChangeExtension($whl.FullName, '.zip')
     Copy-Item $whl.FullName $zip -Force
     $wex = Join-Path $wdir 'x'
     Expand-Archive $zip -DestinationPath $wex -Force
     $capi = Join-Path $wex 'onnxruntime\capi'
-    # The Dawn onnxruntime.dll + providers_shared + dxcompiler + dxil ship here.
-    Get-ChildItem $capi -Filter '*.dll' | ForEach-Object { Copy-Item $_.FullName $runtime -Force }
+    # Copy exactly the four inventoried wheel DLLs. Remove their cached copies first so a
+    # wheel that drops or renames one cannot be masked by a stale file from an older version.
+    foreach ($dllName in $requiredOrtDlls) {
+        $destDll = Join-Path $runtime $dllName
+        Remove-Item -LiteralPath $destDll -Force -ErrorAction SilentlyContinue
+        $sourceDll = Join-Path $capi $dllName
+        if (-not (Test-NonEmptyFile $sourceDll)) {
+            throw "onnxruntime-webgpu $OrtVersion wheel is missing non-empty $dllName at $capi"
+        }
+        Copy-Item -LiteralPath $sourceDll $destDll -Force
+    }
 
     # Keep the wheel's OWN licence + notice files, and keep them next to the DLLs they
     # describe. We redistribute four binaries out of this wheel, and dxcompiler.dll's
@@ -107,11 +199,12 @@ if ($Force -or -not (Test-Path (Join-Path $runtime 'onnxruntime.dll')) -or
     $ortPkgDir = Split-Path $capi -Parent    # $wex\onnxruntime - the package root the DLLs came from
     $ortLic = $found | Where-Object { $_.Name -match $licRe -and $_.DirectoryName -eq $ortPkgDir } | Select-Object -First 1
     $ortTpn = $found | Where-Object { $_.Name -match $tpnRe -and $_.DirectoryName -eq $ortPkgDir } | Select-Object -First 1
-    if (-not $ortLic -or -not $ortTpn) {
+    if (-not $ortLic -or -not $ortTpn -or $ortLic.Length -eq 0 -or $ortTpn.Length -eq 0) {
         $licDirs = @($found | Where-Object { $_.Name -match $licRe } | ForEach-Object { $_.DirectoryName })
         $tpnDirs = @($found | Where-Object { $_.Name -match $tpnRe } | ForEach-Object { $_.DirectoryName })
-        throw ("onnxruntime-webgpu wheel: ORT's own LICENSE and ThirdPartyNotices were not both " +
-               "found at the package root $ortPkgDir (the parent of the DLL dir $capi). Found " +
+        throw ("onnxruntime-webgpu wheel: ORT's own non-empty LICENSE and ThirdPartyNotices " +
+               "were not both found at the package root $ortPkgDir (the parent of the DLL dir " +
+               "$capi). Found " +
                "LICENSE in [$($licDirs -join '; ')]; ThirdPartyNotices in [$($tpnDirs -join '; ')]. " +
                "The wheel's own notices must come from the package the shipped DLLs came out of, " +
                "not a vendored subtree; if upstream moved them, update this anchor.")
@@ -140,26 +233,64 @@ if ($Force -or -not (Test-Path (Join-Path $runtime 'onnxruntime.dll')) -or
     # canonical anchor IS ORT's text, not a stand-in.
     Copy-Item $ortLic.FullName (Join-Path $notices 'ORT-LICENSE.txt') -Force
     Copy-Item $ortTpn.FullName (Join-Path $notices 'ORT-ThirdPartyNotices.txt') -Force
+    [System.IO.File]::WriteAllText(
+        $ortProvision,
+        $ortProvisionExpected.Replace("`n", "`r`n") + "`r`n",
+        [System.Text.Encoding]::ASCII
+    )
 }
 
 # --- 2. espeak-ng x64 (clone + build) ---------------------------------------
 # build-espeak.ps1 needs the source clone to exist (it's gitignored, so a fresh
-# checkout / CI runner won't have it). Clone the 1.52.0 tag before building; the
-# build script does the tag checkout + horse-hoarse revert on top of it.
+# checkout / CI runner won't have it). Fetch the immutable 1.52.0 commit directly;
+# a shallow clone of a moved tag would not contain the commit the build requires.
 $espkSrc = Join-Path $tp 'espeak-ng-src'
+$espkCommit = '4870adfa25b1a32b4361592f1be8a40337c58d6c'
 if (-not (Test-Path (Join-Path $espkSrc '.git'))) {
-    Write-Host '==> Cloning espeak-ng (tag 1.52.0)'
-    & git clone --branch 1.52.0 --depth 1 https://github.com/espeak-ng/espeak-ng.git $espkSrc
-    if ($LASTEXITCODE) { throw 'git clone espeak-ng failed' }
+    & git init --quiet $espkSrc
+    if ($LASTEXITCODE) { throw 'git init espeak-ng failed' }
+}
+# Also recover an interrupted first fetch, which leaves .git but no HEAD.
+& git -C $espkSrc rev-parse --verify --quiet HEAD *> $null
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "==> Fetching espeak-ng commit $espkCommit"
+    & git -C $espkSrc fetch --depth 1 https://github.com/espeak-ng/espeak-ng.git $espkCommit
+    if ($LASTEXITCODE) { throw 'git fetch espeak-ng commit failed' }
+    & git -C $espkSrc checkout --quiet --detach $espkCommit
+    if ($LASTEXITCODE) { throw 'git checkout espeak-ng commit failed' }
 }
 
 $espkDll = Join-Path $tp 'espeak-ng-src\build-x64\src\espeak-ng.dll'
-if ($Force -or -not (Test-Path $espkDll)) {
+$espkRuntimeDll = Join-Path $runtime 'espeak-ng.dll'
+$espkRuntimeData = Join-Path $runtime 'espeak-ng-data'
+$espkProvision = Join-Path $runtime 'ESPEAK-PROVISION.txt'
+$espkBuildScriptHash = Get-NormalizedTextSha256 (Join-Path $tp 'build-espeak.ps1')
+$espkProvisionExpected = ('espeak-ng=1.52.0+horse-hoarse-revert;' +
+                          'base=4870adfa25b1a32b4361592f1be8a40337c58d6c' + "`n" +
+                          "build-script-sha256=$espkBuildScriptHash")
+$espkSourceManifest = Join-Path $runtime 'espeak-ng-source.SHA256SUMS.txt'
+if ($Force -or -not (Test-NonEmptyFile $espkRuntimeDll) -or
+    -not (Test-NonEmptyDirectory $espkRuntimeData) -or
+    -not (Test-ExactAsciiText $espkProvision $espkProvisionExpected) -or
+    -not (Test-NonEmptyFile $espkSourceManifest)) {
+    Remove-Item -LiteralPath $espkProvision, $espkSourceManifest -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $espkRuntimeData -Recurse -Force -ErrorAction SilentlyContinue
     Write-Host '==> Building espeak-ng (x64, 1.52.0 + horse-hoarse revert)'
     & (Join-Path $PSScriptRoot 'build-espeak.ps1')
     if ($LASTEXITCODE) { throw 'build-espeak.ps1 failed' }
+    if (-not (Test-NonEmptyFile $espkDll)) { throw "espeak-ng build produced no DLL at $espkDll" }
+    $espkData = Join-Path $tp 'espeak-ng-src\build-x64\espeak-ng-data'
+    if (-not (Test-NonEmptyDirectory $espkData)) {
+        throw "espeak-ng build produced no data tree at $espkData"
+    }
+    Copy-Item -LiteralPath $espkDll $espkRuntimeDll -Force
+    Copy-Item -LiteralPath $espkData $espkRuntimeData -Recurse -Force
+    [System.IO.File]::WriteAllLines(
+        $espkSourceManifest,
+        [string[]](Get-EspkSourceManifestLines $espkSrc),
+        [System.Text.Encoding]::ASCII
+    )
 }
-Copy-Item $espkDll $runtime -Force
 
 # --- 2a. espeak-ng's OWN licence + notice files -----------------------------
 # We ship a MODIFIED espeak-ng.dll + espeak-ng-data/ (GPL-3.0-or-later), and parts of the
@@ -172,15 +303,20 @@ Copy-Item $espkDll $runtime -Force
 # Re-provision when missing (a later addition, like the ORT notices) so an old provision
 # doesn't ship the DLL with no espeak notices.
 $espkNotices = Join-Path $tp 'espeak-ng-notices'
-if ($Force -or -not (Test-Path (Join-Path $espkNotices '*'))) {
+$requiredEspkNotices = @('COPYING', 'COPYING.APACHE', 'COPYING.BSD2', 'COPYING.UCD')
+$missingEspkNotices = @($requiredEspkNotices | Where-Object {
+    -not (Test-NonEmptyFile (Join-Path $espkNotices $_))
+})
+if ($Force -or $missingEspkNotices.Count) {
+    Remove-Item -LiteralPath $espkProvision -Force -ErrorAction SilentlyContinue
     Remove-Item -Recurse -Force $espkNotices -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force $espkNotices | Out-Null
     # Named files, not a wildcard sweep of the tree: ship exactly the four licence texts,
     # nothing else the clone happens to contain. Each must exist - a modified GPL binary
     # shipped without its licence text is the failure this whole block prevents.
-    foreach ($c in 'COPYING', 'COPYING.APACHE', 'COPYING.BSD2', 'COPYING.UCD') {
+    foreach ($c in $requiredEspkNotices) {
         $src = Join-Path $espkSrc $c
-        if (-not (Test-Path $src)) {
+        if (-not (Test-NonEmptyFile $src)) {
             throw ("espeak-ng licence file $c not found in the 1.52.0 clone at $espkSrc. " +
                    'Shipping the modified espeak-ng.dll without its notices is what this ' +
                    'step exists to prevent - re-clone with -Force.')
@@ -188,6 +324,18 @@ if ($Force -or -not (Test-Path (Join-Path $espkNotices '*'))) {
         Copy-Item $src $espkNotices -Force
     }
 }
+foreach ($noticeName in $requiredEspkNotices) {
+    if (-not (Test-NonEmptyFile (Join-Path $espkNotices $noticeName))) {
+        throw "espeak-ng notice provision is incomplete after copying: $noticeName"
+    }
+}
+# Write this last: the marker means the DLL, data, exact source manifest, and complete notice
+# set all belong to the named build recipe. Any earlier failure must leave the cache unmarked.
+[System.IO.File]::WriteAllText(
+    $espkProvision,
+    $espkProvisionExpected.Replace("`n", "`r`n") + "`r`n",
+    [System.Text.Encoding]::ASCII
+)
 
 Write-Host '==> native-deps provisioned:'
 Write-Host ("    runtime DLLs    : {0}" -f (Get-ChildItem $runtime -Filter '*.dll').Count)

@@ -32,11 +32,11 @@ The combined binary is **GPL-3.0-only**, not "or-later": Slint's GPL option is
 | `KokoroSapi.dll`, `kokoro_hook.dll`, `kokoro-inject.exe` (x86) | **MIT** (see §"the boundary") | Connect-only IPC clients; link no GPL code. |
 | `onnxruntime.dll`, `onnxruntime_providers_shared.dll` | **MIT** | ONNX Runtime, unmodified. |
 | Dawn / Tint (inside ORT) | **BSD-3-Clause** | Statically linked by ORT. |
-| `dxcompiler.dll`, `dxil.dll` | **NCSA** | From ORT-webgpu wheel. |
+| `dxcompiler.dll`, `dxil.dll` | **NCSA + bundled third-party terms** | From ORT-webgpu wheel; the complete upstream `LICENSE.TXT` is shipped. |
 | OCR models + `en_dict.txt` | **Apache-2.0**, *not shipped* | Downloaded at first run (like Kokoro-82M); not in the installer. |
 | Material Symbols SVGs (compiled into panel) | **Apache-2.0**, `resume.svg` modified | In-file change notices; see `components.toml`. |
 | `icon.ico` | **MIT** | This project's own art. |
-| Cargo crate closure | **MIT OR Apache-2.0** + ISC/Zlib/BSL-1.0/BSD/Unicode-3.0/CDLA-Permissive-2.0 | Enumerated per build by `cargo-about`. |
+| Cargo crate closure | **MIT OR Apache-2.0** + ISC/Zlib/BSL-1.0/BSD/W3C-20150513/Unicode-3.0/CDLA-Permissive-2.0 | Enumerated per build by `cargo-about`, with exact embedded-source notices appended. |
 | Rust Standard Library | Primarily **MIT OR Apache-2.0**, with bundled code under additional terms | Statically linked into every Rust output; exact toolchain report staged from `rustc` as `licenses/rust/COPYRIGHT-library.html`. |
 | Installer / uninstaller stub | **NSIS license** (Zlib + bzip2 + CPL-1.0-w/-exception) | LZMA-compressed NSIS stub. |
 | Kokoro-82M weights | **Apache-2.0**, *not shipped* | Runtime download. |
@@ -90,13 +90,14 @@ worth having.
 
 The GPL-covered binaries (`kokoro-host.exe`, `kokoro-panel.exe`, `espeak-ng.dll` +
 `espeak-ng-data/`) are conveyed with complete corresponding source. Each binary release
-carries a `corresponding-source-vX.Y.Z.zip` beside the installer, built by
+carries a `corresponding-source-X.Y.Z.zip` beside the installer, built by
 [`packaging/build-corresponding-source.ps1`](packaging/build-corresponding-source.ps1) and
 linked from the release body (GPLv3 §6(d): equivalent access from the same place, with clear
 directions). Its contents are listed in that script and in `THIRD_PARTY_NOTICES.md`. The
 archive contains the project source at the matching tag, the modified espeak-ng tree, and
 the exact `rust-src` Standard Library `library/` tree from the toolchain that built all five
-Rust outputs, plus the lockfiles/build scripts and immutable toolchain commit. A §6 recipient
+Rust outputs, plus the exact official NSIS 3.12 source archive, lockfiles/build scripts, and
+immutable toolchain commit. A §6 recipient
 therefore does not depend on a mutable upstream tag for either modified espeak-ng or the
 statically linked standard library.
 
@@ -106,17 +107,54 @@ statically linked standard library.
   `build-installer.ps1` and in CI) refuses any Cargo dependency whose licence is not in
   `packaging/about.toml`'s `accepted` list. `GPL-3.0-only` is accepted **only** for the
   Slint crates, so a GPL dependency arriving through anything else fails the build. The
-  generator also appends the exact licence/notice files from every resolved crate package
-  that supplies them, with SHA-256s, so normalized SPDX text cannot replace a required
-  copyright notice with a placeholder.
+  generator also appends exact packaged licence/notice files and leading source copyright
+  comments, with SHA-256s. `about.toml` clarifications recover upstream notices omitted
+  from published packages, including Taffy's Visly attribution and AccessKit's additional
+  Chromium BSD terms. `source-notices.json` pins the complete W3C notices in Tao,
+  Winit and cursor-icon, and Intel's ISC notice in Ring's native P-384 implementation;
+  it rejects source drift or a new package version until reviewed.
+  `verify-dependency-licenses.ps1` requires every configured text's
+  hash in each affected crate/version's rendered report. It also checks every ordinary
+  appendix text and its recorded block count, catching changed or removed packaged
+  notices. These checks run before staging and after installer
+  extraction. This is separate from `--fail`: cargo-about 0.9.1 only warns when a
+  clarification cannot be retrieved or validated, then falls back to generic text.
 - **The Rust Standard Library is provisioned from the build toolchain**, not inferred from
   Cargo metadata. `build-installer.ps1` requires and stages that rustc sysroot's generated
   `COPYRIGHT-library.html` plus its release/commit; `build-corresponding-source.ps1` requires
-  `rust-src` and includes the exact `library/` source tree. CI installs `rust-src` explicitly.
+  `rust-src`, requires the current toolchain to equal the installer's staged `TOOLCHAIN.txt`,
+  and includes the exact `library/` source tree. CI installs `rust-src` explicitly.
+- **Native cache provenance is fail-closed.** ORT's marker identifies the exact CPython 3.12
+  Windows wheel and reviewed PyPI SHA-256 (the release-number-only wheels have different native
+  DLL bytes); espeak carries an exact recipe marker, and installer staging reads the marked
+  cache directly. The modified espeak build
+  marker includes `build-espeak.ps1`'s normalized SHA-256, so a patch/build-recipe change
+  forces a rebuild. It also records the source tree's SHA-256 manifest; corresponding-source
+  packaging refuses to pair the binary with a source tree that has changed since the build.
+- **Project source is paired with the binaries, including under `-SkipBuild`.** A successful
+  full installer build records SHA-256s for every tracked source file and both x64 executables
+  plus the Rust toolchain. Reuse refuses a mismatch even if a standalone build overwrote an
+  executable. The installer freezes these records and espeak's source manifest in its staging
+  tree, so corresponding-source packaging cannot use a later build or provision's records.
+- **The NSIS pin is checked locally as well as installed by CI.** `build-installer.ps1`
+  requires `makensis /VERSION` to report 3.12 before it packages the stub and stages that
+  toolchain's `COPYING`; a different local NSIS cannot be mislabeled as the inventoried one.
+  The matching source package downloads the exact official NSIS 3.12 source archive and
+  rejects it unless its SHA-256 matches the reviewed value, satisfying the CPL LZMA module's
+  source-availability condition without depending only on a mutable web page.
+- **Appropriate legal notices are accessible from both interactive interfaces.**
+  **About & licenses** in the tray and Settings opens the installed `legal.html`,
+  including while the host/model is unavailable. It states the copyright, warranty
+  exclusion and GPL redistribution rights, links the local GPL text and component
+  notices, and directs users to the corresponding-source release downloads.
 - **The installer-extraction test** in CI unpacks the produced `-setup.exe` and asserts the
   whole notice tree is present and non-empty (LICENSE, THIRD_PARTY_NOTICES.md, the licence
   texts, ORT/espeak/NSIS/Rust-toolchain notices, and all five generated per-binary Cargo
-  reports with their exact packaged-licence appendices).
+  reports with their exact packaged-licence appendices). The fixed checked-in licence texts
+  and `THIRD_PARTY_NOTICES.md` plus the UI's `legal.html` are also content-checked against
+  `packaging/license-texts.sha256`, both before the build and inside the extracted installer;
+  presence alone would not catch truncation or a copy from the wrong upstream revision.
+  Every local link from `legal.html` must resolve to a non-empty installed file.
 - **Every binary-bearing CI artifact is complete.** `installer.yml` pairs the installer with
   corresponding source even on a manual, non-release run; `sapi.yml` build-tests the SAPI DLL
   but does not upload that intermediate binary without its notices.
@@ -140,10 +178,19 @@ extracted. It predates most of the notice machinery and **is short**:
   the ORT wheel's own notice set, and the Rust dependency-closure reports.
 - No corresponding-source archive accompanies it.
 
-**Recommended cure (GPLv3 §8 path — a maintainer action, not automatable here):** build one
-compliant release through the hardened pipeline above (the licence gate now runs, the
-notice tree is verified, and `corresponding-source-*.zip` is attached), publish it, then add
-a prominent "superseded by vX.Y.Z — complete notices/source there" note to the v0.3.3
-release. Withdrawing v0.3.3 is optional once a compliant release exists and points to it. Do
-**not** rewrite tags — source tags need no binary remediation. Also clear any stale **draft**
-releases (CI publishes as `draft: true`).
+**Required maintainer follow-up — still pending:** a corrected new release does not supply
+the source or missing notices for this older binary. Before continuing to offer v0.3.3,
+remediate that exact distribution: supply its complete matching corresponding source and
+all applicable notices, with clear access beside the binary. If that cannot be established,
+stop offering the deficient binary while remediation is worked out. Merely marking it
+"superseded" and linking to a different version's source is not sufficient. This follows
+[GPLv3 §6(d)](https://www.gnu.org/licenses/gpl-3.0.en.html#section6) and the
+[GNU FAQ's source/binary correspondence requirement](https://www.gnu.org/licenses/gpl-faq.html#SourceAndBinaryOnDifferentSites).
+
+Publish future binaries only through the hardened pipeline, paired with their own source
+archives. Withdrawal prevents further deficient downloads; it does not itself resolve
+obligations to prior recipients or establish reinstatement under GPLv3 §8. Assess that
+history and any rights-holder notices with qualified counsel rather than declaring the
+violation cured by a newer release. Do **not** rewrite source tags. Review stale draft
+binary assets too (`installer.yml` publishes as `draft: true`). No release assets have been
+changed by this repository audit.

@@ -19,6 +19,8 @@ use std::time::{Duration, Instant};
 mod espeak;
 mod kindle_ctl;
 mod kindle_watch;
+#[path = "../../legal.rs"]
+mod legal;
 mod model_patch;
 mod native_synth;
 mod split_text;
@@ -233,16 +235,19 @@ fn main() {
     // noise, and the reasoning it guards is preserved above it.
     const SHOW_WEB_PAIRING: bool = true;
     let pairing_i = MenuItem::new("Web pairing code", true, None);
+    let legal_i = MenuItem::new("About && licenses", true, None);
     let quit_i = MenuItem::new("Quit", true, None);
     menu.append(&settings_i).expect("append settings");
     if SHOW_WEB_PAIRING {
         menu.append(&pairing_i).expect("append pairing");
     }
+    menu.append(&legal_i).expect("append legal notices");
     menu.append(&tray_icon::menu::PredefinedMenuItem::separator())
         .expect("append separator");
     menu.append(&quit_i).expect("append quit");
     let settings_id = settings_i.id().clone();
     let pairing_id = pairing_i.id().clone();
+    let legal_id = legal_i.id().clone();
     let quit_id = quit_i.id().clone();
     // Track the panel child so a second Settings click doesn't pile up windows.
     let mut panel_child: Option<std::process::Child> = None;
@@ -298,6 +303,10 @@ fn main() {
                     let path = webserve::endpoint_path(&app_data_dir());
                     if let Err(e) = std::process::Command::new("explorer").arg(&path).spawn() {
                         eprintln!("[host] failed to open {}: {e}", path.display());
+                    }
+                } else if menu_event.id == legal_id {
+                    if let Err(e) = legal::open() {
+                        eprintln!("[host] failed to open legal notices: {e}");
                     }
                 } else if menu_event.id == quit_id {
                     // The pipe thread is a daemon; exiting the process stops it and

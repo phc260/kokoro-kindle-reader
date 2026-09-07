@@ -13,8 +13,8 @@
 # deleted rather than left on disk: a half-written model that hashes wrong would otherwise sit
 # there looking provisioned.
 #
-# Separate from fetch-deps.ps1 on purpose. That script needs Python, CMake and MSVC and takes
-# minutes; this one needs network and nothing else, and the host BUILDS without it (the models
+# Separate from fetch-deps.ps1 on purpose. That script needs CMake and MSVC and takes minutes;
+# this one needs network and nothing else, and the host BUILDS without it (the models
 # are loaded at run time, and a host that cannot find them reports `missing`). Kept ASCII, like
 # every .ps1 here - PowerShell 5.1 misreads a UTF-8 no-BOM em-dash.
 #

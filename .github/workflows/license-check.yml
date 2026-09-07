@@ -11,11 +11,20 @@ on:
     paths:
       - '**/Cargo.toml'
       - '**/Cargo.lock'
+      - '.gitattributes'
       - 'packaging/about.toml'
       - 'packaging/about.hbs'
       - 'packaging/generate-dependency-licenses.ps1'
+      - 'packaging/verify-dependency-licenses.ps1'
+      - 'packaging/test-dependency-licenses.ps1'
+      - 'packaging/source-notices.ps1'
+      - 'packaging/source-notices.json'
+      - 'legal.html'
+      - 'legal.rs'
       - 'packaging/components.toml'
       - 'packaging/verify-component-hashes.ps1'
+      - 'packaging/license-texts.sha256'
+      - 'packaging/verify-license-texts.ps1'
       # The installer/staging/notice-verifier/corresponding-source scripts control what ships;
       # touching them re-runs this gate at review time (the full extraction proof still runs on
       # the tag build in installer.yml, which needs the built -setup.exe).
@@ -25,8 +34,11 @@ on:
       - 'packaging/build-corresponding-source.ps1'
       - 'THIRD_PARTY_NOTICES.md'
       - 'LICENSING.md'
+      - 'LICENSE'
+      - 'licenses/**'
       - 'native-deps/**'
       - 'kokoro-panel/ui/*.svg'
+      - '.github/workflows/installer.yml'
       - '.github/workflows/license-check.yml'
   workflow_dispatch:
 
@@ -66,9 +78,19 @@ jobs:
         shell: pwsh
         run: ./packaging/generate-dependency-licenses.ps1
 
+      - name: Test notice-verification regressions (Windows PowerShell 5.1)
+        shell: powershell
+        run: ./packaging/test-dependency-licenses.ps1
+
       # Verify the in-repo assets pinned in components.toml (the five Material Symbols SVGs
       # compiled into kokoro-panel.exe) still hash to their recorded sha256 - so the non-Cargo
       # inventory can't silently drift from the tree.
       - name: Verify component hashes
         shell: pwsh
         run: ./packaging/verify-component-hashes.ps1
+
+      # A present, non-empty licence file can still be truncated or copied from the wrong
+      # upstream revision. Pin the fixed checked-in texts after normalizing CRLF/LF.
+      - name: Verify checked-in licence texts
+        shell: pwsh
+        run: ./packaging/verify-license-texts.ps1

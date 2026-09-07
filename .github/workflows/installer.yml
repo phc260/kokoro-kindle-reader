@@ -31,11 +31,6 @@ jobs:
         with:
           lfs: true # icons/icon.ico is in Git LFS (bundled + shortcut icon)
 
-      - name: Set up Python (for the onnxruntime-webgpu wheel)
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -59,7 +54,7 @@ jobs:
       # see build-installer.ps1). Bump this in lockstep when intentionally upgrading NSIS;
       # the value must be a version the choco `nsis` package actually publishes.
       - name: Install NSIS (pinned)
-        run: choco install nsis --version=3.11.0 -y --no-progress
+        run: choco install nsis --version=3.12.0 -y --no-progress
 
       # cargo-about generates the Rust dependency-licence notices and, via `--fail`, is the
       # gate that refuses a dependency under a licence not in packaging\about.toml. Without
@@ -69,8 +64,8 @@ jobs:
       - name: Install cargo-about (pinned)
         run: cargo install cargo-about --version 0.9.1 --locked --features cli
 
-      # Provision native-deps/: the Dawn runtime DLLs (from the
-      # onnxruntime-webgpu wheel) + an espeak-ng x64 build. Downloads + a build;
+      # Provision native-deps/: the Dawn runtime DLLs (from the exact hash-pinned
+      # onnxruntime-webgpu cp312 wheel) + an espeak-ng x64 build. Downloads + a build;
       # the slowest step.
       - name: Provision native deps (ORT runtime + espeak)
         shell: pwsh

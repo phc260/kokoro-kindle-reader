@@ -1,0 +1,15 @@
+# SHA-256 after UTF-8 decoding and CRLF/CR -> LF normalization.
+# These are the checked-in licence texts that ship with every installer. The Dawn file is
+# pinned to ec7b457e5bb1fcec6f59733c4f3dd84d2f885a38; the DXC file is identical at both
+# commits recorded in components.toml. Update a hash only after checking the replacement
+# against the named upstream revision.
+4bf2d3cbe91fd448fbb1153a1ee99f5a96abcb8b7f1485f6c7a6c7ff5d06bb2d  LICENSE
+7c5e008b8c6a091d1397ab0cd20bfcba22d00b8b56a3ed010cb40aa7a0aabacc  THIRD_PARTY_NOTICES.md
+cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30  licenses/Apache-2.0.txt
+b1d6df41ed3aa96806e74c729444d7c121d90e6660a6aed01d298e03fde475a0  licenses/dasp_sample-MIT.txt
+e2908f7576fb12be5bdb8480cddb0be62badb498cadb821d043aeaf01b0b0899  licenses/dawn-BSD-3-Clause.txt
+27a49e35d1da96eba18fba54bc882667ff0ff8c0254f16f2b6e165d605ba7df8  licenses/dxcompiler-NCSA.txt
+93fe62789d4ca6138071da1e6925058cda2a79618417d9e6e5ee0486feb663f4  licenses/espeak-ng-BSD-2-Clause.txt
+8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903  licenses/GPL-3.0.txt
+f7db81051789b729fea528a63ec4c938fdcb93d9d61d97dc8cc2e9df6d47f2a1  licenses/Unicode-3.0.txt
+7493f1a6facd116b89fe5a4bc92632c875df1895b3bf71db44661da3abf142a3  legal.html
