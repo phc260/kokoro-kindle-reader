@@ -18,16 +18,20 @@ on:
       - 'kokoro-host/**'
       - 'kokoro-ocr/**'
       - 'kokoro-protocol/**'
-      - 'native-deps/fetch-deps.sh'
-      - 'native-deps/build-espeak.sh'
+      # The recipe AND the harnesses. Naming only the .sh files meant a change to
+      # fetch-deps.py -- which is what actually provisions -- triggered nothing.
+      - 'native-deps/*.py'
+      - 'native-deps/*.sh'
       - '.github/workflows/linux.yml'
   pull_request:
     paths:
       - 'kokoro-host/**'
       - 'kokoro-ocr/**'
       - 'kokoro-protocol/**'
-      - 'native-deps/fetch-deps.sh'
-      - 'native-deps/build-espeak.sh'
+      # The recipe AND the harnesses. Naming only the .sh files meant a change to
+      # fetch-deps.py -- which is what actually provisions -- triggered nothing.
+      - 'native-deps/*.py'
+      - 'native-deps/*.sh'
       - '.github/workflows/linux.yml'
   workflow_dispatch:
 
