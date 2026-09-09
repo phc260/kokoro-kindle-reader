@@ -90,9 +90,9 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
   (a UTF-8 BOM does it silently) and a missing key alike. Flag any fix that writes an initial
   `controls.json` instead, and any silent GPU→CPU substitution: the fallback must log.
 - **There is ONE provisioning recipe for both platforms: `native-deps/fetch-deps.py` (plus
-  `build-espeak.py`).** The `.ps1` and `.sh` files are harnesses that resolve Python and exec
-  it. Flag any change that puts recipe logic back into a harness, or adds a second
-  platform-specific script — the two former twins had already drifted when they were merged.
+  `build-espeak.py`).** The `.ps1` files are harnesses that resolve Python and exec it;
+  Linux calls the recipe directly. Flag any change that puts recipe logic back into a
+  harness, or adds a second platform-specific script — the two former twins had already drifted when they were merged.
   Platform differences belong in the `WHEELS` table and `layout()`. Also flag any suggestion
   to use a distribution's own libespeak-ng: it is unmodified and the phonemes would differ,
   audibly and on one OS only.

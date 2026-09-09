@@ -4,8 +4,8 @@ library it links) with no manual venv / hardcoded paths, so a fresh clone or CI 
 build the synth.
 
 ONE recipe for both platforms. This replaced a PowerShell script and a bash script that had
-to be kept pin-for-pin identical by hand; `fetch-deps.ps1` and `fetch-deps.sh` are now thin
-harnesses that call this. Unifying them also settled a divergence they had already grown --
+to be kept pin-for-pin identical by hand; `fetch-deps.ps1` is now a thin harness that calls
+this, and Linux invokes it directly. Unifying them also settled a divergence they had already grown --
 the bash side accepted the first LICENSE it found anywhere in the wheel, which is exactly the
 lax check the PowerShell side's comments warned against. Both now use the strict one.
 

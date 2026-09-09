@@ -76,9 +76,9 @@ native-deps\fetch-deps.ps1
 # Same, for a Linux build (CPU ONNX Runtime + the same modified espeak). Separate tree
 # (native-deps/linux/), separate pins; build.rs branches on the TARGET, so cross-checking
 # a Linux target from Windows needs THIS provision, not the Windows one.
-# Both of the above are HARNESSES over one shared recipe, native-deps/fetch-deps.py,
-# which is what actually provisions either platform. Python 3 is required on both.
-native-deps/fetch-deps.sh
+# The .ps1 above is a HARNESS over the shared recipe below, which is what actually
+# provisions either platform. Python 3 is required on both; Linux calls it directly.
+python3 native-deps/fetch-deps.py
 
 # The host builds for two targets. Windows keeps the tray, the pipe and Kindle; Linux is
 # the core plus the loopback endpoint and nothing else. Both must stay warning-clean.
@@ -913,8 +913,10 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   for a failed session build, and doing it silently would leave the panel showing GPU while
   CPU did the work.
 - **There is ONE provisioning recipe, `native-deps/fetch-deps.py`, for both platforms**, plus
-  `build-espeak.py` beside it. The `.ps1` and `.sh` files are harnesses: they resolve Python
-  and exec the recipe. This replaced a PowerShell script and a bash twin that had to be kept
+  `build-espeak.py` beside it. The `.ps1` files are harnesses over it; Linux invokes the
+  recipe directly, since python3 is guaranteed there and a shell wrapper would only be a
+  second name for the same call. The Windows harness earns its keep: it resolves App
+  Execution Aliases by running them (see the quirk below). This replaced a PowerShell script and a bash twin that had to be kept
   pin-for-pin identical by hand — an invariant that existed only because the recipe was
   duplicated, and whose failure mode was the worst kind: a phoneme or pin difference does not
   raise an error, it makes one platform quietly build something else. They had **already**

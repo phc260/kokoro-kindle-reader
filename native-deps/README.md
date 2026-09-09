@@ -7,9 +7,12 @@ Populates the gitignored dep folders alongside them (`runtime/` or `linux/runtim
 ## One recipe, two harnesses
 
 `fetch-deps.py` and `build-espeak.py` are the recipe, shared by both platforms.
-`fetch-deps.ps1`, `fetch-deps.sh`, `build-espeak.ps1` and `build-espeak.sh` are harnesses:
-they resolve Python and exec the recipe, so the entry points and flags callers already use
-keep working.
+`fetch-deps.ps1` and `build-espeak.ps1` are harnesses over it, so the entry points and flags
+Windows callers already use keep working — and because they earn their keep: they resolve
+Python by *running* `py`/`python`/`python3`, since a Windows App Execution Alias is a 0-byte
+reparse point that works fine, and they give an install hint when there is none. Linux calls
+`fetch-deps.py` directly; python3 is guaranteed there, so a shell wrapper would only be a
+second name for the same call.
 
 That is a deliberate reversal. These were once a PowerShell script and a bash twin that had
 to be kept pin-for-pin identical **by hand** — an invariant that existed only because the
@@ -32,7 +35,7 @@ is a 0-byte reparse point that works perfectly when Python is installed.
   (`onnxruntime.dll` + `onnxruntime_providers_shared.dll` + `dxcompiler.dll` + `dxil.dll`)
 - an **espeak-ng x64 build** (`espeak-ng.dll` + import lib + `espeak-ng-data`)
 
-**Linux** (`fetch-deps.sh` -> `linux/runtime/`):
+**Linux** (`fetch-deps.py` -> `linux/runtime/`):
 
 - the **CPU ONNX Runtime** (`libonnxruntime.so*`) from the exact SHA-256-pinned
   `onnxruntime` CPython 3.12 manylinux wheel — **the CPU wheel, not the WebGPU one, and
@@ -52,7 +55,7 @@ all of these:
 
 - the wheel carries `onnxruntime/capi/libonnxruntime.so.1.27.0` (SONAME
   `libonnxruntime.so.1`) and `onnxruntime/capi/libonnxruntime_providers_shared.so`. There is
-  **no plain-name symlink**, so `fetch-deps.sh` is what creates the `libonnxruntime.so` that
+  **no plain-name symlink**, so `fetch-deps.py` is what creates the `libonnxruntime.so` that
   `init_ort` opens by name.
 - `libonnxruntime.so*` as a pattern does **not** match `libonnxruntime_providers_shared.so`.
   That shim is dlopened by ORT under its plain name, so it is named separately in both the
@@ -88,13 +91,8 @@ matches it.
 On Linux:
 
 ```bash
-./fetch-deps.sh          # same, for linux/runtime/ (--force to redo)
-```
-
-Or call the recipe directly on either platform, which is what both harnesses do:
-
-```bash
-python3 native-deps/fetch-deps.py --force
+python3 native-deps/fetch-deps.py            # same, for linux/runtime/
+python3 native-deps/fetch-deps.py --force    # re-provision from scratch
 ```
 
 `kokoro-host`'s `build.rs` panics if the dep folders for the target being built are missing,

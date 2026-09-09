@@ -30,7 +30,7 @@ fn main() {
         other => panic!(
             "kokoro-host: no native-dependency recipe for target OS '{other}'. \
              Windows and Linux are provisioned by native-deps/fetch-deps.ps1 and \
-             native-deps/fetch-deps.sh respectively."
+             native-deps/fetch-deps.py respectively."
         ),
     }
 }
@@ -126,20 +126,21 @@ fn linux_deps(tp: &Path, profile_dir: &Path) {
 
     // Everything comes from the ONE provisioned tree, unlike the Windows branch, which also
     // reaches into espeak's CMake build directory. That directory's internal layout has moved
-    // between espeak-ng releases; `fetch-deps.sh` resolves it once, by searching, and stages
+    // between espeak-ng releases; `fetch-deps.py` resolves it once, by searching, and stages
     // the result here beside its provision marker. Reading the marked tree is also what the
     // packaging rule asks for — the provisioned files, not whatever a build left lying about.
     for p in [&runtime, &espk_data] {
         if !p.exists() {
             panic!(
-                "kokoro-host: missing {} — run native-deps/fetch-deps.sh                  (which downloads the ORT runtime and builds the espeak artifacts) first",
+                "kokoro-host: missing {} — run native-deps/fetch-deps.py (which downloads \
+                 the ORT runtime and builds the espeak artifacts) first",
                 p.display()
             );
         }
     }
     if !runtime.join("libespeak-ng.so").exists() {
         panic!(
-            "kokoro-host: no libespeak-ng.so in {} — run native-deps/fetch-deps.sh first",
+            "kokoro-host: no libespeak-ng.so in {} — run native-deps/fetch-deps.py first",
             runtime.display()
         );
     }
@@ -159,7 +160,7 @@ fn linux_deps(tp: &Path, profile_dir: &Path) {
     //
     //   * `libonnxruntime.so` - by that exact name, by `native_synth::init_ort`. The
     //     wheel's own file is `libonnxruntime.so.1.27.0` (SONAME `libonnxruntime.so.1`);
-    //     `fetch-deps.sh` is what puts the plain name there. The versioned copy is NOT
+    //     `fetch-deps.py` is what puts the plain name there. The versioned copy is NOT
     //     staged: nothing opens it, and it is another 23 MB.
     //   * `libonnxruntime_providers_shared.so` - dlopened by ORT under its plain name when
     //     a provider needs it, so it has to be findable on the $ORIGIN rpath. It is not

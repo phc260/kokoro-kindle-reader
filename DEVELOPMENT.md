@@ -96,7 +96,7 @@ to co-author to work around it.
 | `license-check.yml` | PRs touching dependency, component, packaging, or notice inputs | Runs the `cargo-about --fail` gate plus component and fixed notice-text integrity checks at review time — no full build. |
 | `sapi.yml` | `kokoro-sapi/**`, `kokoro-sapi-smoke/**`, or `kokoro-protocol/**` changes | Builds the x86 SAPI DLL + runs the no-Kindle COM smoke test (`kokoro-sapi-smoke`). It does not upload the bare intermediate DLL; the licensed installer is the distribution path. |
 | `hook.yml` | `kokoro-hook/**` / `kokoro-inject/**` changes | Compile-checks the x86 hook + injector. |
-| `linux.yml` | `kokoro-host/**`, `kokoro-ocr/**`, `kokoro-protocol/**`, or either `native-deps/*.sh` | Provisions the Linux native deps for real, then builds, tests and **starts** the host on Ubuntu. The only place the Linux build is linked and run — development happens on Windows, where `cargo check --target x86_64-unknown-linux-gnu` proves the `cfg` gating compiles and nothing beyond it. |
+| `linux.yml` | `kokoro-host/**`, `kokoro-ocr/**`, `kokoro-protocol/**`, or `native-deps/*.py` | Provisions the Linux native deps for real, then builds, tests and **starts** the host on Ubuntu. The only place the Linux build is linked and run — development happens on Windows, where `cargo check --target x86_64-unknown-linux-gnu` proves the `cfg` gating compiles and nothing beyond it. |
 
 `sapi.yml` and `hook.yml` also re-run when their own workflow file changes (the standard
 self-trigger); the trigger columns list only the source paths that matter day to day.

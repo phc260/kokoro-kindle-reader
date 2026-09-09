@@ -1,9 +1,9 @@
 # Harness. The espeak-ng build recipe is build-espeak.py, shared with Linux.
 #
 # The pin, the horse-hoarse revert, the patched-file digest and the clean-tree check all live
-# there now, in one copy. They were duplicated here and in build-espeak.sh, which is a
-# dangerous thing to duplicate: a phoneme difference between the platforms does not surface
-# as an error, it surfaces as the voice saying something slightly different, on one OS only.
+# there now, in one copy. They were duplicated here and in a bash twin, which is a dangerous
+# thing to duplicate: a phoneme difference between the platforms does not surface as an
+# error, it surfaces as the voice saying something slightly different, on one OS only.
 #
 # Normally invoked by fetch-deps.py rather than directly.
 $ErrorActionPreference = 'Stop'

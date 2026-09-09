@@ -280,7 +280,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 # 2. One-time: provision the native deps into native-deps/linux/.
 #    Downloads the SHA-256-pinned CPU ONNX Runtime wheel and builds the pinned,
 #    modified espeak-ng. Idempotent; --force to re-provision.
-./native-deps/fetch-deps.sh
+python3 native-deps/fetch-deps.py
 
 # 3. Build + run. No tray: the host is a service that binds 127.0.0.1:8787 and serves.
 #    It exits non-zero if it cannot create that endpoint, because on Linux nothing else

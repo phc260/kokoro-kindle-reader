@@ -18,20 +18,14 @@ on:
       - 'kokoro-host/**'
       - 'kokoro-ocr/**'
       - 'kokoro-protocol/**'
-      # The recipe AND the harnesses. Naming only the .sh files meant a change to
-      # fetch-deps.py -- which is what actually provisions -- triggered nothing.
       - 'native-deps/*.py'
-      - 'native-deps/*.sh'
       - '.github/workflows/linux.yml'
   pull_request:
     paths:
       - 'kokoro-host/**'
       - 'kokoro-ocr/**'
       - 'kokoro-protocol/**'
-      # The recipe AND the harnesses. Naming only the .sh files meant a change to
-      # fetch-deps.py -- which is what actually provisions -- triggered nothing.
       - 'native-deps/*.py'
-      - 'native-deps/*.sh'
       - '.github/workflows/linux.yml'
   workflow_dispatch:
 
@@ -56,11 +50,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends build-essential cmake
 
-      # The espeak clone must be a real one: build-espeak.sh checks out an immutable
-      # commit and then refuses to build a tree carrying anything but the one documented
-      # modification, which it verifies by digest.
+      # The recipe is invoked directly: python3 is guaranteed on Ubuntu, so a shell
+      # harness would only be a second name for the same call. (Windows keeps its .ps1,
+      # which earns its place resolving App Execution Aliases.) build-espeak.py checks out
+      # an immutable commit and refuses to build a tree carrying anything but the one
+      # documented modification, which it verifies by digest.
       - name: Provision native dependencies
-        run: ./native-deps/fetch-deps.sh
+        run: python3 native-deps/fetch-deps.py
 
       - name: Show what was provisioned
         run: |
