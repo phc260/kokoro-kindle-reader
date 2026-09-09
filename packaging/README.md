@@ -20,6 +20,17 @@ drafts a GitHub Release with both attached — see [`../DEVELOPMENT.md`](../DEVE
 | `generate-dependency-licenses.ps1` | Runs `cargo about --locked` against each shipped crate's `Cargo.lock` and appends exact packaged licence files and source copyright headers; called automatically by `build-installer.ps1`. Needs `cargo install cargo-about --locked --features cli` once. |
 | `about.toml`, `about.hbs` | `cargo-about`'s config (the accepted-licence list; `GPL-3.0-only` granted per-crate to Slint only) and output template. |
 | `verify-dependency-licenses.ps1`, `test-dependency-licenses.ps1` | Verify every appendix text hash and block count, plus clarification/embedded-source hashes per crate/version (also inside the extracted installer); offline regression fixtures run on PowerShell 5.1. |
+
+**The four licence-notice scripts are one unit, not four.** `source-notices.ps1` is a
+function library dot-sourced by both `generate-` and `verify-dependency-licenses.ps1`;
+`generate-` invokes `verify-` at the end of each crate; and `test-dependency-licenses.ps1`
+**parses `generate-dependency-licenses.ps1`'s AST** and dot-sources individual function
+bodies out of it to test them in isolation. So renaming or reshaping a function in the
+generator breaks the tests somewhere that never mentions it, and none of the four can be
+moved, ported or reorganized without the other three. Their output contract is byte-exact
+as well: the generated HTML is staged into the installer and hashed by
+`verify-installer-notices.ps1`, so "it still runs" is not evidence a change was safe --
+regenerate and compare digests.
 | `source-notices.json`, `source-notices.ps1` | Reviewed versions, source paths, line ranges and complete-notice hashes for additional embedded terms; generation rejects changed source or unreviewed versions. |
 | `components.toml` | Checked-in inventory of every **non-Cargo** component (the toolchain-supplied Rust Standard Library, shipped native DLLs, compiled-in SVGs, NSIS stub, plus the not-shipped downloaded assets — OCR + voice models — for attribution): origin, version/revision, SHA-256, SPDX, notice files, modification status. |
 | `license-texts.sha256`, `verify-license-texts.ps1` | Reviewed SHA-256s for the shipped checked-in notice/licence files, normalized across CRLF/LF, plus the fail-closed verifier used by CI, the installer build, and the extraction test. |
