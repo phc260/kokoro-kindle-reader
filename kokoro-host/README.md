@@ -28,12 +28,14 @@ cargo run   # windowless tray daemon; right-click the tray → Settings for the 
 
 | File | What |
 |---|---|
-| `main.rs` | `tao` event loop + `tray-icon` menu (Settings / Quit) + `auto-launch`. "Settings" spawns `kokoro-panel.exe`; a `WaitUntil` timer ticks `kindle_watch`. `#![windows_subsystem = "windows"]` in release (no console). |
+| `main.rs` | `tao` event loop + `tray-icon` menu (Settings / Quit) + `auto-launch`. "Settings" spawns `kokoro-panel.exe`; a `WaitUntil` timer ticks `kindle_watch`. Also the one place the contexts are built: one `CoreCtx`, one `KindleState` over its `HostState`, then `KindleCtx` for the pipe and `WebCtx` for the endpoint. `#![windows_subsystem = "windows"]` in release (no console). |
 | `pipe.rs` | The SAPI bridge and **owner of all chunking**: the tokio named-pipe server, `split_text` into sentence chunks, a depth-1 prefetch pipeline, and frame-by-frame streaming with pacing/sub-framing (`stream_synth`, shared by `CMD_SYNTH`, `CMD_SYNTH_ALIGNED` and `CMD_PREVIEW` - `aligned` picks the chunk header form and changes nothing else). Also answers `CMD_STATUS`, `CMD_BENCH`, and `CMD_KINDLE` (`apply_kindle`). |
-| `state.rs` | `HostState`: the one shared, lock-free cell every path reads and writes — the two audio clocks (any client vs. Kindle), the live pause, what the host believes Kindle is doing, and the bench slot. Every method is non-blocking, which is what lets a heartbeat answer during a synthesis. |
+| `ctx.rs` | `CoreCtx` — what a synthesis client needs whatever transport it arrived on: the app-data/model paths, the one `NativeSynth` worker, the one `HostState`, and `available_voices`. Built once in `main` and cloned into both `pipe::KindleCtx` and `webserve::WebCtx`; the clone shares rather than copies, so there is no way to end up with a second worker, audio clock or bench slot. |
+| `state.rs` | `HostState`: the general lock-free cell both transports read and write — the any-client audio clock and the bench slot. Every method is non-blocking, which is what lets a heartbeat answer during a synthesis. |
+| `kindle_state.rs` | `KindleState`: the same, for what the host believes **Kindle** is doing — the reading belief and the evidence rules behind it, the Kindle-only audio clock, the live pause, the pid, the open-stream count, and the `CMD_KINDLE` state byte. It sits *on* a `HostState` (so a Kindle write stamps both clocks from one reading of the wall clock) and is reachable only from the pipe path and the watcher — never from the HTTP endpoint. |
 | `kindle_ctl.rs` | The Kindle-control thread — the only code in the project that touches Kindle's UI. Foregrounds Kindle and sends its Ctrl+A Read Aloud shortcut via raw `SendInput`; UI Automation is used only to find Kindle's window and to dismiss an open Aa/ToC flyout first — **never** to read the reader's state back (`refresh` touches no UIA at all). Also `WM_CLOSE`s Kindle for the panel's narration-voice dialog. Blocking and COM-heavy, so it owns a dedicated OS thread. |
 | `native_synth.rs` | The synth core: normalize → phonemize → tokenize → the Kokoro ONNX model on the Dawn WebGPU or CPU EP (`Engine`, from `controls.json`'s `gpu_synth`) → f32 PCM **plus this chunk's word marks** (`Synthesized`). Loads the stock `model.onnx` with `model_patch`'s duration exports appended in memory (`build_session`), and turns the resulting per-token durations into marks via `text::aggregate_spans`; `marks` empty always means "no timing", never "no words". Also the `controls.json` reader (`read_controls`) and `bench()`, which times one EP for the panel's speed test. |
-| `kindle_watch.rs` | Kindle-watcher: polls for `Kindle.exe`, and when `kindle_kokoro` is on, spawns the x86 `kokoro-inject.exe` to inject `kokoro_hook.dll` (restores Kokoro on Kindle 18632+). Edge-triggered per PID; never panics. Publishes "is Kindle running?" into `HostState` on the way past — it already had to look. |
+| `kindle_watch.rs` | Kindle-watcher: polls for `Kindle.exe`, and when `kindle_kokoro` is on, spawns the x86 `kokoro-inject.exe` to inject `kokoro_hook.dll` (restores Kokoro on Kindle 18632+). Edge-triggered per PID; never panics. Publishes "is Kindle running?" into `KindleState` on the way past — it already had to look. |
 | `text.rs` | Kokoro-js text normalization (11 passes) + punctuation segmentation; golden tests (`#[cfg(test)] mod tests`) lock token-parity with kokoro-js. |
 | `espeak.rs` | The espeak-ng FFI + one-segment phoneme trace. |
 | `split_text.rs` | The sentence-chunk splitter `pipe.rs` uses. Returns `Chunk { text, start_utf16 }` - the absolute offset comes from here because chunks are trimmed and so do **not** abut. |
@@ -69,10 +71,11 @@ cargo run   # windowless tray daemon; right-click the tray → Settings for the 
   session rebuild — the EP is fixed at session-build time), `kindle_watch::enabled` for
   `kindle_kokoro` — change them together. **Live commands don't belong in that file.** Pause
   used to, and it meant a command travelled as a file the host polled and a restart could
-  come back up already stalled; it is `HostState::paused` now, set over the pipe and read by
+  come back up already stalled; it is `KindleState::paused` now, set over the pipe and read by
   `pipe.rs` per sub-frame.
-- **"Speaking" is two clocks, not one.** `HostState` stamps every audio write, and stamps a
-  *second* Kindle-only clock on the `CMD_SYNTH` path alone — so the panel's own preview
+- **"Speaking" is two clocks, not one.** `HostState` stamps every audio write, and
+  `KindleState` stamps a *second* Kindle-only clock (and the general one with it, from a
+  single reading of the wall clock) on the `CMD_SYNTH` path alone — so the panel's own preview
   (`CMD_PREVIEW`) and the browser's HTTP synthesis can't be mistaken for Kindle narrating a
   page. That distinction used to be a timing guess in the panel, and it was the reason the
   speed test couldn't safely trust an "idle" reading.
@@ -85,7 +88,7 @@ cargo run   # windowless tray daemon; right-click the tray → Settings for the 
   can't hand the worker an arbitrarily long text). It queues behind a live utterance
   rather than running beside it, which is why the panel refuses to start one while Kokoro
   is narrating Kindle — and why the host runs **one measurement at a time**
-  (`HostState`'s bench slot), answering `BENCH_BUSY` instead of queueing. Anything on the machine can open the pipe,
+  (`HostState`'s bench slot — general, not Kindle's), answering `BENCH_BUSY` instead of queueing. Anything on the machine can open the pipe,
   and enough queued measurements would starve Kindle past the silent gap its narrator
   tolerates.
 

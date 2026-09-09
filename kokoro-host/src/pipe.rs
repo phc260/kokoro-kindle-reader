@@ -26,15 +26,16 @@
 // a STREAM_END / SYNTH_ERROR marker), paced to ~real time. Narrator/speed/gain/chunk
 // come from controls.json in the app-data dir (no webview round-trips).
 
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
 
+use crate::ctx::CoreCtx;
 use crate::kindle_ctl::KindleCtl;
-use crate::native_synth::{self, NativeSynth};
+use crate::kindle_state::KindleState;
+use crate::native_synth;
 use crate::split_text::split_text;
 use crate::state::HostState;
 // The named-pipe wire format is shared with the SAPI engine (one source of truth).
@@ -58,21 +59,23 @@ const DEFAULT_SUBFRAME_MS: u32 = 250;
 // samples/seconds (the wire rate itself lives in kokoro_protocol::SAMPLE_RATE).
 const SAMPLE_RATE: f64 = kokoro_protocol::SAMPLE_RATE as f64;
 
-/// Everything the pipe path needs: where controls.json lives and the serialized
-/// native synth worker.
+/// Everything the pipe path needs: the shared synth context, plus the two things only
+/// Kindle's clients have any use for — what the host believes Kindle is doing, and the
+/// thread that can act on it.
+///
+/// This is the Windows-reader half of the split. The browser's [`crate::webserve::WebCtx`]
+/// holds the same [`CoreCtx`] and none of the rest, which is what stops a page image
+/// arriving over HTTP from depending on UI Automation.
 #[derive(Clone)]
-pub struct Ctx {
-    pub app_data: PathBuf,
-    /// The model dir (`<app_data>/<MODEL_ID>`), used to enumerate the narrators actually
-    /// downloaded for `webserve`'s `/status` voice list. Kept beside `app_data` rather than
-    /// re-derived here so `MODEL_ID` stays owned by one place (main.rs).
-    pub model_base: PathBuf,
-    pub native: NativeSynth,
-    /// The host's live view of itself — audio clocks, pause, and what it believes Kindle is
-    /// doing. Shared across all client tasks (the struct is cloned per connection but the
-    /// `Arc` is one cell), so a `CMD_STATUS` / `CMD_KINDLE` query on the panel's connection
-    /// sees audio streamed on Kindle's connection, with no handshake on the synth worker.
-    pub state: Arc<HostState>,
+pub struct KindleCtx {
+    /// The synth-side context, shared with the HTTP endpoint: one worker, one general
+    /// audio clock, one bench slot. Cloned per connection; the `Arc`s inside are one cell.
+    pub core: CoreCtx,
+    /// What the host believes Kindle is doing — the reading belief, the Kindle-only audio
+    /// clock, the live pause. Shared across all client tasks, so a `CMD_KINDLE` query on the
+    /// panel's connection sees the stream opened on Kindle's, with no handshake on the synth
+    /// worker.
+    pub state: Arc<KindleState>,
     /// The serialized Kindle-control thread. The only route to Kindle's UI in the project.
     pub kindle: KindleCtl,
 }
@@ -90,39 +93,19 @@ impl Drop for BenchGuard {
 /// Per-chunk sentence count from controls.json ("chunk"); pacing lead / sub-frame
 /// size use the built-in defaults. Returns (sentences 1..=8, lead seconds, sub-frame
 /// samples).
-fn stream_config(ctx: &Ctx) -> (usize, f64, usize) {
+fn stream_config(ctx: &KindleCtx) -> (usize, f64, usize) {
     // chunk defaults to 4 sentences inside read_controls (Controls::default).
-    let (_voice, c) = native_synth::read_controls(&ctx.app_data);
+    let (_voice, c) = native_synth::read_controls(&ctx.core.app_data);
     let sentences = (c.chunk as usize).clamp(1, 8);
     let lead_secs = DEFAULT_LEAD_MS as f64 / 1000.0;
     let subframe_samples = (DEFAULT_SUBFRAME_MS as f64 * SAMPLE_RATE / 1000.0) as usize;
     (sentences, lead_secs, subframe_samples)
 }
 
-/// Narrators actually present on disk (`<model_base>/voices/<id>.bin`), sorted. Enumerated
-/// rather than read from model-manifest.json so the list is what can really be synthesized
-/// right now — a half-downloaded model advertises only what it has, and a client's picker
-/// never offers a voice whose .bin is missing.
-pub fn available_voices(model_base: &Path) -> Vec<String> {
-    let mut v: Vec<String> = std::fs::read_dir(model_base.join("voices"))
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter_map(|e| {
-            e.file_name()
-                .to_string_lossy()
-                .strip_suffix(".bin")
-                .map(str::to_string)
-        })
-        .collect();
-    v.sort();
-    v
-}
-
 /// Current gain from controls.json ("gain"), read fresh per sub-frame so a volume
 /// change lands within the playing chunk.
-fn gain(ctx: &Ctx) -> f32 {
-    native_synth::read_controls(&ctx.app_data).1.gain
+fn gain(ctx: &KindleCtx) -> f32 {
+    native_synth::read_controls(&ctx.core.app_data).1.gain
 }
 
 /// A prefetched chunk synth plus the inputs it was rendered with, so the streaming
@@ -140,11 +123,11 @@ struct Prefetch {
 /// the depth-1 prefetch. Narrator + speed come from controls.json (speed = host
 /// `rate` × controls speed), returned alongside the handle so the loop can detect a
 /// stale chunk. None on timeout/failure.
-fn spawn_synth(ctx: &Ctx, text: String, rate: f32) -> Prefetch {
-    let (voice, controls) = native_synth::read_controls(&ctx.app_data);
+fn spawn_synth(ctx: &KindleCtx, text: String, rate: f32) -> Prefetch {
+    let (voice, controls) = native_synth::read_controls(&ctx.core.app_data);
     let speed = rate * controls.speed;
     let engine = controls.engine;
-    let native = ctx.native.clone();
+    let native = ctx.core.native.clone();
     let voice2 = voice.clone();
     let handle = tokio::spawn(async move { native.synth(text, speed, voice2, engine).await });
     Prefetch { voice, speed, handle }
@@ -152,7 +135,7 @@ fn spawn_synth(ctx: &Ctx, text: String, rate: f32) -> Prefetch {
 
 /// Serve the pipe forever. Returns only on a fatal pipe error (e.g. another server
 /// already owns the name); the caller decides whether to retry.
-pub async fn serve_loop(ctx: Ctx) -> std::io::Result<()> {
+pub async fn serve_loop(ctx: KindleCtx) -> std::io::Result<()> {
     let mut first = true;
     loop {
         // first_pipe_instance fails if another server already owns the name (e.g.
@@ -170,7 +153,7 @@ pub async fn serve_loop(ctx: Ctx) -> std::io::Result<()> {
     }
 }
 
-async fn serve_client(mut pipe: NamedPipeServer, ctx: Ctx) -> std::io::Result<()> {
+async fn serve_client(mut pipe: NamedPipeServer, ctx: KindleCtx) -> std::io::Result<()> {
     loop {
         let mut cmd = [0u8; 1];
         pipe.read_exact(&mut cmd).await?;
@@ -179,7 +162,7 @@ async fn serve_client(mut pipe: NamedPipeServer, ctx: Ctx) -> std::io::Result<()
                 // Milliseconds since we last wrote audio to any client (saturating to
                 // u32::MAX, which also covers "never synthesized"). Runs on this client's
                 // task, independent of any in-flight CMD_SYNTH.
-                pipe.write_all(&ctx.state.ms_since_audio().to_le_bytes()).await?;
+                pipe.write_all(&ctx.core.state.ms_since_audio().to_le_bytes()).await?;
             }
             CMD_KINDLE => {
                 let mut b1 = [0u8; 1];
@@ -191,7 +174,7 @@ async fn serve_client(mut pipe: NamedPipeServer, ctx: Ctx) -> std::io::Result<()
                 let msg = msg.into_bytes();
                 let msg = &msg[..msg.len().min(MAX_MSG_BYTES as usize)];
                 pipe.write_all(&[result, ctx.state.state_flags()]).await?;
-                pipe.write_all(&ctx.state.ms_since_audio().to_le_bytes()).await?;
+                pipe.write_all(&ctx.core.state.ms_since_audio().to_le_bytes()).await?;
                 pipe.write_all(&ctx.state.ms_since_kindle_audio().to_le_bytes()).await?;
                 pipe.write_all(&(msg.len() as u16).to_le_bytes()).await?;
                 pipe.write_all(msg).await?;
@@ -215,18 +198,18 @@ async fn serve_client(mut pipe: NamedPipeServer, ctx: Ctx) -> std::io::Result<()
                 };
                 // One measurement at a time across all clients (see `bench_busy`). The
                 // guard releases it however this arm exits, including a `?` on the reply.
-                if ctx.state.bench_busy_swap(true) {
+                if ctx.core.state.bench_busy_swap(true) {
                     pipe.write_all(&BENCH_BUSY.to_le_bytes()).await?;
                     pipe.write_all(&0.0f32.to_le_bytes()).await?;
                     pipe.write_all(&0.0f32.to_le_bytes()).await?;
                     continue;
                 }
-                let _bench_guard = BenchGuard(ctx.state.clone());
+                let _bench_guard = BenchGuard(ctx.core.state.clone());
                 // The narrator comes from controls.json rather than the wire: any voice
                 // times the same (it's one more model input), and taking the user's own
                 // guarantees the .bin is present.
-                let (voice, _c) = native_synth::read_controls(&ctx.app_data);
-                let (status, audio, elapsed) = match ctx.native.bench(voice, engine).await {
+                let (voice, _c) = native_synth::read_controls(&ctx.core.app_data);
+                let (status, audio, elapsed) = match ctx.core.native.bench(voice, engine).await {
                     Some(b) => (BENCH_OK, b.audio_secs, b.elapsed_secs),
                     None => (BENCH_FAILED, 0.0, 0.0),
                 };
@@ -269,7 +252,7 @@ async fn serve_client(mut pipe: NamedPipeServer, ctx: Ctx) -> std::io::Result<()
 /// Query, pause and resume are answered here on the connection's own task — they touch only
 /// atomics, so a heartbeat stays prompt no matter what the synth worker or the
 /// Kindle-control thread is doing. Play/Stop/Close hand off to that thread and await it.
-async fn apply_kindle(ctx: &Ctx, action: u8) -> (u8, String) {
+async fn apply_kindle(ctx: &KindleCtx, action: u8) -> (u8, String) {
     match action {
         KINDLE_QUERY => {
             // Ask the control thread to take a fresh look at Kindle (rate-limited, and it
@@ -349,7 +332,7 @@ async fn apply_kindle(ctx: &Ctx, action: u8) -> (u8, String) {
 /// no parser for just because the marks existed.
 async fn stream_synth(
     pipe: &mut NamedPipeServer,
-    ctx: &Ctx,
+    ctx: &KindleCtx,
     rate: f32,
     text: &str,
     for_kindle: bool,
@@ -378,7 +361,7 @@ async fn stream_synth(
         // Freshness: if the narrator/speed changed since chunk k was prefetched, its PCM is
         // stale (speed is baked into synthesis) — abort it and re-synth at the current
         // settings so the change lands on this chunk instead of one or two chunks later.
-        let (cur_voice, cur_ctrls) = native_synth::read_controls(&ctx.app_data);
+        let (cur_voice, cur_ctrls) = native_synth::read_controls(&ctx.core.app_data);
         if pf.speed != rate * cur_ctrls.speed || pf.voice != cur_voice {
             pf.handle.abort();
             pf = spawn_synth(ctx, chunks[k].text.clone(), rate);
@@ -456,7 +439,15 @@ async fn stream_synth(
             // Stamp "audio just went out" so a peer's CMD_STATUS / CMD_KINDLE can tell what
             // Kokoro is doing. Also naturally reads idle while paused (the pause branch
             // above writes nothing).
-            ctx.state.stamp_audio(for_kindle);
+            //
+            // A Kindle stream stamps both clocks (the Kindle one stamps the general one it
+            // sits on, from a single reading); a Preview stamps only the general one, so the
+            // panel's silent narrator prefetch never reads as Kindle narrating a page.
+            if for_kindle {
+                ctx.state.stamp_audio();
+            } else {
+                ctx.core.state.stamp_audio();
+            }
             off += n;
 
             // Pace: sleep if we're more than `pacing_lead` ahead of real time.

@@ -70,10 +70,8 @@ use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 
+use crate::ctx::{available_voices, CoreCtx};
 use crate::native_synth;
-// Shared with the pipe rather than reimplemented: both transports answer from the same voice
-// list and stamp the same "audio just went out" clock, so a second copy could only drift.
-use crate::pipe::{available_voices, Ctx};
 use kokoro_protocol::{MAX_TEXT_BYTES, SAMPLE_RATE};
 
 /// Fixed rather than random so a pairing string stays valid across restarts; the token is what
@@ -329,7 +327,8 @@ async fn discard_body(reader: &mut BufReader<TcpStream>, len: usize) {
 /// and a 413 written without the drain is invisible to a browser. Nothing else writes the
 /// TRANSPORT's 413 — the one for a declared over-cap `Content-Length` — so that ordering cannot be
 /// skipped by adding a branch elsewhere, which is as close to a guarantee as this gets: driving
-/// `serve_conn` from a test would mean standing up a `Ctx` (a live `NativeSynth` and `KindleCtl`).
+/// `serve_conn` from a test would mean standing up a `WebCtx` — a live `NativeSynth` worker, and
+/// an OCR worker beside it.
 /// (`ocr_status_line` also answers 413, for a decoded image over `max_pixels`/`max_dimension`.
 /// That one needs no drain: its body was read in full before the engine ever saw it.)
 ///
@@ -455,13 +454,20 @@ async fn respond(
 /// Everything a connection needs: the shared synth context, this endpoint's port/token, and
 /// the OCR worker.
 ///
-/// OCR hangs off the WEB context rather than off `Ctx`, because the browser is the only client
-/// that has a page image to recognize. The pipe has no OCR command and is not getting one:
-/// Kindle for PC narrates from its own text, and a second caller would put the whole picture
-/// path in front of a release that is only meant to replace the browser's engine.
+/// It holds [`CoreCtx`] directly and nothing Kindle-shaped. That is the point of the split:
+/// this used to hold the whole pipe context, so serving a page image over HTTP dragged in
+/// `KindleCtl` — a UI Automation thread for a reader the browser client does not use and a
+/// non-Windows host will not have. What it shares with the pipe it shares deliberately:
+/// both transports answer `/status` from the same voice list and stamp the same "audio just
+/// went out" clock, so a second copy could only drift.
+///
+/// OCR hangs off the WEB context rather than off [`CoreCtx`], because the browser is the only
+/// client that has a page image to recognize. The pipe has no OCR command and is not getting
+/// one: Kindle for PC narrates from its own text, and a second caller would put the whole
+/// picture path in front of a release that is only meant to replace the browser's engine.
 #[derive(Clone)]
 pub struct WebCtx {
-    pub ctx: Ctx,
+    pub core: CoreCtx,
     pub endpoint: Arc<Endpoint>,
     /// One worker for the process, shared by every connection. Started at construction; no
     /// model is loaded until a page actually arrives.
@@ -469,10 +475,10 @@ pub struct WebCtx {
 }
 
 impl WebCtx {
-    pub fn new(ctx: Ctx, endpoint: Arc<Endpoint>, app_data: &Path) -> WebCtx {
+    pub fn new(core: CoreCtx, endpoint: Arc<Endpoint>, app_data: &Path) -> WebCtx {
         let assets = ocr_assets(app_data);
         eprintln!("[host] OCR models = {}", assets.dir.display());
-        WebCtx { ctx, endpoint, ocr: Arc::new(kokoro_ocr::Ocr::new(assets, ocr_limits())) }
+        WebCtx { core, endpoint, ocr: Arc::new(kokoro_ocr::Ocr::new(assets, ocr_limits())) }
     }
 }
 
@@ -621,14 +627,14 @@ async fn serve_conn(stream: TcpStream, web: WebCtx) -> std::io::Result<()> {
 
     match (req.method.as_str(), req.path.split('?').next().unwrap_or("")) {
         ("GET", "/status") => {
-            let (voice, _c) = native_synth::read_controls(&web.ctx.app_data);
+            let (voice, _c) = native_synth::read_controls(&web.core.app_data);
             // `probe` reads the file system and hashes what it finds; it does NOT build a
             // session, which is what makes it safe to answer a polled endpoint with.
             let ocr = kokoro_ocr::probe(web.ocr.assets());
             let body = serde_json::json!({
                 "ok": true,
                 "voice": voice,
-                "voices": available_voices(&web.ctx.model_base),
+                "voices": available_voices(&web.core.model_base),
                 "sampleRate": SAMPLE_RATE,
                 "ocr": {
                     "state": ocr.state.as_str(),
@@ -693,7 +699,7 @@ async fn serve_conn(stream: TcpStream, web: WebCtx) -> std::io::Result<()> {
             // Narrator: the extension's own picker wins; controls.json is the default, so the
             // panel's narrator is what an unset request gets. Deliberately unlike CMD_SYNTH,
             // where the host owns the narrator because it owns Kindle's settings.
-            let (default_voice, controls) = native_synth::read_controls(&web.ctx.app_data);
+            let (default_voice, controls) = native_synth::read_controls(&web.core.app_data);
             let voice = v
                 .get("voice")
                 .and_then(|x| x.as_str())
@@ -714,7 +720,7 @@ async fn serve_conn(stream: TcpStream, web: WebCtx) -> std::io::Result<()> {
                 return Ok(());
             }
 
-            match web.ctx.native.synth(text, speed, voice, controls.engine).await {
+            match web.core.native.synth(text, speed, voice, controls.engine).await {
                 // `.pcm` only: the browser highlights on its own estimated boundaries
                 // (`word-timing.ts`), and handing it real marks means a response shape that
                 // carries both — a change on the extension side too. The marks exist and are
@@ -725,7 +731,7 @@ async fn serve_conn(stream: TcpStream, web: WebCtx) -> std::io::Result<()> {
                     // sees browser narration too and will not start a bench underneath it.
                     // Not the *Kindle* clock: the browser is a third source, and conflating
                     // it would have the panel report Kindle as reading a page it isn't on.
-                    web.ctx.state.stamp_audio(false);
+                    web.core.state.stamp_audio();
                     let extra = format!(
                         "{cors}X-Sample-Rate: {SAMPLE_RATE}\r\nX-Samples: {}\r\n",
                         pcm.len() / 4
@@ -998,9 +1004,11 @@ mod tests {
     /// `TypeError: Failed to fetch`. So this test speaks the browser's dialect deliberately.
     ///
     /// **What it does NOT cover:** that `serve_conn` calls `refuse_oversized` at all, and that it
-    /// does so after the token check. Driving `serve_conn` means building a `Ctx` — a live
-    /// `NativeSynth` and `KindleCtl` — which is not a unit test. What stands in for it is that
-    /// `refuse_oversized` is the only writer of this status, so there is one door and it drains.
+    /// does so after the token check. Driving `serve_conn` means building a `WebCtx` — a live
+    /// `NativeSynth` worker and an OCR worker — which is not a unit test. (Narrowing `WebCtx` off
+    /// the pipe context dropped `KindleCtl` from that list; it did not make it a unit test.) What
+    /// stands in for it is that `refuse_oversized` is the only writer of this status, so there is
+    /// one door and it drains.
     #[tokio::test]
     async fn an_over_cap_post_is_refused_with_a_status_the_client_can_read() {
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();

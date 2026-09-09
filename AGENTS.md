@@ -77,6 +77,13 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
   Stop waits for an in-flight Play; two overlapping keystroke sequences aimed at one blind
   toggle would land in an unknowable order). What must never queue behind them is a query or
   a pause, and neither touches that thread — flag anything that puts them there.
+- **The browser path must not reach Kindle types.** The host has three contexts:
+  `ctx::CoreCtx` (paths, the one `NativeSynth`, the one `HostState`, `available_voices`),
+  `pipe::KindleCtx` (core + `KindleCtl` + `KindleState`), and `webserve::WebCtx` (core +
+  endpoint + OCR worker). `WebCtx` held the whole pipe context once, so serving a page image
+  over HTTP depended on a UI Automation thread for a reader that client never uses. Flag any
+  `KindleCtl`/`KindleState` reaching `webserve.rs`, and any construction of a second
+  `NativeSynth`, `HostState` or bench flag — all three are built once in `main` and cloned.
 - **The reading belief is never sampled from Kindle's assistive-reader toggle.** That UIA
   element is only in the tree while the Aa menu is open, which is when the user is changing
   it — so a read lands mid-change, gets stored as *definite*, and makes `set_reading` skip

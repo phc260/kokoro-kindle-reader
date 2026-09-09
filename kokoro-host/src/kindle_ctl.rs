@@ -60,7 +60,8 @@ use uiautomation::{UIAutomation, UIElement};
 use windows::Win32::Foundation::{HWND, LPARAM};
 
 use crate::kindle_watch::{find_pid, TARGET};
-use crate::state::{now_ms, HostState};
+use crate::kindle_state::KindleState;
+use crate::state::now_ms;
 
 const TOGGLE_ID: &str = "ToggleButton-Assistive reader toggle";
 // The Table-of-contents flyout has no toggle to key off (unlike the Aa flyout), but the
@@ -85,7 +86,7 @@ enum Job {
     Close {
         reply: tokio::sync::oneshot::Sender<Result<(), String>>,
     },
-    /// Re-read Kindle's state into [`HostState`]. Advisory — nobody waits for it.
+    /// Re-read Kindle's state into [`KindleState`]. Advisory — nobody waits for it.
     Refresh,
 }
 
@@ -93,7 +94,7 @@ enum Job {
 #[derive(Clone)]
 pub struct KindleCtl {
     tx: mpsc::Sender<Job>,
-    state: Arc<HostState>,
+    state: Arc<KindleState>,
     /// A refresh is already queued; a second would only make the thread repeat itself.
     refresh_pending: Arc<AtomicBool>,
     /// When the last refresh finished, for [`MIN_REFRESH_MS`].
@@ -102,7 +103,7 @@ pub struct KindleCtl {
 
 impl KindleCtl {
     /// Spawn the control thread and return its handle.
-    pub fn spawn(state: Arc<HostState>) -> KindleCtl {
+    pub fn spawn(state: Arc<KindleState>) -> KindleCtl {
         let (tx, rx) = mpsc::channel::<Job>();
         let refresh_pending = Arc::new(AtomicBool::new(false));
         let last_refresh_ms = Arc::new(AtomicU64::new(0));
@@ -178,7 +179,7 @@ impl KindleCtl {
 
 fn worker_loop(
     rx: mpsc::Receiver<Job>,
-    state: Arc<HostState>,
+    state: Arc<KindleState>,
     refresh_pending: Arc<AtomicBool>,
     last_refresh_ms: Arc<AtomicU64>,
 ) {
@@ -242,7 +243,7 @@ fn automation(slot: &mut Option<UIAutomation>) -> Option<&UIAutomation> {
     slot.as_ref()
 }
 
-/// Re-read what Kindle is doing into [`HostState`]. Best-effort by design, and it **touches
+/// Re-read what Kindle is doing into [`KindleState`]. Best-effort by design, and it **touches
 /// no UI Automation at all**.
 ///
 /// Order of evidence:
@@ -266,7 +267,7 @@ fn automation(slot: &mut Option<UIAutomation>) -> Option<&UIAutomation> {
 ///
 /// It was also the only UIA in this function, so a background refresh now costs a process
 /// enumeration instead of a matcher timeout paid in full on every tick.
-fn refresh(state: &HostState) {
+fn refresh(state: &KindleState) {
     let pid = find_pid(TARGET);
     state.set_kindle_pid(pid);
     if pid.is_none() {
@@ -283,7 +284,7 @@ fn refresh(state: &HostState) {
 /// Drive Kindle's Assistive reader to `want`. Refreshes the host's belief from evidence
 /// first, then fires exactly one Ctrl+A toggle if the belief still disagrees — so a
 /// repeated Play can't toggle reading *off*, which a blind toggle would.
-fn set_reading(auto: &UIAutomation, state: &HostState, want: bool) -> Result<(), String> {
+fn set_reading(auto: &UIAutomation, state: &KindleState, want: bool) -> Result<(), String> {
     refresh(state);
     if !state.kindle_running() {
         return Err("Kindle isn't running - open it and try again.".to_string());

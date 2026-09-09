@@ -16,8 +16,10 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+mod ctx;
 mod espeak;
 mod kindle_ctl;
+mod kindle_state;
 mod kindle_watch;
 #[path = "../../legal.rs"]
 mod legal;
@@ -74,10 +76,10 @@ fn espeak_data_dir() -> PathBuf {
 ///
 /// HTTP is the browser's ONLY transport; see webserve.rs for why, and why not two.
 ///
-/// Returns the shared [`state::HostState`] so the tray's Kindle-watcher can publish into it
-/// too — it already looks for Kindle every tick, so the panel-facing "is Kindle running?"
-/// flag costs nothing to keep fresh.
-fn start_pipe_server() -> std::sync::Arc<state::HostState> {
+/// Returns the shared [`kindle_state::KindleState`] so the tray's Kindle-watcher can publish
+/// into it too — it already looks for Kindle every tick, so the panel-facing "is Kindle
+/// running?" flag costs nothing to keep fresh.
+fn start_pipe_server() -> std::sync::Arc<kindle_state::KindleState> {
     let app_data = app_data_dir();
     let base = app_data.join(MODEL_ID);
     let espeak = espeak_data_dir();
@@ -97,26 +99,35 @@ fn start_pipe_server() -> std::sync::Arc<state::HostState> {
     }
 
     let native = native_synth::NativeSynth::spawn(base.clone(), espeak);
-    // One cell for everything a peer can ask about: the audio clocks CMD_STATUS/CMD_KINDLE
-    // answer from, the live pause, and what the host believes Kindle is doing.
-    let host_state = std::sync::Arc::new(state::HostState::default());
-    // The Kindle-control thread — the only place in the project that touches Kindle's UI.
-    // Blocking UI Automation lives on its own OS thread, off this tokio runtime and off the
-    // serialized synth worker, so a heartbeat or a Stop can't queue behind a Play.
-    let kindle = kindle_ctl::KindleCtl::spawn(host_state.clone());
-    let ctx = pipe::Ctx {
+    // Built ONCE, then shared by both transports. Cloning a `CoreCtx` shares the worker, the
+    // general audio clock and the bench slot rather than copying them — two of any of those
+    // is the bug this shape exists to make hard to write.
+    let core = ctx::CoreCtx {
         app_data: app_data.clone(),
         // Where the voices/*.bin live, for the HTTP endpoint's /status voice list.
         model_base: base,
         native,
-        state: host_state.clone(),
+        // The general cell: when audio last went out to anyone, and whether a bench holds
+        // the one worker.
+        state: std::sync::Arc::new(state::HostState::default()),
+    };
+    // What the host believes Kindle is doing, over that same general state. Only the pipe
+    // path and the watcher can reach it; the HTTP endpoint below gets `core` and nothing else.
+    let kindle_state = kindle_state::KindleState::new(core.state.clone());
+    // The Kindle-control thread — the only place in the project that touches Kindle's UI.
+    // Blocking UI Automation lives on its own OS thread, off this tokio runtime and off the
+    // serialized synth worker, so a heartbeat or a Stop can't queue behind a Play.
+    let kindle = kindle_ctl::KindleCtl::spawn(kindle_state.clone());
+    let pipe_ctx = pipe::KindleCtx {
+        core: core.clone(),
+        state: kindle_state.clone(),
         kindle,
     };
 
     // The web endpoint is best-effort: a failure to create or bind it must not take the pipe
     // down with it, because Kindle depends on the pipe and not on this.
     let web = match webserve::Endpoint::load_or_create(&app_data) {
-        Ok(ep) => Some(webserve::WebCtx::new(ctx.clone(), std::sync::Arc::new(ep), &app_data)),
+        Ok(ep) => Some(webserve::WebCtx::new(core, std::sync::Arc::new(ep), &app_data)),
         Err(e) => {
             eprintln!("[host] web endpoint disabled: {e}");
             None
@@ -140,14 +151,14 @@ fn start_pipe_server() -> std::sync::Arc<state::HostState> {
                         }
                     });
                 }
-                if let Err(e) = pipe::serve_loop(ctx).await {
+                if let Err(e) = pipe::serve_loop(pipe_ctx).await {
                     eprintln!("[host] pipe server stopped: {e}");
                 }
             });
         })
         .expect("spawn pipe thread");
 
-    host_state
+    kindle_state
 }
 
 /// Register the host to launch hidden at login (release only, so a dev run doesn't
@@ -206,7 +217,7 @@ fn load_tray_icon() -> tray_icon::Icon {
 }
 
 fn main() {
-    let host_state = start_pipe_server();
+    let kindle_state = start_pipe_server();
     #[cfg(not(debug_assertions))]
     enable_autostart();
 
@@ -277,7 +288,7 @@ fn main() {
         match event {
             // Timer wake (or first run): poll for Kindle and inject the hook if needed.
             Event::NewEvents(StartCause::ResumeTimeReached { .. } | StartCause::Init) => {
-                kindle_watch::tick(&app_data, &mut kindle, &host_state);
+                kindle_watch::tick(&app_data, &mut kindle, &kindle_state);
             }
             Event::UserEvent(menu_event) => {
                 if menu_event.id == settings_id {

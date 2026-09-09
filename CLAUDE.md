@@ -347,8 +347,8 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   which re-asks with a **bodiless** `/status` — that request cannot lose its reply, so it separates
   a stale token from a dead host, which is the distinction the lost 401 costs.
 - **`refuse_oversized` is the only writer of the TRANSPORT's 413, and that is load-bearing.**
-  Driving `serve_conn` from a test means standing up a `Ctx` (a live `NativeSynth` and
-  `KindleCtl`), so nothing proves the endpoint *calls* the drain — one door that always drains is
+  Driving `serve_conn` from a test means standing up a `WebCtx` (a live `NativeSynth` worker and
+  an OCR worker), so nothing proves the endpoint *calls* the drain — one door that always drains is
   what stands in for the test. An earlier version of
   `an_over_cap_post_is_refused_with_a_status_the_client_can_read` inlined the drain in its own
   fixture, so deleting the drain from the endpoint left it green: it tested the test. Keep it
@@ -879,6 +879,20 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   applies on Kindle's next launch). `kokoro-hook`'s `selftest` guards the slot-18 ABI.
 
 ### Where shared files live
+- **The host has THREE contexts, and the boundary between them is an ownership rule, not
+  filing.** `ctx::CoreCtx` is what a synthesis client needs whatever transport it arrived on
+  (paths, the one `NativeSynth`, the one `HostState`, `available_voices`); `pipe::KindleCtx`
+  adds `KindleCtl` and `KindleState`; `webserve::WebCtx` adds the endpoint and the OCR worker
+  and **must not gain a route back to either Kindle type**. `WebCtx` used to hold the whole
+  pipe context, which made serving a page image over HTTP depend on a UI Automation thread for
+  a reader that client never uses. All three are built **once**, in `main`, and cloned: a
+  second `NativeSynth`, a second audio clock or a second bench flag would each be a real bug
+  (espeak has global state, the ORT session belongs to the one worker, and the bench guard is
+  what stops a client starving Kindle). Likewise the state split — `HostState` is the general
+  cell (any-client audio clock, bench slot), `KindleState` sits on top of it and holds the
+  reading belief, the Kindle-only clock, the pause and the pid. A Kindle write stamps **both**
+  clocks from one reading of the wall clock; a Preview or a browser synthesis stamps only the
+  general one, which is the distinction the panel's "is Kokoro narrating Kindle?" depends on.
 - The synth core (`native_synth.rs` + `text.rs` + `espeak.rs` + `split_text.rs` +
   `model_patch.rs`) is in `kokoro-host/src/` — **not** in the engine crate. `text.rs`/`espeak.rs`
   are still written to be pure and self-contained (no `kokoro-host`-specific state); the standalone

@@ -21,7 +21,7 @@ use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
 };
 
-use crate::state::HostState;
+use crate::kindle_state::KindleState;
 
 /// Kindle's process image name. Matched on the image name, not a window title, so it's
 /// locale-independent. `kindle_ctl` reuses both this and [`find_pid`].
@@ -130,13 +130,13 @@ pub struct Watch {
 /// One watcher tick. Injects into a newly-seen Kindle when enabled, and confirms the injector
 /// actually succeeded before considering the instance handled. Never panics.
 ///
-/// It also publishes the Kindle pid into [`HostState`]. That's free — the tick already has
+/// It also publishes the Kindle pid into [`KindleState`]. That's free — the tick already has
 /// to look — and it keeps what the settings panel reads fresh from the moment the host
 /// starts, rather than only from the first panel query onwards. The **pid**, not a boolean:
 /// a Kindle replaced by another Kindle between two ticks has to void the reading belief
-/// exactly as Kindle disappearing does (see `HostState::set_kindle_pid`), and this is the
+/// exactly as Kindle disappearing does (see `KindleState::set_kindle_pid`), and this is the
 /// one place that observes the change often enough to notice.
-pub fn tick(app_data: &Path, w: &mut Watch, state: &HostState) {
+pub fn tick(app_data: &Path, w: &mut Watch, state: &KindleState) {
     let pid = find_pid(TARGET);
     state.set_kindle_pid(pid);
     if pid != w.pid {
