@@ -7,7 +7,7 @@ runtime/
 # The Linux provision (fetch-deps.sh): its own runtime tree, kept apart from the Windows
 # one so a machine that cross-builds both never mixes the two sets of libraries.
 linux/
-# The pinned OCR models, 9.80 MB, re-created by fetch-ocr-models.ps1. Their digests live in
+# The pinned OCR models, 9.80 MB, re-created by fetch-ocr-models.py. Their digests live in
 # kokoro-ocr/src/lib.rs and in that script, so what is committed is the pin, not the weights.
 ocr/
 # Build output

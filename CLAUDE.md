@@ -103,7 +103,7 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8787/status   # the whol
 # at first run into <app_data>/ocr/ (like the voice model). For DEV, provision native-deps\ocr
 # so a debug `cargo run` finds them without a download. Digests verified on download AND on every
 # /status probe.
-native-deps\fetch-ocr-models.ps1   # dev only; the release downloads per ocr-manifest.json
+python3 native-deps/fetch-ocr-models.py   # dev only; the release downloads per ocr-manifest.json
 cargo test --manifest-path kokoro-ocr\Cargo.toml   # needs no models: bounds, DB post, CTC decode
 # The real graphs over one PNG, no browser and no host — the only thing that catches a tensor
 # layout or class-count mistake, which otherwise reads out as fluent, confident, wrong text.
@@ -724,10 +724,10 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   `<app_data>/ocr/` (`webserve::ocr_assets(app_data)`), not beside the exe, and `/status` says
   `missing` until the download lands. The digests live in **three** places on purpose — the
   manifest (fetch spec), `kokoro-ocr`'s consts (the load/probe gate, which re-verifies
-  independently), and `fetch-ocr-models.ps1` (dev provisioning) — keep them in sync. The
+  independently), and `fetch-ocr-models.py` (dev provisioning) — keep them in sync. The
   installer stages **nothing** under `ocr\`, and `build-installer.ps1` no longer runs
-  `fetch-ocr-models.ps1 -VerifyOnly`.
-- **`fetch-ocr-models.ps1` (dev provisioning) and `ocr-manifest.json` pin a revision per URL and
+  `fetch-ocr-models.py --verify-only`.
+- **`fetch-ocr-models.py` (dev provisioning) and `ocr-manifest.json` pin a revision per URL and
   pull the recognizer from
   `media.githubusercontent.com`.** That file is Git LFS, and `raw.` answers 200 with a 132-byte
   *pointer* — the shape of download a size check waves through. The dictionary is not LFS and

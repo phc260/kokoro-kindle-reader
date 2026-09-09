@@ -221,7 +221,7 @@ and SHA-256-verified), where `kokoro-host` loads them to recognize Kindle Cloud 
 pages. They are PP-OCR models originating with PaddleOCR
 (<https://github.com/PaddlePaddle/PaddleOCR>) and are used unmodified, pinned by SHA-256 —
 no copy of the weights is checked into this repository, and none is redistributed in the
-binary release. (`native-deps/fetch-ocr-models.ps1` fetches the same files for local
+binary release. (`native-deps/fetch-ocr-models.py` fetches the same files for local
 development.)
 
 - **`det.onnx`** — the PP-OCRv3 English text *detector*, taken from

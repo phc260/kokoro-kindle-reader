@@ -180,7 +180,7 @@ upstream = "https://huggingface.co/SWHL/RapidOCR (rev 1cfba2e90fc938db5588987373
 spdx = "Apache-2.0"
 modified = false
 notice = ["licenses/Apache-2.0.txt", "THIRD_PARTY_NOTICES.md"]
-downloaded_by = "kokoro-panel (ocr-manifest.json); native-deps/fetch-ocr-models.ps1 for dev"
+downloaded_by = "kokoro-panel (ocr-manifest.json); native-deps/fetch-ocr-models.py for dev"
 
 [[component]]
 name = "rec.onnx"
@@ -191,7 +191,7 @@ upstream = "https://github.com/PT-Perkasa-Pilar-Utama/ppu-paddle-ocr-models (rev
 spdx = "Apache-2.0"
 modified = false
 notice = ["licenses/Apache-2.0.txt", "THIRD_PARTY_NOTICES.md"]
-downloaded_by = "kokoro-panel (ocr-manifest.json); native-deps/fetch-ocr-models.ps1 for dev"
+downloaded_by = "kokoro-panel (ocr-manifest.json); native-deps/fetch-ocr-models.py for dev"
 
 [[component]]
 name = "en_dict.txt"
@@ -202,7 +202,7 @@ upstream = "https://github.com/PT-Perkasa-Pilar-Utama/ppu-paddle-ocr-models (rev
 spdx = "Apache-2.0"
 modified = false
 notice = ["licenses/Apache-2.0.txt", "THIRD_PARTY_NOTICES.md"]
-downloaded_by = "kokoro-panel (ocr-manifest.json); native-deps/fetch-ocr-models.ps1 for dev"
+downloaded_by = "kokoro-panel (ocr-manifest.json); native-deps/fetch-ocr-models.py for dev"
 
 # --- Google Material Symbols: compiled INTO kokoro-panel.exe (no separate file) ----------
 # Checked into kokoro-panel/ui/ as SVG and compiled by slint-build. Upstream does not

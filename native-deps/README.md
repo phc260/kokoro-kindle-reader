@@ -88,6 +88,13 @@ matches it.
 .\fetch-ocr-models.ps1  # the 9.80 MB PP-OCR pair + dictionary; network only, no toolchain
 ```
 
+Or the recipes directly, on either platform:
+
+```bash
+python3 native-deps/fetch-deps.py
+python3 native-deps/fetch-ocr-models.py
+```
+
 On Linux:
 
 ```bash
@@ -112,10 +119,10 @@ refuses to build a tree carrying any modification beyond that one.
 **A distribution's own libespeak-ng is not a substitute**: it is unmodified, and probably not
 1.52.0 either, and either difference changes the phonemes — audibly, and with no error.
 
-## fetch-ocr-models.ps1
+## fetch-ocr-models.py
 
-Separate because it needs **network and nothing else** — no Python, no compiler, minutes
-faster. It is also not a build dependency: `kokoro-ocr` loads these at run time, so the host
+Separate because it needs **network and nothing else** — no compiler, no CMake, minutes
+faster. (It does need Python, like every recipe here; `fetch-ocr-models.ps1` is its harness.) It is also not a build dependency: `kokoro-ocr` loads these at run time, so the host
 builds without them and reports OCR `missing` until they are there.
 
 **This is for DEV only.** The OCR models are **not bundled in the installer** — the settings

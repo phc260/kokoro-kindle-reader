@@ -297,7 +297,7 @@ pub const REC_FILE: &str = "rec.onnx";
 pub const DICT_FILE: &str = "en_dict.txt";
 
 /// The pinned SHA-256 of each. The upstream source and the pinned revision for every file are
-/// in `native-deps/fetch-ocr-models.ps1`, which is what downloads them. Both sources are
+/// in `native-deps/fetch-ocr-models.py`, which is what downloads them. Both sources are
 /// Apache-2.0 ONNX conversions of PaddleOCR models: the detector from RapidOCR, the recognizer
 /// and its dictionary from ppu-paddle-ocr-models.
 ///

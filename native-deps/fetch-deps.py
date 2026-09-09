@@ -35,15 +35,12 @@ Idempotent: pass --force to re-provision.
 """
 
 import argparse
-import hashlib
 import os
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
-import time
-import urllib.request
 import zipfile
 from pathlib import Path
 
@@ -52,9 +49,13 @@ WINDOWS = os.name == "nt"
 # The script's own directory is sys.path[0] when run directly; make that explicit so
 # importing this module from elsewhere (a test, a wrapper) resolves the helper too.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from provision_util import rmtree_force  # noqa: E402 - needs the path above
-
-UA = {"User-Agent": "Kokoro-Kindle-Reader-dependency-provisioner/1.0"}
+from provision_util import (  # noqa: E402 - needs the path above
+    download,
+    fail,
+    rmtree_force,
+    sha256_file,
+    sha256_text,
+)
 
 ORT_VERSION = "1.27.0"
 
@@ -115,11 +116,6 @@ ORT_TPN_RE = re.compile(r"^ThirdPartyNotices(\.txt)?$")
 NOTICE_PATTERNS = ("LICENSE", "NOTICE", "ThirdPartyNotices", "Privacy")
 
 
-def fail(msg):
-    print(msg, file=sys.stderr)
-    raise SystemExit(1)
-
-
 def layout():
     """Where this platform's provision lives, and which build dir espeak uses."""
     if WINDOWS:
@@ -140,20 +136,6 @@ def layout():
         "espeak_lib_dirs": ["src/libespeak-ng", "src"],
         "espeak_lib_globs": ["libespeak-ng.so*"],
     }
-
-
-def sha256_file(path):
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for block in iter(lambda: f.read(1 << 20), b""):
-            h.update(block)
-    return h.hexdigest()
-
-
-def sha256_text(path):
-    """SHA-256 with newlines normalized, so a checkout policy cannot change the digest."""
-    raw = Path(path).read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
-    return hashlib.sha256(raw).hexdigest()
 
 
 def marker_matches(path, expected):
@@ -182,21 +164,6 @@ def nonempty_file(p):
 def nonempty_dir(p):
     p = Path(p)
     return p.is_dir() and any(f.is_file() for f in p.rglob("*"))
-
-
-def download(url, dest):
-    """Fetch one immutable file, retrying: a flaky runner should not fail a provision that a
-    second attempt would complete."""
-    for attempt in range(3):
-        try:
-            req = urllib.request.Request(url, headers=UA)
-            with urllib.request.urlopen(req, timeout=60) as r, open(dest, "wb") as f:
-                shutil.copyfileobj(r, f)
-            return
-        except Exception as e:  # noqa: BLE001 - every failure here is worth a retry
-            if attempt == 2:
-                fail("downloading %s failed: %s" % (url, e))
-            time.sleep(2 * (attempt + 1))
 
 
 # ----------------------------------------------------------------- ORT wheel

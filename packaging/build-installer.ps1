@@ -253,7 +253,7 @@ foreach ($record in $projectBuildManifest, $outputBuildRecord, $espkProvision, $
 #     install ships no ocr\ dir, the host answers /ocr with `missing` until the download
 #     lands, and the browser extension surfaces that state. This keeps ~10 MB of a
 #     browser-only asset out of the installer (and out of every Kindle-only user's download).
-#     fetch-ocr-models.ps1 still provisions them for DEV (`cargo run` reads native-deps\ocr).
+#     fetch-ocr-models.py still provisions them for DEV (`cargo run` reads native-deps\ocr).
 
 # 3b. License texts. The bundle links espeak-ng (GPL-3.0-or-later, and MODIFIED -- see
 #     native-deps\build-espeak.py) and Slint under its GPL-3.0-only option, so the

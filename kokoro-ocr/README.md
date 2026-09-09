@@ -205,7 +205,7 @@ dropped into a directory.
 cargo test --manifest-path kokoro-ocr\Cargo.toml
 
 # The models, once. Digests are verified on download and a mismatch is deleted, not kept.
-native-deps\fetch-ocr-models.ps1
+python3 native-deps/fetch-ocr-models.py
 
 # End to end on one page, with no browser and no host.
 $env:ORT_DYLIB_PATH = "native-deps\runtime\onnxruntime.dll"

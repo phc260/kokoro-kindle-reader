@@ -1,5 +1,5 @@
 {
-  "comment": "Cloud Reader OCR models, downloaded at first run into <app_data>/ocr/ by kokoro-panel (like the Kokoro voice model), NOT bundled in the installer. Each file has its own URL because the recognizer is Git-LFS (media.githubusercontent.com) while the detector and dictionary are not. Revisions are pinned. The panel verifies these sha256 on download; kokoro-ocr re-verifies the same digests independently on load and on every /status probe, so this manifest is the fetch spec, not the authority. Keep the digests in sync with kokoro-ocr/src/lib.rs (DET_SHA256/REC_SHA256/DICT_SHA256) and native-deps/fetch-ocr-models.ps1.",
+  "comment": "Cloud Reader OCR models, downloaded at first run into <app_data>/ocr/ by kokoro-panel (like the Kokoro voice model), NOT bundled in the installer. Each file has its own URL because the recognizer is Git-LFS (media.githubusercontent.com) while the detector and dictionary are not. Revisions are pinned. The panel verifies these sha256 on download; kokoro-ocr re-verifies the same digests independently on load and on every /status probe, so this manifest is the fetch spec, not the authority. Keep the digests in sync with kokoro-ocr/src/lib.rs (DET_SHA256/REC_SHA256/DICT_SHA256) and native-deps/fetch-ocr-models.py.",
   "dir": "ocr",
   "files": [
     {
