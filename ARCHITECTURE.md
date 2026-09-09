@@ -211,7 +211,7 @@ against the engine the user actually has installed.
 | `model-manifest.json` | Files the model downloads from HF (paths + sizes + SHA-256); embedded in `kokoro-panel` (the narrator list is derived from it). |
 | `icons/` | Shared app icons (LFS); embedded in the exes' version resource and the installer. |
 | `packaging/` | `installer.nsi` + `build-installer.ps1` (standalone NSIS build) — per-user install with self-elevating voice registration. See [`packaging/README.md`](packaging/README.md). |
-| `THIRD_PARTY_NOTICES.md` + `licenses/` | Bundle licensing: the repository source is MIT except for the files ported from `kokoro-js` and PaddleOCR and the Google Material Symbols SVGs (Apache-2.0, attributed there file by file), but the shipped binaries link espeak-ng (GPL-3.0-or-later, **modified** by `build-espeak.ps1`) and Slint-under-GPL, so a release is conveyed under GPLv3. `build-installer.ps1` stages these notices plus the active Rust toolchain's generated Standard Library report — they must ship *with* the binaries, not just live here. |
+| `THIRD_PARTY_NOTICES.md` + `licenses/` | Bundle licensing: the repository source is MIT except for the files ported from `kokoro-js` and PaddleOCR and the Google Material Symbols SVGs (Apache-2.0, attributed there file by file), but the shipped binaries link espeak-ng (GPL-3.0-or-later, **modified** by `build-espeak.py`) and Slint-under-GPL, so a release is conveyed under GPLv3. `build-installer.ps1` stages these notices plus the active Rust toolchain's generated Standard Library report — they must ship *with* the binaries, not just live here. |
 
 ## Building from source
 

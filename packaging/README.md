@@ -52,7 +52,7 @@ The TTS model is **not** bundled; the panel downloads it on first run (~340 MB).
 ### The license files are an obligation, not a courtesy
 
 The bundle links **espeak-ng** (GPL-3.0-or-later — and *modified* by
-`native-deps/build-espeak.ps1`, which reverts the horse-hoarse merger) and **Slint** under
+`native-deps/build-espeak.py`, which reverts the horse-hoarse merger) and **Slint** under
 its GPL-3.0-only option. The repository source stays permissive (MIT, plus Apache-2.0 for the
 files ported from `kokoro-js` and PaddleOCR and the Google Material Symbols SVGs), but **the
 installed combination is conveyed
@@ -118,7 +118,7 @@ Unicode Character Database data in `espeak-ng-data\`, a different document from 
 (`SetCompressor /SOLID lzma`), so this script stages NSIS's own `COPYING` (zlib + bzip2 +
 CPL-1.0-with-linking-exception) from the installed toolchain to `licenses\nsis\`; NSIS is
 **pinned** in `installer.yml` so that text matches the version used. Both stagers **throw**
-when the text is absent. The espeak cache marker includes `build-espeak.ps1`'s normalized
+when the text is absent. The espeak cache marker includes `build-espeak.py`'s normalized
 SHA-256, so any patch/build-recipe change forces a rebuild; its build-time source manifest
 must match the tree placed in the corresponding-source archive. `build-installer.ps1` also
 rejects an installed `makensis` other than 3.12;

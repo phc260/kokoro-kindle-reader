@@ -104,7 +104,7 @@ espeak-ng, so the revert is required for correct pronunciation of "four", "hoars
 "shore", and similar words. No other source file is altered.
 
 The modification is applied by
-[`native-deps/build-espeak.ps1`](https://github.com/phc260/kokoro-kindle-reader/blob/main/native-deps/build-espeak.ps1)
+[`native-deps/build-espeak.py`](https://github.com/phc260/kokoro-kindle-reader/blob/main/native-deps/build-espeak.py)
 in this repository, which is both the patch and the build recipe: it checks out the immutable
 commit behind tag `1.52.0`, fails if the expected phoneme block cannot be patched or
 verified, and builds with
@@ -405,7 +405,7 @@ The individual upstreams, for reference:
 - **This application's source:** <https://github.com/phc260/kokoro-kindle-reader>, at the
   tag matching the release version (this is also the source in the archive).
 - **espeak-ng:** upstream tag `1.52.0` from <https://github.com/espeak-ng/espeak-ng>,
-  plus the modification and build flags in `native-deps/build-espeak.ps1` (see above). The
+  plus the modification and build flags in `native-deps/build-espeak.py` (see above). The
   archive ships the built modified tree so this does not depend on the upstream tag
   remaining reachable.
 - **Slint:** <https://github.com/slint-ui/slint>, at the version recorded in

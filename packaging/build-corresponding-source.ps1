@@ -221,7 +221,7 @@ if (-not (Test-Path (Join-Path $espkSrc 'phsource\ph_english_us'))) {
            'first (it fetches the 1.52.0 commit and applies the horse-hoarse revert).')
 }
 $espkProvision = Join-Path $stageProvenance 'ESPEAK-PROVISION.txt'
-$espkBuildScriptHash = Get-NormalizedTextSha256 (Join-Path $root 'native-deps\build-espeak.ps1')
+$espkBuildScriptHash = Get-NormalizedTextSha256 (Join-Path $root 'native-deps\build-espeak.py')
 $espkProvisionExpected = ('espeak-ng=1.52.0+horse-hoarse-revert;' +
                           'base=4870adfa25b1a32b4361592f1be8a40337c58d6c' + "`n" +
                           "build-script-sha256=$espkBuildScriptHash")
@@ -330,7 +330,7 @@ Contents
                                    packaging/*.ps1 build and provisioning scripts.
 - espeak-ng-modified-1.52.0/       The exact modified espeak-ng source that was built: the
                                    1.52.0 tree with the horse-hoarse revert in
-                                   phsource/ph_english_us (see build-espeak.ps1). Its .git
+                                   phsource/ph_english_us (see build-espeak.py). Its .git
                                    and build output are excluded.
 - espeak-ng-modified-1.52.0.SHA256SUMS.txt   SHA-256 of every file in that tree.
 - rust-standard-library-$rustPathVersion/   The exact rust-src library/ tree for rustc

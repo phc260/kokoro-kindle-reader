@@ -989,7 +989,7 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   why `THIRD_PARTY_NOTICES.md` names them file by file. Attribution is a *condition* of
   Apache-2.0, not a courtesy — a new port of upstream code adds a row there, and the source
   comment saying where it came from is what makes that row findable later.
-- **`build-espeak.ps1` *modifies* espeak-ng** (the horse-hoarse `o@` revert), so GPLv3
+- **`build-espeak.py` *modifies* espeak-ng** (the horse-hoarse `o@` revert), so GPLv3
   §5(a) requires a stated notice of modification + date. It's in
   `THIRD_PARTY_NOTICES.md`; if the patch changes, update that notice.
 - **Invariant: `LICENSE` + `THIRD_PARTY_NOTICES.md` + `licenses/` must ship inside the

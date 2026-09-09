@@ -128,7 +128,7 @@ statically linked standard library.
   Windows wheel and reviewed PyPI SHA-256 (the release-number-only wheels have different native
   DLL bytes); espeak carries an exact recipe marker, and installer staging reads the marked
   cache directly. The modified espeak build
-  marker includes `build-espeak.ps1`'s normalized SHA-256, so a patch/build-recipe change
+  marker includes `build-espeak.py`'s normalized SHA-256, so a patch/build-recipe change
   forces a rebuild. It also records the source tree's SHA-256 manifest; corresponding-source
   packaging refuses to pair the binary with a source tree that has changed since the build.
 - **Project source is paired with the binaries, including under `-SkipBuild`.** A successful

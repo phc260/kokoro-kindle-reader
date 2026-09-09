@@ -77,7 +77,7 @@ Section "Install"
   File "${STAGING}\icon.ico"
 
   ; GPLv3 obligation, not a nicety: espeak-ng (GPL-3.0-or-later, and MODIFIED by
-  ; native-deps\build-espeak.ps1) and Slint-under-GPL are linked into what we install,
+  ; native-deps\build-espeak.py) and Slint-under-GPL are linked into what we install,
   ; so the license text + notices must accompany the binaries.
   File "${STAGING}\LICENSE"
   File "${STAGING}\THIRD_PARTY_NOTICES.md"

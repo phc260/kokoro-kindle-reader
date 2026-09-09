@@ -285,7 +285,7 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
   carries one too (modified Material Symbol). Flag any new port that doesn't add both the
   notices-file row and the in-file header.
 - **The bundle is GPLv3 even though the source is permissive.** The app links espeak-ng
-  (GPL-3.0-or-later, and *modified* by `native-deps/build-espeak.ps1`) and Slint under its
+  (GPL-3.0-or-later, and *modified* by `native-deps/build-espeak.py`) and Slint under its
   GPL-3.0 option. So `LICENSE` + `THIRD_PARTY_NOTICES.md` + `licenses/` must stay staged
   by `build-installer.ps1` and installed by `installer.nsi`. No shipped artifact may claim
   a bare licence name in its version resource — that's `installer.nsi`'s `VIAddVersionKey`
@@ -334,7 +334,7 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
   or mismatched marker forces a fresh provision, and installer staging reads that cache directly.
   The espeak marker pins immutable
   commit `4870adfa25b1a32b4361592f1be8a40337c58d6c`, the modification, and the normalized
-  `build-espeak.ps1` SHA-256; its build-time source manifest must match the corresponding-source
+  `build-espeak.py` SHA-256; its build-time source manifest must match the corresponding-source
   tree exactly.
 - **`-SkipBuild` still proves source identity.** A full installer build records SHA-256s for
   every tracked source file, both x64 executables, and the Rust toolchain beside the host output.

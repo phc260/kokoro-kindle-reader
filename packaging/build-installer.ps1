@@ -95,7 +95,7 @@ if (-not (Test-Path -LiteralPath $ortProvision -PathType Leaf) -or
            'native-deps\fetch-deps.ps1 so the binaries and notices match components.toml.')
 }
 $espkProvision = Join-Path $nativeRuntime 'ESPEAK-PROVISION.txt'
-$espkBuildScriptHash = Get-NormalizedTextSha256 (Join-Path $root 'native-deps\build-espeak.ps1')
+$espkBuildScriptHash = Get-NormalizedTextSha256 (Join-Path $root 'native-deps\build-espeak.py')
 $espkProvisionExpected = ('espeak-ng=1.52.0+horse-hoarse-revert;' +
                           'base=4870adfa25b1a32b4361592f1be8a40337c58d6c' + "`n" +
                           "build-script-sha256=$espkBuildScriptHash")
@@ -256,7 +256,7 @@ foreach ($record in $projectBuildManifest, $outputBuildRecord, $espkProvision, $
 #     fetch-ocr-models.ps1 still provisions them for DEV (`cargo run` reads native-deps\ocr).
 
 # 3b. License texts. The bundle links espeak-ng (GPL-3.0-or-later, and MODIFIED -- see
-#     native-deps\build-espeak.ps1) and Slint under its GPL-3.0-only option, so the
+#     native-deps\build-espeak.py) and Slint under its GPL-3.0-only option, so the
 #     installed app as a whole is conveyed under GPLv3: the notices + the GPL text must
 #     ship WITH the binaries, not just live in the repo. THIRD_PARTY_NOTICES.md links
 #     LICENSE and licenses\*; the tray/panel open legal.html alongside them.

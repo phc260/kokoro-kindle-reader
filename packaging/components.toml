@@ -143,12 +143,12 @@ version = "1.52.0 commit 4870adfa25b1a32b4361592f1be8a40337c58d6c + horse-hoarse
 upstream = "https://github.com/espeak-ng/espeak-ng (tag 1.52.0, commit 4870adfa25b1a32b4361592f1be8a40337c58d6c)"
 spdx = "GPL-3.0-or-later"
 modified = true
-modification = "phsource/ph_english_us: phoneme o@ reverted from horse-hoarse merger (upstream 5b01dd86), 2026-07-05; see build-espeak.ps1 and THIRD_PARTY_NOTICES.md section 5(a) notice"
+modification = "phsource/ph_english_us: phoneme o@ reverted from horse-hoarse merger (upstream 5b01dd86), 2026-07-05; see build-espeak.py and THIRD_PARTY_NOTICES.md section 5(a) notice"
 # Upstream COPYING.BSD2 contains only the conditions/disclaimer; the checked-in BSD file
 # also reproduces the NetBSD copyright and contributor notice from src/compat/getopt.c.
 notice = ["licenses/espeak-ng/COPYING", "licenses/espeak-ng/COPYING.APACHE", "licenses/espeak-ng/COPYING.BSD2", "licenses/espeak-ng/COPYING.UCD", "licenses/espeak-ng-BSD-2-Clause.txt", "licenses/GPL-3.0.txt"]
-corresponding_source = "native-deps/build-espeak.ps1 (patch + build recipe, itself SHA-256-bound to the cache); corresponding-source-X.Y.Z.zip must match the build-time source SHA-256 manifest"
-provisioned_by = "native-deps/fetch-deps.ps1 -> build-espeak.ps1"
+corresponding_source = "native-deps/build-espeak.py (patch + build recipe, itself SHA-256-bound to the cache); corresponding-source-X.Y.Z.zip must match the build-time source SHA-256 manifest"
+provisioned_by = "native-deps/fetch-deps.py -> build-espeak.py (entered via fetch-deps.ps1 on Windows)"
 staged_by = "packaging/build-installer.ps1"
 sha256_note = "per-build (built with whatever MSVC vswhere -latest finds; not hash-pinned by design)"
 
@@ -163,8 +163,8 @@ modification = "derived from the modified phsource above (the o@ revert affects 
 # COPYING.UCD covers the Unicode Character Database data baked into this directory; it is a
 # DIFFERENT document from licenses/Unicode-3.0.txt (which is for the unicode-ident crate).
 notice = ["licenses/espeak-ng/COPYING", "licenses/espeak-ng/COPYING.UCD", "licenses/GPL-3.0.txt"]
-corresponding_source = "native-deps/build-espeak.ps1; corresponding-source-X.Y.Z.zip"
-provisioned_by = "native-deps/fetch-deps.ps1 -> build-espeak.ps1"
+corresponding_source = "native-deps/build-espeak.py; corresponding-source-X.Y.Z.zip"
+provisioned_by = "native-deps/fetch-deps.py -> build-espeak.py (entered via fetch-deps.ps1 on Windows)"
 staged_by = "packaging/build-installer.ps1"
 
 # --- Cloud Reader OCR models: NOT shipped - downloaded at first run ----------------------
