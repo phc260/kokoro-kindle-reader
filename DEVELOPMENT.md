@@ -103,6 +103,20 @@ self-trigger); the trigger columns list only the source paths that matter day to
 
 ## Releasing
 
+Releases are built by CI from a tag, so the flow below needs nothing installed locally.
+**Building either release artifact by hand needs more than building the app does**, and each
+tool is enforced rather than assumed — a missing one fails the build rather than quietly
+producing an artifact that describes a toolchain it wasn't built with:
+
+| Tool | Needed by | Enforced by |
+|---|---|---|
+| **NSIS 3.12** exactly | `build-installer.ps1` | it reads `makensis /VERSION` and rejects any other version — the installed stub, the staged `COPYING` and `components.toml` all describe that one |
+| **`cargo-about`** (CI pins 0.9.1) | `build-installer.ps1`, via `generate-dependency-licenses.ps1` | that script throws without it; `--fail` on an unreviewed licence is the gate, not a formality |
+| **`rust-src`** component | `build-corresponding-source.ps1` | it needs the sysroot's `lib/rustlib/src/rust/library` tree, and fails loudly when absent |
+
+None of them needs Python; see
+[Building from source](ARCHITECTURE.md#building-from-source).
+
 1. Bump the product version in lockstep (8 `Cargo.toml`s + the two version lines in
    `packaging/installer.nsi`) — the `/bump-version` command does exactly this.
 2. Commit on `main`, push.
