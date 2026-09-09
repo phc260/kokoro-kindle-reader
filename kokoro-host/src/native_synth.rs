@@ -106,9 +106,24 @@ pub struct Controls {
     pub engine: Engine,
 }
 
+/// The execution provider used when `controls.json` says nothing — which is not only a
+/// fresh install. `read_controls` falls back to `Controls::default()` for a missing file,
+/// unparseable JSON (a UTF-8 BOM does it, silently) and a missing `gpu_synth` key alike, so
+/// this constant is what actually runs in every one of those cases. Writing an initial
+/// settings file would not have covered any of them.
+///
+/// Windows keeps the Dawn WebGPU default it shipped with. Linux defaults to CPU because
+/// that is the provider its port has been built and validated for; enabling GPU selection
+/// there is a later, separately validated step (native WebGPU is Vulkan on Linux, and
+/// neither the packaged libraries nor the driver surface has been measured yet).
+#[cfg(windows)]
+const DEFAULT_ENGINE: Engine = Engine::Gpu;
+#[cfg(not(windows))]
+const DEFAULT_ENGINE: Engine = Engine::Cpu;
+
 impl Default for Controls {
     fn default() -> Self {
-        Controls { speed: 1.0, gain: 1.0, chunk: 4, engine: Engine::Gpu }
+        Controls { speed: 1.0, gain: 1.0, chunk: 4, engine: DEFAULT_ENGINE }
     }
 }
 
@@ -162,6 +177,11 @@ struct Req {
 /// as it writes the header.
 pub struct Synthesized {
     pub pcm: Vec<u8>,
+    // Read on the Kindle path (`CMD_SYNTH_ALIGNED`) and not yet on the browser's, which
+    // returns PCM and nothing else — so off Windows this is computed and discarded. That is
+    // deliberate: the marks are the better source and carrying them across is a change to
+    // the response shape *and* the extension, not to this layer. Keep producing them.
+    #[cfg_attr(not(windows), allow(dead_code))]
     pub marks: Vec<WordMark>,
 }
 
@@ -176,6 +196,11 @@ struct BenchReq {
 /// beside a real utterance would time the contention, not the engine.
 enum Job {
     Synth(Req),
+    // The speed test is the settings panel's, and the panel reaches the host over the named
+    // pipe — which only Windows has today. The port plan brings it back on Linux over that
+    // platform's own native IPC, and the GPU stage is what it exists for, so this is kept
+    // rather than gated out.
+    #[cfg_attr(not(windows), allow(dead_code))]
     Bench(BenchReq),
 }
 
@@ -357,6 +382,10 @@ impl NativeSynth {
     ///
     /// Leaves the worker holding a session on `engine` — harmless, since a following
     /// utterance rebuilds on mismatch exactly as it does for a live `gpu_synth` flip.
+    ///
+    /// Unreached off Windows until the Linux panel has a transport; see the `Job::Bench`
+    /// note above.
+    #[cfg_attr(not(windows), allow(dead_code))]
     pub async fn bench(&self, voice: String, engine: Engine) -> Option<Bench> {
         let (reply, rx) = oneshot::channel();
         if self.tx.send(Job::Bench(BenchReq { voice, engine, reply })).is_err() {
@@ -619,6 +648,23 @@ fn run_model(session: &mut Session, ids: &[i64], style: &[f32], speed: f32) -> R
 }
 
 fn commit_session(model_bytes: &[u8], engine: Engine) -> Result<Session, String> {
+    // An explicit `gpu_synth: true` off Windows is honoured as CPU, and said out loud. The
+    // WebGPU EP is Vulkan here and nothing about it has been validated — provisioned
+    // library, `ort` registration, driver — so registering it would trade a working
+    // narrator for a session build that fails, which reads to the user as "Linux can't
+    // speak" rather than "this setting isn't ready". Silence would be worse than either:
+    // the panel would go on showing GPU while CPU did the work. Delete this when the GPU
+    // stage lands and the provider is chosen by what is actually installed.
+    #[cfg(not(windows))]
+    let engine = match engine {
+        Engine::Gpu => {
+            eprintln!(
+                "[native-synth] gpu_synth is set, but GPU synthesis is not yet validated on                  this platform — using CPU"
+            );
+            Engine::Cpu
+        }
+        Engine::Cpu => Engine::Cpu,
+    };
     let ep = match engine {
         Engine::Gpu => WebGPU::default().build(),
         Engine::Cpu => CPU::default().build(),
@@ -728,7 +774,7 @@ fn build_session(model: &Path, engine: Engine) -> Result<Session, String> {
 /// wants. No default execution provider is registered globally — each session picks its own
 /// (GPU or CPU) per the `engine` control, since a running host can switch live.
 pub fn init_ort(exe_dir: &Path) -> Result<(), String> {
-    match ort::init_from(exe_dir.join("onnxruntime.dll")) {
+    match ort::init_from(exe_dir.join(ORT_LIBRARY)) {
         Ok(b) => {
             b.commit();
             Ok(())
@@ -737,7 +783,16 @@ pub fn init_ort(exe_dir: &Path) -> Result<(), String> {
     }
 }
 
-/// The directory the exe lives in, which is where its runtime DLLs are staged.
+/// The ONNX Runtime shared library, by the name the provisioning recipe stages beside the
+/// exe. Named here rather than left to `ort`'s own search because [`init_ort`] must settle
+/// which library the process loads before either worker can start one — and `ort`'s lazy
+/// fallback honours `ORT_DYLIB_PATH` first, so "whichever ran first" is not a stable answer.
+#[cfg(windows)]
+const ORT_LIBRARY: &str = "onnxruntime.dll";
+#[cfg(not(windows))]
+const ORT_LIBRARY: &str = "libonnxruntime.so";
+
+/// The directory the exe lives in, which is where its runtime libraries are staged.
 pub fn exe_dir() -> PathBuf {
     std::env::current_exe()
         .ok()

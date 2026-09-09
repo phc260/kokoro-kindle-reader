@@ -77,6 +77,23 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
   Stop waits for an in-flight Play; two overlapping keystroke sequences aimed at one blind
   toggle would land in an unknowable order). What must never queue behind them is a query or
   a pause, and neither touches that thread — flag anything that puts them there.
+- **The host compiles for Windows AND Linux; keep the split at `cfg(windows)`.** Windows is
+  the Kindle reader (named pipe, `kindle_ctl`, `kindle_state`, `kindle_watch`, `legal`,
+  `split_text`, tray) and its crates are under `[target.'cfg(windows)'.dependencies]`; Linux
+  is the shared core plus the loopback endpoint. Flag anything that puts a Windows-only type,
+  module or crate on the shared path, and any `build.rs` change that branches on
+  `cfg!(windows)` rather than `CARGO_CFG_TARGET_OS` — a build script is compiled for the
+  host, so `cfg!` there answers the wrong question. `cargo check --target
+  x86_64-unknown-linux-gnu` must stay clean including warnings.
+- **CPU is the Linux default in code (`DEFAULT_ENGINE`), never via a written settings file.**
+  `read_controls` falls back to `Controls::default()` for a missing file, unparseable JSON
+  (a UTF-8 BOM does it silently) and a missing key alike. Flag any fix that writes an initial
+  `controls.json` instead, and any silent GPU→CPU substitution: the fallback must log.
+- **`build-espeak.sh` and `build-espeak.ps1` are one recipe in two languages.** Same immutable
+  commit, same single documented modification, same `ffa5cbde…` digest of the patched
+  `phsource/ph_english_us`, same refusal to build a tree carrying anything else. Flag any
+  drift between them, and any suggestion to use a distribution's own libespeak-ng — it is
+  unmodified and the phonemes would differ, audibly and on one OS only.
 - **The browser path must not reach Kindle types.** The host has three contexts:
   `ctx::CoreCtx` (paths, the one `NativeSynth`, the one `HostState`, `available_voices`),
   `pipe::KindleCtx` (core + `KindleCtl` + `KindleState`), and `webserve::WebCtx` (core +

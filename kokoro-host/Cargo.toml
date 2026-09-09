@@ -14,7 +14,12 @@ license = "MIT AND Apache-2.0"
 name = "kokoro-host"
 path = "src/main.rs"
 
-[build-dependencies]
+# Build-dependency cfgs are evaluated against the HOST, not the target, so this is
+# "present when building on Windows" — which is exactly when build.rs can use it. Cross
+# checking a Linux target from a Windows host still gets the crate, and
+# `embed_version_info` no-ops off a Windows *target*; building on Ubuntu gets neither the
+# crate nor the code that calls it.
+[target.'cfg(windows)'.build-dependencies]
 # Embed a Windows version resource (FileDescription/ProductName/icon) so the exe
 # shows a friendly name + icon in Task Manager / Explorer instead of the bare file.
 winresource = "0.1"
@@ -42,6 +47,13 @@ getrandom = "0.3"
 # api-NN feature is required under default-features=false (the 1.27 wheel is API 27, so
 # api-24 — the max ort-sys exposes — is fine, DLLs are backward-compatible).
 ort = { version = "=2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "load-dynamic", "api-24"] }
+
+# --- Windows only ----------------------------------------------------------------
+# The tray, the login registration, the Kindle-control thread and the Kindle watcher are
+# the Windows reader's half of the host. A Linux build compiles none of them (see the
+# `cfg(windows)` module gates in main.rs), so it must not resolve them either — several
+# are Windows-only crates that would fail to build at all.
+[target.'cfg(windows)'.dependencies]
 # System tray + its event loop. tao (Tauri's windowing lib) hosts a windowless
 # message loop; tray-icon adds the tray + menu — the whole GUI surface of the host
 # (the settings panel is a separate process).

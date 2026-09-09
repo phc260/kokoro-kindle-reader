@@ -73,6 +73,15 @@ Load the detail on demand:
 # import lib/DLL + espeak-ng-data). Must run before building kokoro-host.
 native-deps\fetch-deps.ps1
 
+# Same, for a Linux build (CPU ONNX Runtime + the same modified espeak). Separate tree
+# (native-deps/linux/), separate pins; build.rs branches on the TARGET, so cross-checking
+# a Linux target from Windows needs THIS provision, not the Windows one.
+native-deps/fetch-deps.sh
+
+# The host builds for two targets. Windows keeps the tray, the pipe and Kindle; Linux is
+# the core plus the loopback endpoint and nothing else. Both must stay warning-clean.
+cargo check --manifest-path kokoro-host\Cargo.toml --target x86_64-unknown-linux-gnu
+
 # Build + run (Rust, x64). Right-click the tray → Settings to open the panel.
 cargo run --manifest-path kokoro-host\Cargo.toml     # windowless tray daemon
 cargo run --manifest-path kokoro-panel\Cargo.toml    # settings panel (or via the tray)
@@ -877,6 +886,47 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   PID, then logs and gives up when `OpenProcess` keeps failing); the
   patch is **in-memory** (gone when Kindle exits — no persistence/unhook, so disabling
   applies on Kindle's next launch). `kokoro-hook`'s `selftest` guards the slot-18 ABI.
+
+### Two targets, one synth (the Linux port)
+- **The host compiles for Windows and Linux, and the split is `cfg(windows)` on both the
+  modules and the dependencies.** Windows is the Kindle reader: the named pipe, `kindle_ctl`,
+  `kindle_state`, `kindle_watch`, `legal`, `split_text` (the pipe's chunker), the tray, and
+  the `tao`/`tray-icon`/`auto-launch`/`image`/`uiautomation`/`windows` crates. Linux compiles
+  none of them and **resolves** none of them. What is shared is everything above the
+  transports: the synth core, `ctx::CoreCtx`, `HostState`, `webserve`, `kokoro-ocr`.
+  `cargo check --target x86_64-unknown-linux-gnu` must stay clean, warnings included — a
+  dead-code warning there is the honest signal that something is Windows-only and hasn't
+  been marked as such.
+- **`build.rs` branches on `CARGO_CFG_TARGET_OS`, never on `cfg!(windows)`.** A build script
+  is compiled for the HOST, so `#[cfg(windows)]` in it answers the wrong question entirely.
+  The one thing that IS host-gated is `winresource`, because a build-dependency `cfg` is
+  evaluated against the host: it is absent when building on Linux and present (but unused,
+  via the target check inside) when cross-building from Windows.
+- **CPU is the Linux default IN CODE (`DEFAULT_ENGINE`), not in a settings file.**
+  `read_controls` falls back to `Controls::default()` for a missing `controls.json`,
+  unparseable JSON — a UTF-8 BOM does it silently — and a missing `gpu_synth` key alike, so
+  writing an initial settings file would have left the GPU default active in every one of
+  those cases. An explicit `gpu_synth: true` off Windows is answered with CPU **and a log
+  line**: registering an unvalidated Vulkan-backed WebGPU EP would trade a working narrator
+  for a failed session build, and doing it silently would leave the panel showing GPU while
+  CPU did the work.
+- **`fetch-deps.sh` provisions the CPU wheel, not the WebGPU one**, into its own
+  `native-deps/linux/` tree, and `build-espeak.sh` must stay pin-for-pin identical to
+  `build-espeak.ps1`: same immutable commit, same single documented modification, the same
+  `ffa5cbde…` digest of the patched `phsource/ph_english_us`, same refusal to build a tree
+  carrying anything else. A phoneme difference between the platforms would not surface as an
+  error — it would surface as the voice saying something slightly different, on one OS only.
+  **A distribution's own libespeak-ng is not a substitute**: unmodified, probably not 1.52.0,
+  and either difference changes the phonemes.
+- **Do not write `printf '\uXXXX'` in a provisioning script.** It needs bash >= 4.2 and was
+  observed passing the escape through unexpanded, which makes both of the horse-hoarse
+  comparisons false and turns a correct tree into "contains neither sequence". The escapes
+  live in the embedded Python, where they have exactly one meaning; the shell scripts stay
+  ASCII for the same reason the `.ps1` files do.
+- **A dead loopback endpoint is FATAL on Linux and merely logged on Windows.** Windows still
+  has the pipe, so Kindle narrates regardless; Linux has no other client, so a host that
+  swallowed the failure would sit there looking alive with nothing able to reach it — and the
+  extension's probe cannot tell that apart from a host that was never started.
 
 ### Where shared files live
 - **The host has THREE contexts, and the boundary between them is an ownership rule, not

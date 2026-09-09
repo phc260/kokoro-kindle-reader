@@ -3,3 +3,7 @@ icons/* filter=lfs diff=lfs merge=lfs -text
 icons/*.svg !filter !diff !merge text
 # cargo-about's clarification hash is byte-exact, unlike the normalized text inventory.
 licenses/dasp_sample-MIT.txt text eol=lf
+# Shell scripts must keep LF whatever the checkout policy is. core.autocrlf=true would
+# otherwise hand a Windows clone CRLF copies, and bash rejects those at the shebang
+# ("bad interpreter: /usr/bin/env bash^M") - on Linux, from a tree that looks fine here.
+*.sh text eol=lf

@@ -1,8 +1,12 @@
-# Downloaded / built third-party artifacts (all re-created by fetch-deps.ps1).
+# Downloaded / built third-party artifacts (re-created by fetch-deps.ps1 on Windows,
+# fetch-deps.sh on Linux).
 espeak-ng-src/
 espeak-ng-notices/
 onnxruntime/
 runtime/
+# The Linux provision (fetch-deps.sh): its own runtime tree, kept apart from the Windows
+# one so a machine that cross-builds both never mixes the two sets of libraries.
+linux/
 # The pinned OCR models, 9.80 MB, re-created by fetch-ocr-models.ps1. Their digests live in
 # kokoro-ocr/src/lib.rs and in that script, so what is committed is the pin, not the weights.
 ocr/

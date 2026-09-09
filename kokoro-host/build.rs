@@ -1,19 +1,43 @@
-// Link the prebuilt espeak-ng import lib (for the espeak.rs FFI) and stage the Dawn
-// ORT + espeak runtime DLLs + espeak-ng-data next to the host exe. The ONNX model runs
-// on the `ort` crate's WebGPU EP via load-dynamic, so onnxruntime.dll is loaded at
-// runtime (not linked) — no C++ compile anymore.
+// Link the prebuilt espeak-ng library (for the espeak.rs FFI) and stage the ORT + espeak
+// runtime libraries + espeak-ng-data next to the host exe. The ONNX model runs on the `ort`
+// crate's execution providers via load-dynamic, so the runtime library is loaded at run time
+// (not linked) — no C++ compile anymore.
+//
+// **Branch on the TARGET, not on `cfg!(windows)`.** A build script is compiled for the host,
+// so `#[cfg(windows)]` here answers "what am I running on", and the only question that
+// matters is what is being built. `CARGO_CFG_TARGET_OS` is that question. The one exception
+// is `winresource` itself, which is a host-side build dependency and is absent when the host
+// is not Windows (see Cargo.toml) — so that one *is* gated on the host.
 
 use std::env;
 use std::path::{Path, PathBuf};
 
 fn main() {
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
 
     // Give the exe a friendly name + icon in Task Manager / Explorer.
     embed_version_info(&manifest, "Kokoro Kindle Reader");
 
     // kokoro-host and native-deps are both direct children of the repo root.
     let tp = manifest.parent().unwrap().join("native-deps");
+    let out = PathBuf::from(env::var("OUT_DIR").unwrap());
+    let profile_dir = out.ancestors().nth(3).unwrap().to_path_buf(); // .../target/<profile>
+
+    match target_os.as_str() {
+        "windows" => windows_deps(&tp, &profile_dir),
+        "linux" => linux_deps(&tp, &profile_dir),
+        other => panic!(
+            "kokoro-host: no native-dependency recipe for target OS '{other}'. \
+             Windows and Linux are provisioned by native-deps/fetch-deps.ps1 and \
+             native-deps/fetch-deps.sh respectively."
+        ),
+    }
+}
+
+/// Windows: the Dawn ORT runtime + the espeak import lib, and the x86 hook/injector staged
+/// into `resources\` beside the exe.
+fn windows_deps(tp: &Path, profile_dir: &Path) {
     let espk_lib = tp
         .join("espeak-ng-src")
         .join("build-x64")
@@ -42,8 +66,6 @@ fn main() {
     // Stage runtime DLLs + espeak-ng-data next to the host exe so ort finds the Dawn
     // onnxruntime.dll (+ its dxcompiler/dxil/providers_shared) and espeak the phoneme
     // data at runtime.
-    let out = PathBuf::from(env::var("OUT_DIR").unwrap());
-    let profile_dir = out.ancestors().nth(3).unwrap().to_path_buf(); // .../target/<profile>
     for dll in [
         "onnxruntime.dll",
         "onnxruntime_providers_shared.dll",
@@ -93,9 +115,73 @@ fn main() {
     }
 }
 
+/// Linux: the CPU ORT runtime + the espeak shared library, staged beside the exe and found
+/// there at run time via an `$ORIGIN` rpath.
+///
+/// There is no hook, no injector and no `resources\` here: those are Kindle for PC's, and
+/// the Linux host's only client is the browser extension over the loopback endpoint.
+fn linux_deps(tp: &Path, profile_dir: &Path) {
+    let runtime = tp.join("linux").join("runtime");
+    let espk_data = runtime.join("espeak-ng-data");
+
+    // Everything comes from the ONE provisioned tree, unlike the Windows branch, which also
+    // reaches into espeak's CMake build directory. That directory's internal layout has moved
+    // between espeak-ng releases; `fetch-deps.sh` resolves it once, by searching, and stages
+    // the result here beside its provision marker. Reading the marked tree is also what the
+    // packaging rule asks for — the provisioned files, not whatever a build left lying about.
+    for p in [&runtime, &espk_data] {
+        if !p.exists() {
+            panic!(
+                "kokoro-host: missing {} — run native-deps/fetch-deps.sh                  (which downloads the ORT runtime and builds the espeak artifacts) first",
+                p.display()
+            );
+        }
+    }
+    if !runtime.join("libespeak-ng.so").exists() {
+        panic!(
+            "kokoro-host: no libespeak-ng.so in {} — run native-deps/fetch-deps.sh first",
+            runtime.display()
+        );
+    }
+
+    // espeak.rs's FFI links espeak-ng; ort loads libonnxruntime.so itself.
+    println!("cargo:rustc-link-search=native={}", runtime.display());
+    println!("cargo:rustc-link-lib=espeak-ng");
+    // Find the staged copy beside the exe at run time. Without this the loader would only
+    // look in the system paths, where these deliberately are not installed: the espeak here
+    // is a *modified* build pinned for phoneme parity, and a distribution's own libespeak-ng
+    // is not a substitute for it. `$ORIGIN` is expanded by the loader, not the shell, so it
+    // survives being run from anywhere and is what a .deb's private lib dir will rely on too.
+    println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN");
+
+    // Stage the runtime beside the exe, as the Windows branch does. The versioned names
+    // matter as much as the bare one: the loader resolves these by their SONAME.
+    stage_matching(&runtime, profile_dir, "libonnxruntime.so");
+    stage_matching(&runtime, profile_dir, "libespeak-ng.so");
+    copy_dir(&espk_data, &profile_dir.join("espeak-ng-data"));
+}
+
+/// Copy every file in `from` whose name starts with `prefix` into `to` — `libfoo.so`,
+/// `libfoo.so.1`, `libfoo.so.1.2.3` and whatever else the build produced. Copies rather than
+/// re-links the symlinks, so the staged tree stands alone.
+fn stage_matching(from: &Path, to: &Path, prefix: &str) {
+    let Ok(entries) = std::fs::read_dir(from) else { return };
+    for e in entries.flatten() {
+        let name = e.file_name();
+        if name.to_string_lossy().starts_with(prefix) {
+            let _ = std::fs::copy(e.path(), to.join(&name));
+        }
+    }
+}
+
 /// Embed a Windows version resource (FileDescription/ProductName/FileVersion +
 /// the app icon) so the exe isn't just a bare filename in Task Manager / Explorer.
 /// No-op off Windows. The icon is the shared app icon under the repo's icons/.
+///
+/// Host-gated, not target-gated: `winresource` is only a build dependency when the host is
+/// Windows. The target check inside covers the cross case (Windows host, Linux target),
+/// where the crate is present but must not be used.
+#[cfg(windows)]
 fn embed_version_info(manifest: &Path, description: &str) {
     if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;
@@ -128,6 +214,11 @@ fn embed_version_info(manifest: &Path, description: &str) {
         println!("cargo:warning=winresource (host): {e}");
     }
 }
+
+/// No version resource to embed when building on a non-Windows host — and no `winresource`
+/// in the dependency graph to embed it with.
+#[cfg(not(windows))]
+fn embed_version_info(_manifest: &Path, _description: &str) {}
 
 fn copy_dir(from: &std::path::Path, to: &std::path::Path) {
     let _ = std::fs::create_dir_all(to);

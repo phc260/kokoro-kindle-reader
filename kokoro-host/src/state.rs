@@ -38,6 +38,11 @@ pub struct HostState {
     /// without this, a client could open connection after connection and queue enough
     /// measurements to starve Kindle well past the silent gap its narrator tolerates.
     /// One at a time, and a second request is refused rather than queued.
+    ///
+    /// Unused off Windows for now: `CMD_BENCH` arrives over the named pipe, and the Linux
+    /// panel has no native transport yet. Kept rather than gated out — it is the guard the
+    /// speed test needs the moment that transport lands, and the GPU stage is what wants it.
+    #[cfg_attr(not(windows), allow(dead_code))]
     bench_busy: AtomicBool,
 }
 
@@ -55,22 +60,27 @@ impl HostState {
     }
 
     /// Milliseconds since a cell was stamped (`u32::MAX` if never).
+    #[cfg_attr(not(windows), allow(dead_code))]
     pub(crate) fn since(cell: &AtomicU64) -> u32 {
         let last = cell.load(Ordering::Relaxed);
         // last == 0 ("never") saturates to u32::MAX along with any long-idle host.
         now_ms().saturating_sub(last).min(u32::MAX as u64) as u32
     }
 
-    /// Milliseconds since any audio was written (`u32::MAX` if never).
+    /// Milliseconds since any audio was written (`u32::MAX` if never). Answers `CMD_STATUS`,
+    /// so like the bench slot it waits on the Linux panel's transport.
+    #[cfg_attr(not(windows), allow(dead_code))]
     pub fn ms_since_audio(&self) -> u32 {
         Self::since(&self.last_audio_ms)
     }
 
     /// Claim the single bench slot; `true` means someone else already holds it.
+    #[cfg_attr(not(windows), allow(dead_code))]
     pub fn bench_busy_swap(&self, on: bool) -> bool {
         self.bench_busy.swap(on, Ordering::SeqCst)
     }
 
+    #[cfg_attr(not(windows), allow(dead_code))]
     pub fn set_bench_busy(&self, on: bool) {
         self.bench_busy.store(on, Ordering::SeqCst);
     }
