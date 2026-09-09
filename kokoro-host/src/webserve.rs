@@ -193,9 +193,38 @@ impl Endpoint {
             ep.token,
             ep.pairing_string()
         );
-        std::fs::write(&path, body).map_err(|e| format!("write {}: {e}", path.display()))?;
+        write_private(&path, &body).map_err(|e| format!("write {}: {e}", path.display()))?;
         Ok(ep)
     }
+}
+
+/// Write a file only its owner can read.
+///
+/// This one holds the bearer token, which is the entire access control on the synth
+/// endpoint. On Windows the app-data directory is already per-user, and the default DACL
+/// an inherited-permissions write produces is the same answer; on Unix a default umask
+/// gives 0644, so on a shared machine every local account could read the token and post to
+/// `/synth` and `/ocr`. The mode is set at creation AND applied afterwards, because
+/// `OpenOptions::mode` only governs a file being created - and this function also runs when
+/// the file exists but did not parse, which is exactly when it may be a stale 0644 copy
+/// from an earlier version.
+#[cfg(unix)]
+fn write_private(path: &Path, body: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)?;
+    f.write_all(body.as_bytes())?;
+    f.set_permissions(std::fs::Permissions::from_mode(0o600))
+}
+
+#[cfg(not(unix))]
+fn write_private(path: &Path, body: &str) -> std::io::Result<()> {
+    std::fs::write(path, body)
 }
 
 /// Where the port + token live, beside controls.json.

@@ -1,0 +1,128 @@
+name: linux (host build + tests)
+
+# The Ubuntu half of the host. This is the only place the Linux build is actually
+# LINKED and RUN -- development happens on Windows, where `cargo check
+# --target x86_64-unknown-linux-gnu` proves the cfg gating compiles and nothing more.
+# Everything that check cannot see lives past it: whether libespeak-ng.so actually
+# provides the symbols espeak.rs declares, whether the $ORIGIN rpath resolves, whether
+# the provisioned ONNX Runtime loads on a real glibc. So this job provisions for real
+# and builds for real.
+#
+# It does NOT narrate: that needs the model (~325 MB, downloaded by the panel at first
+# run) and an audio device. The synth is exercised by the unit tests, which need no
+# model, no network and no host.
+
+on:
+  push:
+    paths:
+      - 'kokoro-host/**'
+      - 'kokoro-ocr/**'
+      - 'kokoro-protocol/**'
+      - 'native-deps/fetch-deps.sh'
+      - 'native-deps/build-espeak.sh'
+      - '.github/workflows/linux.yml'
+  pull_request:
+    paths:
+      - 'kokoro-host/**'
+      - 'kokoro-ocr/**'
+      - 'kokoro-protocol/**'
+      - 'native-deps/fetch-deps.sh'
+      - 'native-deps/build-espeak.sh'
+      - '.github/workflows/linux.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      # No `lfs: true`: nothing on the Linux path reads an LFS file. The tray icon is the
+      # only `include_bytes!` of one and it is inside a `cfg(windows)` function, so it is
+      # never evaluated here. If that ever changes, add it — an LFS pointer embeds as a
+      # 132-byte text file and fails at run time, not at build time.
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # espeak-ng is built from source, pinned: a distribution's libespeak-ng is
+      # unmodified and probably not 1.52.0, and either difference changes the phonemes.
+      # cmake + a C toolchain are all it needs -- the audio/async/mbrola/sonic backends
+      # are configured OFF precisely so there is nothing else to install.
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential cmake
+
+      # The espeak clone must be a real one: build-espeak.sh checks out an immutable
+      # commit and then refuses to build a tree carrying anything but the one documented
+      # modification, which it verifies by digest.
+      - name: Provision native dependencies
+        run: ./native-deps/fetch-deps.sh
+
+      - name: Show what was provisioned
+        run: |
+          ls -l native-deps/linux/runtime/
+          echo '--- ORT provision marker ---'; cat native-deps/linux/runtime/ORT-PROVISION.txt
+          echo '--- espeak provision marker ---'; cat native-deps/linux/runtime/ESPEAK-PROVISION.txt
+
+      # The step Windows cannot do. A link failure here is the espeak FFI disagreeing with
+      # the library that was actually built.
+      - name: Build host
+        run: cargo build --manifest-path kokoro-host/Cargo.toml
+
+      - name: Test host
+        run: cargo test --manifest-path kokoro-host/Cargo.toml
+
+      - name: Test OCR
+        run: cargo test --manifest-path kokoro-ocr/Cargo.toml
+
+      # Proves the staged tree is complete and the $ORIGIN rpath resolves -- i.e. that the
+      # binary would run, which no amount of cross-checking on Windows can establish.
+      # `ldd` reports "not found" per unresolved library and still exits 0, so the grep is
+      # what turns that into a failure.
+      - name: Verify the staged runtime resolves
+        run: |
+          exe=kokoro-host/target/debug/kokoro-host
+          ls -l "$(dirname "$exe")"/lib*.so* || true
+          echo '--- ldd ---'
+          ldd "$exe"
+          if ldd "$exe" | grep -q 'not found'; then
+            echo 'FAIL: unresolved shared libraries above' >&2
+            exit 1
+          fi
+
+      # The host is a service with no tray on Linux, so there is no window to wait for: it
+      # binds the loopback endpoint and serves. Starting it proves the ONNX Runtime and
+      # espeak both LOAD -- the failure mode a build cannot show. It exits non-zero when the
+      # endpoint cannot be created, so a clean start is itself the assertion.
+      - name: Start the host and probe it
+        run: |
+          cargo run --manifest-path kokoro-host/Cargo.toml &
+          host_pid=$!
+          # Wait for ANY http reply, not a successful one: the request below is deliberately
+          # unauthenticated, so `curl -f` would fail on the correct answer and spin out the
+          # whole timeout. "000" is curl's code for "no response at all".
+          code=000
+          for _ in $(seq 1 30); do
+            code="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/status || true)"
+            # An `if`, not `[ ... ] && break`: Actions runs these steps under `set -e`, and
+            # while a failing left-hand side of `&&` is exempt from that, it is the kind of
+            # exemption a reader has to look up. This says what it means.
+            if [ "$code" != "000" ]; then break; fi
+            if ! kill -0 "$host_pid" 2>/dev/null; then
+              echo 'FAIL: the host exited before the endpoint answered' >&2
+              exit 1
+            fi
+            sleep 1
+          done
+          # Unauthenticated: /status without a bearer token must be refused, not served.
+          # A 200 here would mean the token check regressed.
+          echo "unauthenticated /status -> $code"
+          if [ "$code" = "200" ]; then
+            echo 'FAIL: /status answered without a token' >&2
+            exit 1
+          fi
+          if [ "$code" = "000" ]; then
+            echo 'FAIL: nothing is listening on 8787' >&2
+            exit 1
+          fi
+          kill "$host_pid" 2>/dev/null || true

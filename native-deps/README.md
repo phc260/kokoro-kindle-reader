@@ -24,6 +24,30 @@ Populates the gitignored dep folders alongside them (`runtime/` or `linux/runtim
 
 Both, by a second script: the **Cloud Reader OCR models** (`ocr/`).
 
+### Verified layout facts (Linux)
+
+Read from the pinned wheel and the pinned espeak tree, not assumed — the scripts depend on
+all of these:
+
+- the wheel carries `onnxruntime/capi/libonnxruntime.so.1.27.0` (SONAME
+  `libonnxruntime.so.1`) and `onnxruntime/capi/libonnxruntime_providers_shared.so`. There is
+  **no plain-name symlink**, so `fetch-deps.sh` is what creates the `libonnxruntime.so` that
+  `init_ort` opens by name.
+- `libonnxruntime.so*` as a pattern does **not** match `libonnxruntime_providers_shared.so`.
+  That shim is dlopened by ORT under its plain name, so it is named separately in both the
+  provisioning script and `build.rs`. It was missing from the first draft of both.
+- the wheel's `LICENSE`, `Privacy.md` and `ThirdPartyNotices.txt` sit one level down, under
+  `onnxruntime/` — the same shape as the Windows wheel, so the search is recursive.
+- espeak's shared library lands in `<build>/src/libespeak-ng/`, not `<build>/src/`. The
+  `RUNTIME_OUTPUT_DIRECTORY ..` redirect that puts the DLL in `src/` on Windows is inside an
+  `if (MINGW OR WIN32 OR MSVC)`, and a shared library is a LIBRARY target on Linux. With
+  `SOVERSION 1` / `VERSION 1.52.0` the chain is
+  `libespeak-ng.so -> .so.1 -> .so.1.52.0`.
+- `espeak-ng-data/` is generated at the **build root**, not under `src/`.
+- the ONNX Runtime needs **glibc >= 2.27** and **libstdc++6** (`GLIBCXX_3.4.21`,
+  `CXXABI_1.3.11`). The `manylinux_2_28` tag on the filename is more conservative than the
+  binary actually is.
+
 `ORT-PROVISION.txt` and `ESPEAK-PROVISION.txt` (in whichever runtime tree) identify the
 exact cached recipes. A missing or mismatched marker forces re-provisioning instead of
 silently reusing binaries from an older version. The espeak marker includes the

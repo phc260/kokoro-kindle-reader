@@ -154,11 +154,31 @@ fn linux_deps(tp: &Path, profile_dir: &Path) {
     // survives being run from anywhere and is what a .deb's private lib dir will rely on too.
     println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN");
 
-    // Stage the runtime beside the exe, as the Windows branch does. The versioned names
-    // matter as much as the bare one: the loader resolves these by their SONAME.
-    stage_matching(&runtime, profile_dir, "libonnxruntime.so");
+    // Stage beside the exe exactly what is opened at run time, which is not the same set
+    // as what was provisioned:
+    //
+    //   * `libonnxruntime.so` - by that exact name, by `native_synth::init_ort`. The
+    //     wheel's own file is `libonnxruntime.so.1.27.0` (SONAME `libonnxruntime.so.1`);
+    //     `fetch-deps.sh` is what puts the plain name there. The versioned copy is NOT
+    //     staged: nothing opens it, and it is another 23 MB.
+    //   * `libonnxruntime_providers_shared.so` - dlopened by ORT under its plain name when
+    //     a provider needs it, so it has to be findable on the $ORIGIN rpath. It is not
+    //     matched by the prefix above (`libonnxruntime_` != `libonnxruntime.`), which is
+    //     exactly how it came to be missing here once.
+    //   * every `libespeak-ng.so*` - this one IS linked, so the loader resolves it by
+    //     SONAME (`libespeak-ng.so.1`) rather than by the name the linker was given.
+    //     Staging only the bare name gives a tree that links and then will not run.
+    stage_file(&runtime, profile_dir, "libonnxruntime.so");
+    stage_file(&runtime, profile_dir, "libonnxruntime_providers_shared.so");
     stage_matching(&runtime, profile_dir, "libespeak-ng.so");
     copy_dir(&espk_data, &profile_dir.join("espeak-ng-data"));
+}
+
+/// Copy one named file, resolving a symlink into a real file so the staged tree stands
+/// alone wherever it is unpacked. Silent when absent: the caller has already checked the
+/// provision, and a staging miss must not fail a build that would otherwise run.
+fn stage_file(from: &Path, to: &Path, name: &str) {
+    let _ = std::fs::copy(from.join(name), to.join(name));
 }
 
 /// Copy every file in `from` whose name starts with `prefix` into `to` — `libfoo.so`,

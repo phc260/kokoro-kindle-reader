@@ -253,6 +253,56 @@ CI does this on a `v*` tag or manual dispatch (`.github/workflows/installer.yml`
 Actions artifact pairs the installer with corresponding source; a tag also drafts a release
 with both. The `sapi.yml` workflow builds the DLL + runs the COM smoke test on engine changes
 but does not distribute that bare DLL, and `hook.yml` compile-checks the x86 hook + injector.
+`linux.yml` provisions the Linux native dependencies and builds, tests and starts the host on
+Ubuntu — the only place that build is linked and run.
+
+### Building on Ubuntu
+
+The host builds for Linux; the Windows reader (named pipe, `kindle_ctl`, tray) is
+`cfg(windows)` and is neither compiled nor resolved. What you get is the synth core plus
+the loopback endpoint the browser extension talks to — there is no Kindle for PC here, so
+the Cloud Reader path is the whole product on this platform.
+
+Targets: **Ubuntu 24.04 / 26.04, x86-64.** Verified requirements of the pinned ONNX Runtime,
+read from the wheel itself rather than assumed: **glibc >= 2.27** and **libstdc++6**
+(`GLIBCXX_3.4.21`, `CXXABI_1.3.11`). Both distributions clear those comfortably.
+
+```bash
+# 1. Toolchain. espeak-ng is built from source, so cmake and a C compiler are needed;
+#    the audio/async/mbrola/sonic backends are configured OFF, which is why there is
+#    nothing else to install.
+sudo apt-get install -y build-essential cmake git curl python3
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# 2. One-time: provision the native deps into native-deps/linux/.
+#    Downloads the SHA-256-pinned CPU ONNX Runtime wheel and builds the pinned,
+#    modified espeak-ng. Idempotent; --force to re-provision.
+./native-deps/fetch-deps.sh
+
+# 3. Build + run. No tray: the host is a service that binds 127.0.0.1:8787 and serves.
+#    It exits non-zero if it cannot create that endpoint, because on Linux nothing else
+#    can reach it.
+cargo run --manifest-path kokoro-host/Cargo.toml
+```
+
+The pairing token is written to `$XDG_DATA_HOME/kokoro-kindle-reader/web-endpoint.json`
+(owner-only), which is also where the voice model and the OCR models are downloaded. That is
+one directory rather than the three XDG would suggest; see `app_data_dir` for why, and
+expect it to be split when the panel and desktop integration land.
+
+**If it fails, it will most likely be at one of these**, in the order you will meet them:
+
+| Symptom | Cause |
+|---|---|
+| `build.rs` panics naming `native-deps/linux/runtime` | step 2 was skipped, or it failed partway and left the tree unmarked |
+| `cannot find -lespeak-ng` at link time | the espeak build produced no `.so` — look for the CMake failure above it |
+| undefined references to `espeak_ng_*` | the FFI in `espeak.rs` disagrees with the library that was actually built |
+| `libonnxruntime.so: cannot open shared object file` | the `$ORIGIN` rpath did not resolve; check `ldd target/debug/kokoro-host` |
+| the host exits 1 at startup | the endpoint could not be created — the message names the reason (port 8787 taken is the usual one) |
+
+`ldd target/debug/kokoro-host` is the fastest single check that the staged tree is complete;
+`.github/workflows/linux.yml` runs exactly that sequence on every push, so a green run there
+means the build, the tests and the library resolution all hold on a clean machine.
 
 ## Kindle for PC notes (technical)
 
