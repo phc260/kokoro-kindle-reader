@@ -38,6 +38,11 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 SRC = HERE / "espeak-ng-src"
+# The script's own directory is sys.path[0] when run directly; make that explicit so
+# importing this module from elsewhere (a test, a wrapper) resolves the helper too.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from provision_util import rmtree_force  # noqa: E402 - needs the path above
+
 WINDOWS = os.name == "nt"
 
 # The immutable commit behind 1.52.0, not only the mutable tag name.
@@ -171,7 +176,10 @@ def build():
     phoneme trace, and every one of those would be a runtime dependency to package."""
     build_dir = SRC / BUILD_DIR_NAME
     if (build_dir / "CMakeCache.txt").is_file():
-        shutil.rmtree(build_dir)
+        # rmtree_force, not shutil.rmtree: this tree holds git pack files under
+        # _deps/*-src/.git/, which are read-only, and a plain rmtree dies partway through
+        # having already deleted the artifacts the host links against.
+        rmtree_force(build_dir)
 
     configure = [
         "cmake", "-S", str(SRC), "-B", str(build_dir),
@@ -185,8 +193,13 @@ def build():
         # which is why this is one `cmd /c` line rather than two subprocess calls.
         configure += ["-G", "NMake Makefiles"]
         quoted = " ".join('"%s"' % a if " " in a else a for a in configure)
-        line = '"%s" x64 && %s && cmake --build "%s"' % (vcvarsall(), quoted, build_dir)
-        rc = subprocess.run(["cmd", "/D", "/c", line]).returncode
+        inner = '"%s" x64 && %s && cmake --build "%s"' % (vcvarsall(), quoted, build_dir)
+        # Passed as ONE STRING, not a list. A list goes through `list2cmdline`, which escapes
+        # the embedded quotes as \" and leaves cmd looking for a program literally named
+        # '\"C:\Program Files\...\vcvarsall.bat\"'. A string is handed to CreateProcess
+        # verbatim. This also keeps `/D`, which skips any cmd AutoRun the machine has
+        # configured -- one has already been observed here polluting native stderr.
+        rc = subprocess.run('cmd.exe /D /c "%s"' % inner).returncode
     else:
         rc = subprocess.run(configure).returncode
         if rc == 0:

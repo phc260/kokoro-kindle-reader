@@ -49,6 +49,11 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 WINDOWS = os.name == "nt"
+# The script's own directory is sys.path[0] when run directly; make that explicit so
+# importing this module from elsewhere (a test, a wrapper) resolves the helper too.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from provision_util import rmtree_force  # noqa: E402 - needs the path above
+
 UA = {"User-Agent": "Kokoro-Kindle-Reader-dependency-provisioner/1.0"}
 
 ORT_VERSION = "1.27.0"
@@ -297,8 +302,7 @@ def _stage_ort_notices(wheel, extracted, capi, notices):
     """
     # Start from empty, so a rename upstream cannot leave a stale notice behind describing a
     # version that is no longer the one being shipped.
-    if notices.exists():
-        shutil.rmtree(notices)
+    rmtree_force(notices)
     notices.mkdir(parents=True)
 
     # Searched RECURSIVELY rather than by a fixed path: the wheel's internal layout is
@@ -429,8 +433,7 @@ def provision_espeak(paths, force):
     for stale in (marker, manifest):
         if stale.exists():
             stale.unlink()
-    if (runtime / "espeak-ng-data").exists():
-        shutil.rmtree(runtime / "espeak-ng-data")
+    rmtree_force(runtime / "espeak-ng-data")
 
     print("==> Building espeak-ng (1.52.0 + horse-hoarse revert)")
     rc = subprocess.run([sys.executable, str(HERE / "build-espeak.py")]).returncode
@@ -475,8 +478,7 @@ def provision_espeak_notices(src, force):
     out = HERE / "espeak-ng-notices"
     missing = [c for c in ESPEAK_NOTICES if not nonempty_file(out / c)]
     if force or missing:
-        if out.exists():
-            shutil.rmtree(out)
+        rmtree_force(out)
         out.mkdir(parents=True)
         # Named files, not a wildcard sweep: ship exactly these licence texts, nothing else
         # the clone happens to contain. Each must exist -- a modified GPL binary shipped
