@@ -12,3 +12,5 @@ linux/
 ocr/
 # Build output
 build/
+# Python bytecode from the provisioning recipe.
+__pycache__/

@@ -76,6 +76,8 @@ native-deps\fetch-deps.ps1
 # Same, for a Linux build (CPU ONNX Runtime + the same modified espeak). Separate tree
 # (native-deps/linux/), separate pins; build.rs branches on the TARGET, so cross-checking
 # a Linux target from Windows needs THIS provision, not the Windows one.
+# Both of the above are HARNESSES over one shared recipe, native-deps/fetch-deps.py,
+# which is what actually provisions either platform. Python 3 is required on both.
 native-deps/fetch-deps.sh
 
 # The host builds for two targets. Windows keeps the tray, the pipe and Kindle; Linux is
@@ -910,14 +912,20 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   line**: registering an unvalidated Vulkan-backed WebGPU EP would trade a working narrator
   for a failed session build, and doing it silently would leave the panel showing GPU while
   CPU did the work.
-- **`fetch-deps.sh` provisions the CPU wheel, not the WebGPU one**, into its own
-  `native-deps/linux/` tree, and `build-espeak.sh` must stay pin-for-pin identical to
-  `build-espeak.ps1`: same immutable commit, same single documented modification, the same
-  `ffa5cbde…` digest of the patched `phsource/ph_english_us`, same refusal to build a tree
-  carrying anything else. A phoneme difference between the platforms would not surface as an
-  error — it would surface as the voice saying something slightly different, on one OS only.
-  **A distribution's own libespeak-ng is not a substitute**: unmodified, probably not 1.52.0,
-  and either difference changes the phonemes.
+- **There is ONE provisioning recipe, `native-deps/fetch-deps.py`, for both platforms**, plus
+  `build-espeak.py` beside it. The `.ps1` and `.sh` files are harnesses: they resolve Python
+  and exec the recipe. This replaced a PowerShell script and a bash twin that had to be kept
+  pin-for-pin identical by hand — an invariant that existed only because the recipe was
+  duplicated, and whose failure mode was the worst kind: a phoneme or pin difference does not
+  raise an error, it makes one platform quietly build something else. They had **already**
+  diverged when they were merged: the bash side accepted the first `LICENSE` found anywhere
+  in the wheel, which is precisely the lax check the PowerShell side's own comments warned
+  against. **Don't reintroduce a second recipe** — platform differences belong in the `WHEELS`
+  table and `layout()`, which is where they can be read side by side.
+- **Linux provisions the CPU wheel, Windows the WebGPU one**, into separate trees
+  (`native-deps/linux/` vs `native-deps/runtime/`). **A distribution's own libespeak-ng is
+  not a substitute** for the built one: unmodified, probably not 1.52.0, and either
+  difference changes the phonemes.
 - **Do not write `printf '\uXXXX'` in a provisioning script.** It needs bash >= 4.2 and was
   observed passing the escape through unexpanded, which makes both of the horse-hoarse
   comparisons false and turns a correct tree into "contains neither sequence". The escapes
@@ -1161,6 +1169,14 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   reload-unpacked. `assertAttached` (`content/alive.ts`) is what turns it into a sentence; it is
   checked at each boundary, never once at startup, because the invalidation is mid-session by
   definition.
+- **A Windows App Execution Alias is 0 bytes and still works.** `py`, `python` and
+  `python3` under `%LOCALAPPDATA%\Microsoft\WindowsApps\` are reparse points: 0-byte files
+  that run the installed Python, or open the Store when there isn't one. So a launcher that
+  rejects them on size (or on `Get-Item ... .Length -eq 0`) rejects a perfectly good install
+  — measured on the dev machine, where all three are 0-byte aliases and all three report
+  Python 3.14.7. `native-deps/*.ps1` resolve Python by **running** each candidate and
+  matching `Python 3` in its `--version`, which is the only test that tells a live alias from
+  a dead one.
 - **File locks:** rebuilds hit LNK1104 / "Access is denied" while Kindle holds
   `KokoroSapi.dll` or a running `kokoro-panel.exe`/`kokoro-host.exe` holds its exe — stop
   them first. Port lingers after a crashed session.

@@ -7,3 +7,6 @@ licenses/dasp_sample-MIT.txt text eol=lf
 # otherwise hand a Windows clone CRLF copies, and bash rejects those at the shebang
 # ("bad interpreter: /usr/bin/env bash^M") - on Linux, from a tree that looks fine here.
 *.sh text eol=lf
+# Same for the shared provisioning recipe: it carries a shebang and can be run
+# directly, so a CRLF checkout would break it on Linux exactly as it would a .sh.
+*.py text eol=lf

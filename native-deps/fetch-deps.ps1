@@ -1,346 +1,47 @@
-# Reproducibly provision native-deps/ (the runtime DLLs the host stages +
-# the espeak import lib it links) with no manual venv / hardcoded paths, so a fresh
-# clone or CI runner can build the synth. Populates:
+# Harness. The provisioning recipe is fetch-deps.py, shared with Linux.
 #
-#   native-deps/runtime/*.dll               (Dawn/WebGPU onnxruntime.dll +
-#                                            providers_shared + dxcompiler + dxil,
-#                                            from the onnxruntime-webgpu wheel;
-#                                            espeak-ng.dll from the espeak build)
-#   native-deps/runtime/notices/            (that wheel's OWN licence + notice files,
-#                                            kept because we redistribute its binaries)
-#   native-deps/espeak-ng-src/...           (espeak-ng 1.52.0 x64 + horse-hoarse
-#                                            revert + import lib, via build-espeak.ps1)
+# It used to live here, in 346 lines of PowerShell, beside a bash twin that had to be kept
+# pin-for-pin identical by hand. That invariant existed only because the recipe was
+# duplicated, and its failure mode was the worst kind - a phoneme or pin difference does not
+# raise an error, it makes one platform quietly build something else. One recipe, two thin
+# harnesses.
 #
-# The ONNX model runs on the `ort` crate's WebGPU EP via load-dynamic, so onnxruntime.dll
-# is loaded at runtime (not linked) - no ORT headers/import lib needed.
-#
-# Requires: CMake + MSVC (espeak) and network. Idempotent: pass -Force to re-provision.
+# This keeps the entry point and the parameters callers already use:
+#   .\fetch-deps.ps1            # provision (idempotent)
+#   .\fetch-deps.ps1 -Force     # re-provision from scratch
 param(
     [string]$OrtVersion = '1.27.0',
     [switch]$Force
 )
 $ErrorActionPreference = 'Stop'
-$tp   = $PSScriptRoot                       # native-deps/
-New-Item -ItemType Directory -Force $tp | Out-Null
 
-$ProgressPreference = 'SilentlyContinue'   # fast Invoke-WebRequest
-
-# Pin one exact Windows wheel, not only the release number. PyPI publishes distinct cp311,
-# cp312, cp313 and cp314 wheels for 1.27.0, and their native DLL bytes differ even though
-# their embedded source/version IDs agree. Selecting by the machine's Python would therefore
-# make the shipped payload vary while components.toml continued to describe one provision.
-if ($OrtVersion -cne '1.27.0') {
-    throw ("Unsupported ORT version $OrtVersion. Add its exact win_amd64 wheel URL and " +
-           'SHA-256 here and update packaging/components.toml before provisioning it.')
-}
-$ortWheelName = 'onnxruntime_webgpu-1.27.0-cp312-cp312-win_amd64.whl'
-$ortWheelUrl = ('https://files.pythonhosted.org/packages/df/28/' +
-                '016260c51c877ba5b3eba823b43107e894659e73e0ecf250eb07e801e3c2/' +
-                $ortWheelName)
-$ortWheelExpectedSha256 = '7ef99275b13e8cb9584bd0db7a6f00ebf76095601eeccf7d34749b89ee991c19'
-
-function Test-NonEmptyFile([string]$Path) {
-    return (Test-Path -LiteralPath $Path -PathType Leaf) -and
-           ((Get-Item -LiteralPath $Path -ErrorAction SilentlyContinue).Length -gt 0)
-}
-
-function Test-ExactAsciiText([string]$Path, [string]$Expected) {
-    if (-not (Test-NonEmptyFile $Path)) { return $false }
-    $actual = [System.IO.File]::ReadAllText($Path).Replace("`r`n", "`n").Replace("`r", "`n").TrimEnd("`n")
-    return $actual -ceq $Expected.Replace("`r`n", "`n").Replace("`r", "`n").TrimEnd("`n")
-}
-
-function Test-NonEmptyDirectory([string]$Path) {
-    return (Test-Path -LiteralPath $Path -PathType Container) -and
-           $null -ne (Get-ChildItem -LiteralPath $Path -Recurse -File |
-                      Select-Object -First 1)
-}
-
-function Get-EspkSourceManifestLines([string]$SourceRoot) {
-    $prefix = $SourceRoot.TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
-    $excluded = @('.git', 'build-x64', 'build')
-    Get-ChildItem -LiteralPath $SourceRoot -Recurse -Force -File | Where-Object {
-        $relative = $_.FullName.Substring($prefix.Length)
-        $top = ($relative -split '[\\/]', 2)[0]
-        $excluded -notcontains $top
-    } | Sort-Object FullName | ForEach-Object {
-        $relative = $_.FullName.Substring($prefix.Length).Replace('\', '/')
-        "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $relative
+# Python is a prerequisite on BOTH platforms now; it was not on Windows before, so the
+# failure below says so plainly rather than letting the caller read a "term not recognized".
+#
+# Resolve by RUNNING each candidate, not by inspecting the file on disk. Windows App
+# Execution Aliases (%LOCALAPPDATA%\Microsoft\WindowsApps\python.exe and friends) are
+# 0-byte reparse points that work perfectly when Python is installed and open the Store when
+# it is not - so a size or existence check rejects a good install. Measured on a machine
+# where py, python and python3 are all 0-byte aliases and all three report Python 3.14.7.
+# `--version` on a stub that has nothing behind it does not print "Python 3".
+$python = $null
+foreach ($candidate in @('py', 'python', 'python3')) {
+    if (-not (Get-Command $candidate -ErrorAction SilentlyContinue)) { continue }
+    $reported = & $candidate --version 2>&1
+    if ($LASTEXITCODE -eq 0 -and ($reported -join ' ') -match 'Python 3') {
+        $python = $candidate
+        break
     }
 }
-
-function Get-NormalizedTextSha256([string]$Path) {
-    $encoding = New-Object System.Text.UTF8Encoding($false, $true)
-    $text = $encoding.GetString([System.IO.File]::ReadAllBytes($Path))
-    $normalized = $text.Replace("`r`n", "`n").Replace("`r", "`n")
-    $algorithm = [System.Security.Cryptography.SHA256]::Create()
-    try {
-        return [System.BitConverter]::ToString(
-            $algorithm.ComputeHash($encoding.GetBytes($normalized))
-        ).Replace('-', '').ToLower()
-    } finally {
-        $algorithm.Dispose()
-    }
+if (-not $python) {
+    throw ('Python 3 not found, and it is required to provision native dependencies. ' +
+           'Install it from https://www.python.org/downloads/ (or `winget install Python.Python.3.12`) ' +
+           'and re-run. The provisioning recipe is shared with Linux - see fetch-deps.py.')
 }
 
-# --- 1. onnxruntime-webgpu wheel: the Dawn runtime DLLs + their notices ------
-$runtime = Join-Path $tp 'runtime'
-$notices = Join-Path $runtime 'notices'
-New-Item -ItemType Directory -Force $runtime | Out-Null
-$requiredOrtDlls = @('onnxruntime.dll', 'onnxruntime_providers_shared.dll',
-                     'dxcompiler.dll', 'dxil.dll')
-$missingOrtDlls = @($requiredOrtDlls | Where-Object {
-    -not (Test-NonEmptyFile (Join-Path $runtime $_))
-})
-$ortProvision = Join-Path $runtime 'ORT-PROVISION.txt'
-$ortProvisionExpected = ("onnxruntime-webgpu=$OrtVersion`n" +
-                         "wheel=$ortWheelName`n" +
-                         "wheel-sha256=$ortWheelExpectedSha256")
-# Re-fetch when ANY expected piece is missing, not just the DLLs. Each of these was added
-# after the DLLs, so an existing provision predating it has the DLLs and not it, and gating
-# that on -Force is how an installer build ends up staging licence text that was never
-# fetched (or, for the ORT-*.txt anchors, failing verify-installer-notices later):
-#   - notices\*                        (the wheel's own notice tree)
-#   - notices\ORT-LICENSE.txt          (canonical ORT anchor, this round)
-#   - notices\ORT-ThirdPartyNotices.txt
-if ($Force -or $missingOrtDlls.Count -or
-    -not (Test-ExactAsciiText $ortProvision $ortProvisionExpected) -or
-    -not (Test-Path (Join-Path $notices '*')) -or
-    -not (Test-NonEmptyFile (Join-Path $notices 'ORT-LICENSE.txt')) -or
-    -not (Test-NonEmptyFile (Join-Path $notices 'ORT-ThirdPartyNotices.txt'))) {
-    Write-Host "==> Fetching onnxruntime-webgpu $OrtVersion wheel (Dawn DLLs)"
-    Remove-Item -LiteralPath $ortProvision -Force -ErrorAction SilentlyContinue
-    $wdir = Join-Path $env:TEMP "ort-webgpu-$OrtVersion"
-    $tempPrefix = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd('\') + '\'
-    $wdir = [System.IO.Path]::GetFullPath($wdir)
-    if (-not $wdir.StartsWith($tempPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
-        throw "Unsafe ORT extraction path outside the temporary directory: $wdir"
-    }
-    Remove-Item -LiteralPath $wdir -Recurse -Force -ErrorAction SilentlyContinue
-    New-Item -ItemType Directory -Force $wdir | Out-Null
-    $wheelPath = Join-Path $wdir $ortWheelName
-    $webClient = New-Object System.Net.WebClient
-    $webClient.Headers['User-Agent'] = 'Kokoro-Kindle-Reader-dependency-provisioner/1.0'
-    try {
-        $webClient.DownloadFile($ortWheelUrl, $wheelPath)
-    } finally {
-        $webClient.Dispose()
-    }
-    $ortWheelActualSha256 = (Get-FileHash -LiteralPath $wheelPath -Algorithm SHA256).Hash.ToLower()
-    if ($ortWheelActualSha256 -cne $ortWheelExpectedSha256) {
-        throw ("onnxruntime-webgpu wheel SHA-256 is $ortWheelActualSha256, expected " +
-               "$ortWheelExpectedSha256. Refusing an unverified or wrong-ABI wheel.")
-    }
-    $whl = Get-Item -LiteralPath $wheelPath
-    $zip = [System.IO.Path]::ChangeExtension($whl.FullName, '.zip')
-    Copy-Item $whl.FullName $zip -Force
-    $wex = Join-Path $wdir 'x'
-    Expand-Archive $zip -DestinationPath $wex -Force
-    $capi = Join-Path $wex 'onnxruntime\capi'
-    # Copy exactly the four inventoried wheel DLLs. Remove their cached copies first so a
-    # wheel that drops or renames one cannot be masked by a stale file from an older version.
-    foreach ($dllName in $requiredOrtDlls) {
-        $destDll = Join-Path $runtime $dllName
-        Remove-Item -LiteralPath $destDll -Force -ErrorAction SilentlyContinue
-        $sourceDll = Join-Path $capi $dllName
-        if (-not (Test-NonEmptyFile $sourceDll)) {
-            throw "onnxruntime-webgpu $OrtVersion wheel is missing non-empty $dllName at $capi"
-        }
-        Copy-Item -LiteralPath $sourceDll $destDll -Force
-    }
+$script = Join-Path $PSScriptRoot 'fetch-deps.py'
+$argv = @($script, '--ort-version', $OrtVersion)
+if ($Force) { $argv += '--force' }
 
-    # Keep the wheel's OWN licence + notice files, and keep them next to the DLLs they
-    # describe. We redistribute four binaries out of this wheel, and dxcompiler.dll's
-    # licence (University of Illinois/NCSA) requires its notice accompany them - as does
-    # everything ORT links statically, which is far more than this script can enumerate.
-    # ORT's ThirdPartyNotices.txt is the authoritative record of all of it, and taking it
-    # from the wheel keeps it matched to the exact build being shipped; a copy transcribed
-    # into the repo by hand would silently stop being true at the next version bump.
-    #
-    # Globbed RECURSIVELY rather than by a fixed path: the wheel's internal layout is
-    # upstream's to change, and a path that quietly stops matching would ship the binaries
-    # with none of their notices - which is the failure this whole block exists to fix.
-    # Hence the throw: nothing found is never "fine, carry on".
-
-    # Start from empty so a rename upstream cannot leave a stale notice behind, describing
-    # a version that is no longer the one being shipped. Named directory, not a wildcard.
-    Remove-Item -Recurse -Force $notices -ErrorAction SilentlyContinue
-    New-Item -ItemType Directory -Force $notices | Out-Null
-    # NB: on THIS wheel's layout - LICENSE, Privacy.md and ThirdPartyNotices.txt live one
-    # level down, under onnxruntime\, not at $wex's own root - -Include needs the BARE
-    # directory here. Adding the conventional trailing \* silently matches NOTHING in that
-    # specific one-level-deeper-plus-Recurse combination on PS 5.1 (measured against the
-    # real 1.27.0 wheel: 3 files vs 0). That is a property of the files not sitting
-    # directly under the passed path, not a general PS 5.1 -Include rule - the same two
-    # forms return identical results when they do.
-    $found = @(Get-ChildItem $wex -Recurse -File `
-                             -Include 'LICENSE*', 'NOTICE*', 'ThirdPartyNotices*', 'Privacy*')
-    if ($found.Count -eq 0) {
-        throw ("No licence or notice file found in the onnxruntime-webgpu wheel (looked " +
-               "for LICENSE*/NOTICE*/ThirdPartyNotices*/Privacy* under $wex). Shipping " +
-               "those DLLs without them is exactly what this step exists to prevent - " +
-               "find where upstream moved them and widen the glob.")
-    }
-    # "Some notice file exists" is not enough: the two that redistribution actually turns on
-    # are the wheel's OWN LICENSE (the ORT MIT text) and its ThirdPartyNotices (everything ORT
-    # links statically - Dawn/Tint, DXC, and more). Two ways a lax check goes wrong: Privacy.md
-    # alone satisfying the glob (ships neither), and a vendored dependency's LICENSE.third-party
-    # (or a nested dep's own LICENSE + ThirdPartyNotices) standing in for ORT's own.
-    #
-    # So this is ORT-SPECIFIC, not "any directory that happens to hold a co-located pair": the
-    # shipped DLLs came from $capi (onnxruntime\capi\*.dll, above), so ORT's OWN notices are the
-    # pair at that package's ROOT - the parent of $capi. A vendored dependency lives in some
-    # other subtree, so pinning the source directory to $ortPkgDir is what ties the notices to
-    # the exact package the binaries came out of. Match ORT's names precisely there (not LICENSE*,
-    # which swallows LICENSE.third-party). A layout change upstream throws here with a clear
-    # message rather than silently canonicalizing a namesake from elsewhere in the tree.
-    $licRe = '^LICENSE(\.(txt|md))?$'
-    $tpnRe = '^ThirdPartyNotices(\.txt)?$'
-    $ortPkgDir = Split-Path $capi -Parent    # $wex\onnxruntime - the package root the DLLs came from
-    $ortLic = $found | Where-Object { $_.Name -match $licRe -and $_.DirectoryName -eq $ortPkgDir } | Select-Object -First 1
-    $ortTpn = $found | Where-Object { $_.Name -match $tpnRe -and $_.DirectoryName -eq $ortPkgDir } | Select-Object -First 1
-    if (-not $ortLic -or -not $ortTpn -or $ortLic.Length -eq 0 -or $ortTpn.Length -eq 0) {
-        $licDirs = @($found | Where-Object { $_.Name -match $licRe } | ForEach-Object { $_.DirectoryName })
-        $tpnDirs = @($found | Where-Object { $_.Name -match $tpnRe } | ForEach-Object { $_.DirectoryName })
-        throw ("onnxruntime-webgpu wheel: ORT's own non-empty LICENSE and ThirdPartyNotices " +
-               "were not both found at the package root $ortPkgDir (the parent of the DLL dir " +
-               "$capi). Found " +
-               "LICENSE in [$($licDirs -join '; ')]; ThirdPartyNotices in [$($tpnDirs -join '; ')]. " +
-               "The wheel's own notices must come from the package the shipped DLLs came out of, " +
-               "not a vendored subtree; if upstream moved them, update this anchor.")
-    }
-    foreach ($f in $found) {
-        # Preserve the file's path RELATIVE TO $wex, not just its basename. Two distinct
-        # files that share both a basename and their immediate parent directory's name
-        # (e.g. two different vendored sub-packages each carrying their own LICENSE, one
-        # nested another level deeper) would still collide under a basename-plus-one-level
-        # disambiguation scheme, and Copy-Item -Force would silently drop the second one.
-        # A full relative path cannot collide, because Expand-Archive already extracted
-        # every file in $wex to a distinct path.
-        $rel = $f.FullName.Substring($wex.Length).TrimStart('\', '/')
-        $dest = Join-Path $notices $rel
-        New-Item -ItemType Directory -Force (Split-Path $dest -Parent) | Out-Null
-        Copy-Item $f.FullName $dest -Force
-    }
-
-    # Emit the VERIFIED ORT pair - $ortLic/$ortTpn, pinned above to the package root the DLLs
-    # came from - under fixed, ORT-SPECIFIC canonical names at the notices root. This is the
-    # anchor the installer verifier checks: the original files keep ORT's own names at the
-    # wheel's own nested path, so requiring THOSE by path would mean hardcoding an
-    # upstream-controlled layout; a file named ORT-LICENSE.txt sitting directly under
-    # licenses\onnxruntime\ is one nothing else in the tree produces, so requiring it by exact
-    # path is a check no namesake can pass. Byte copies of the package-root files, so the
-    # canonical anchor IS ORT's text, not a stand-in.
-    Copy-Item $ortLic.FullName (Join-Path $notices 'ORT-LICENSE.txt') -Force
-    Copy-Item $ortTpn.FullName (Join-Path $notices 'ORT-ThirdPartyNotices.txt') -Force
-    [System.IO.File]::WriteAllText(
-        $ortProvision,
-        $ortProvisionExpected.Replace("`n", "`r`n") + "`r`n",
-        [System.Text.Encoding]::ASCII
-    )
-}
-
-# --- 2. espeak-ng x64 (clone + build) ---------------------------------------
-# build-espeak.ps1 needs the source clone to exist (it's gitignored, so a fresh
-# checkout / CI runner won't have it). Fetch the immutable 1.52.0 commit directly;
-# a shallow clone of a moved tag would not contain the commit the build requires.
-$espkSrc = Join-Path $tp 'espeak-ng-src'
-$espkCommit = '4870adfa25b1a32b4361592f1be8a40337c58d6c'
-if (-not (Test-Path (Join-Path $espkSrc '.git'))) {
-    & git init --quiet $espkSrc
-    if ($LASTEXITCODE) { throw 'git init espeak-ng failed' }
-}
-# Also recover an interrupted first fetch, which leaves .git but no HEAD.
-& git -C $espkSrc rev-parse --verify --quiet HEAD *> $null
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "==> Fetching espeak-ng commit $espkCommit"
-    & git -C $espkSrc fetch --depth 1 https://github.com/espeak-ng/espeak-ng.git $espkCommit
-    if ($LASTEXITCODE) { throw 'git fetch espeak-ng commit failed' }
-    & git -C $espkSrc checkout --quiet --detach $espkCommit
-    if ($LASTEXITCODE) { throw 'git checkout espeak-ng commit failed' }
-}
-
-$espkDll = Join-Path $tp 'espeak-ng-src\build-x64\src\espeak-ng.dll'
-$espkRuntimeDll = Join-Path $runtime 'espeak-ng.dll'
-$espkRuntimeData = Join-Path $runtime 'espeak-ng-data'
-$espkProvision = Join-Path $runtime 'ESPEAK-PROVISION.txt'
-$espkBuildScriptHash = Get-NormalizedTextSha256 (Join-Path $tp 'build-espeak.ps1')
-$espkProvisionExpected = ('espeak-ng=1.52.0+horse-hoarse-revert;' +
-                          'base=4870adfa25b1a32b4361592f1be8a40337c58d6c' + "`n" +
-                          "build-script-sha256=$espkBuildScriptHash")
-$espkSourceManifest = Join-Path $runtime 'espeak-ng-source.SHA256SUMS.txt'
-if ($Force -or -not (Test-NonEmptyFile $espkRuntimeDll) -or
-    -not (Test-NonEmptyDirectory $espkRuntimeData) -or
-    -not (Test-ExactAsciiText $espkProvision $espkProvisionExpected) -or
-    -not (Test-NonEmptyFile $espkSourceManifest)) {
-    Remove-Item -LiteralPath $espkProvision, $espkSourceManifest -Force -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath $espkRuntimeData -Recurse -Force -ErrorAction SilentlyContinue
-    Write-Host '==> Building espeak-ng (x64, 1.52.0 + horse-hoarse revert)'
-    & (Join-Path $PSScriptRoot 'build-espeak.ps1')
-    if ($LASTEXITCODE) { throw 'build-espeak.ps1 failed' }
-    if (-not (Test-NonEmptyFile $espkDll)) { throw "espeak-ng build produced no DLL at $espkDll" }
-    $espkData = Join-Path $tp 'espeak-ng-src\build-x64\espeak-ng-data'
-    if (-not (Test-NonEmptyDirectory $espkData)) {
-        throw "espeak-ng build produced no data tree at $espkData"
-    }
-    Copy-Item -LiteralPath $espkDll $espkRuntimeDll -Force
-    Copy-Item -LiteralPath $espkData $espkRuntimeData -Recurse -Force
-    [System.IO.File]::WriteAllLines(
-        $espkSourceManifest,
-        [string[]](Get-EspkSourceManifestLines $espkSrc),
-        [System.Text.Encoding]::ASCII
-    )
-}
-
-# --- 2a. espeak-ng's OWN licence + notice files -----------------------------
-# We ship a MODIFIED espeak-ng.dll + espeak-ng-data/ (GPL-3.0-or-later), and parts of the
-# espeak-ng tree carry ADDITIONAL licences that must accompany the binaries: COPYING is the
-# GPLv3 text, COPYING.APACHE / COPYING.BSD2 cover code shims, and COPYING.UCD covers the
-# Unicode Character Database data baked into espeak-ng-data/. COPYING.UCD is NOT the same
-# document as licenses/Unicode-3.0.txt (that is the Unicode v3 licence for the unicode-ident
-# crate) - the two are distinct and both are required. Provisioned from the exact 1.52.0
-# clone we build, so they stay matched to the shipped DLL, the same way the ORT notices are.
-# Re-provision when missing (a later addition, like the ORT notices) so an old provision
-# doesn't ship the DLL with no espeak notices.
-$espkNotices = Join-Path $tp 'espeak-ng-notices'
-$requiredEspkNotices = @('COPYING', 'COPYING.APACHE', 'COPYING.BSD2', 'COPYING.UCD')
-$missingEspkNotices = @($requiredEspkNotices | Where-Object {
-    -not (Test-NonEmptyFile (Join-Path $espkNotices $_))
-})
-if ($Force -or $missingEspkNotices.Count) {
-    Remove-Item -LiteralPath $espkProvision -Force -ErrorAction SilentlyContinue
-    Remove-Item -Recurse -Force $espkNotices -ErrorAction SilentlyContinue
-    New-Item -ItemType Directory -Force $espkNotices | Out-Null
-    # Named files, not a wildcard sweep of the tree: ship exactly the four licence texts,
-    # nothing else the clone happens to contain. Each must exist - a modified GPL binary
-    # shipped without its licence text is the failure this whole block prevents.
-    foreach ($c in $requiredEspkNotices) {
-        $src = Join-Path $espkSrc $c
-        if (-not (Test-NonEmptyFile $src)) {
-            throw ("espeak-ng licence file $c not found in the 1.52.0 clone at $espkSrc. " +
-                   'Shipping the modified espeak-ng.dll without its notices is what this ' +
-                   'step exists to prevent - re-clone with -Force.')
-        }
-        Copy-Item $src $espkNotices -Force
-    }
-}
-foreach ($noticeName in $requiredEspkNotices) {
-    if (-not (Test-NonEmptyFile (Join-Path $espkNotices $noticeName))) {
-        throw "espeak-ng notice provision is incomplete after copying: $noticeName"
-    }
-}
-# Write this last: the marker means the DLL, data, exact source manifest, and complete notice
-# set all belong to the named build recipe. Any earlier failure must leave the cache unmarked.
-[System.IO.File]::WriteAllText(
-    $espkProvision,
-    $espkProvisionExpected.Replace("`n", "`r`n") + "`r`n",
-    [System.Text.Encoding]::ASCII
-)
-
-Write-Host '==> native-deps provisioned:'
-Write-Host ("    runtime DLLs    : {0}" -f (Get-ChildItem $runtime -Filter '*.dll').Count)
-# -Recurse: the wheel's notice files sit one level down (under notices\onnxruntime\), so a
-# non-recursive count reads 0 and looks like a failure when provisioning actually succeeded.
-Write-Host ("    ORT notices     : {0}" -f @(Get-ChildItem $notices -Recurse -File -ErrorAction SilentlyContinue).Count)
-Write-Host ("    espeak notices  : {0}" -f @(Get-ChildItem $espkNotices -File -ErrorAction SilentlyContinue).Count)
-Write-Host ("    espeak-ng.dll   : {0}" -f (Test-Path $espkDll))
+& $python @argv
+if ($LASTEXITCODE -ne 0) { throw "fetch-deps.py failed ($LASTEXITCODE)" }

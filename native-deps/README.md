@@ -4,6 +4,27 @@
 Populates the gitignored dep folders alongside them (`runtime/` or `linux/runtime/`, plus
 `espeak-ng-src/`; re-created by the scripts).
 
+## One recipe, two harnesses
+
+`fetch-deps.py` and `build-espeak.py` are the recipe, shared by both platforms.
+`fetch-deps.ps1`, `fetch-deps.sh`, `build-espeak.ps1` and `build-espeak.sh` are harnesses:
+they resolve Python and exec the recipe, so the entry points and flags callers already use
+keep working.
+
+That is a deliberate reversal. These were once a PowerShell script and a bash twin that had
+to be kept pin-for-pin identical **by hand** — an invariant that existed only because the
+recipe was duplicated, and whose failure mode was the worst kind: a phoneme or pin
+difference raises no error, it just makes one platform quietly build something else. They
+had already drifted by the time they were merged (the bash side accepted the first `LICENSE`
+found anywhere in the wheel, exactly the lax check the PowerShell side's comments warned
+against). Platform differences now live in the `WHEELS` table and `layout()`, where they can
+be read side by side.
+
+**Python 3 is therefore a prerequisite on both platforms.** The recipe uses only the standard
+library. The `.ps1` harnesses resolve it by *running* `py`/`python`/`python3` and matching
+`Python 3` in the output — not by looking at the file, because a Windows App Execution Alias
+is a 0-byte reparse point that works perfectly when Python is installed.
+
 **Windows** (`fetch-deps.ps1` -> `runtime/`):
 
 - the **Dawn/WebGPU runtime DLLs** from the exact SHA-256-pinned
@@ -70,6 +91,12 @@ On Linux:
 ./fetch-deps.sh          # same, for linux/runtime/ (--force to redo)
 ```
 
+Or call the recipe directly on either platform, which is what both harnesses do:
+
+```bash
+python3 native-deps/fetch-deps.py --force
+```
+
 `kokoro-host`'s `build.rs` panics if the dep folders for the target being built are missing,
 so this must run before building the host — and it branches on the **target**, so
 cross-checking a Linux target needs the Linux provision, not the Windows one. It also stages
@@ -78,18 +105,14 @@ Linux). The ONNX model runs on the `ort` crate's execution providers via load-dy
 the runtime library is loaded at run time (not linked) — no ORT headers/import lib
 needed.
 
-Requires CMake + a C toolchain (to build espeak) and network: MSVC on Windows, gcc/clang on
-Linux. `build-espeak.ps1` / `build-espeak.sh` are called by their respective fetch scripts;
-each builds espeak-ng 1.52.0 commit `4870adfa25b1a32b4361592f1be8a40337c58d6c` with the
-horse-hoarse phoneme revert this model expects.
+Requires Python 3, CMake + a C toolchain (to build espeak) and network: MSVC on Windows,
+gcc/clang on Linux. `build-espeak.py` is invoked by `fetch-deps.py`; it builds espeak-ng
+1.52.0 commit `4870adfa25b1a32b4361592f1be8a40337c58d6c` with the horse-hoarse phoneme revert
+this model expects, pins the patched `phsource/ph_english_us` to digest `ffa5cbde...`, and
+refuses to build a tree carrying any modification beyond that one.
 
-**The two espeak recipes must stay pin-for-pin identical**: same immutable commit, same
-single documented modification, the same `ffa5cbde...` digest of the patched
-`phsource/ph_english_us`, and the same refusal to build a tree carrying anything else. They
-differ only in how they drive CMake. A phoneme difference between the platforms would not
-surface as an error — it would surface as the voice saying something slightly different, on
-one OS only. **A distribution's own libespeak-ng is not a substitute**: it is unmodified, and
-probably not 1.52.0 either, and either difference changes the phonemes.
+**A distribution's own libespeak-ng is not a substitute**: it is unmodified, and probably not
+1.52.0 either, and either difference changes the phonemes — audibly, and with no error.
 
 ## fetch-ocr-models.ps1
 

@@ -215,13 +215,13 @@ against the engine the user actually has installed.
 
 ## Building from source
 
-Prerequisites: Rust (x64 + the `i686-pc-windows-msvc` target for the SAPI DLL) and Visual
-Studio with the MSVC toolchain + CMake. **No Python** — `fetch-deps.ps1` downloads the
-wheel with `System.Net.WebClient` and unpacks it with `Expand-Archive`, and pins it by
-digest precisely so that nothing depends on what a local Python would have resolved.
-(`fetch-deps.sh` does need `python3` on Linux, which has no equivalent built-ins; it ships
-in Ubuntu's base system.) Building the packaged **installer** needs a further toolchain —
-see [Releasing](DEVELOPMENT.md#releasing). Get the source by **cloning with Git LFS** — not from a release's auto-generated "Source code" archive, which
+Prerequisites: Rust (x64 + the `i686-pc-windows-msvc` target for the SAPI DLL), Visual
+Studio with the MSVC toolchain + CMake, and **Python 3** — the provisioning recipe
+(`native-deps/fetch-deps.py`) is one shared script for Windows and Linux, and the `.ps1`
+and `.sh` files beside it are thin harnesses that call it. It uses only the standard
+library, so any Python 3 will do; nothing about the pinned wheel depends on which one, and
+the digest check is what guarantees that. Building the packaged **installer** needs a
+further toolchain — see [Releasing](DEVELOPMENT.md#releasing). Get the source by **cloning with Git LFS** — not from a release's auto-generated "Source code" archive, which
 doesn't resolve LFS (see [DEVELOPMENT.md](DEVELOPMENT.md)).
 
 ```powershell

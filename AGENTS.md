@@ -89,11 +89,13 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
   `read_controls` falls back to `Controls::default()` for a missing file, unparseable JSON
   (a UTF-8 BOM does it silently) and a missing key alike. Flag any fix that writes an initial
   `controls.json` instead, and any silent GPU→CPU substitution: the fallback must log.
-- **`build-espeak.sh` and `build-espeak.ps1` are one recipe in two languages.** Same immutable
-  commit, same single documented modification, same `ffa5cbde…` digest of the patched
-  `phsource/ph_english_us`, same refusal to build a tree carrying anything else. Flag any
-  drift between them, and any suggestion to use a distribution's own libespeak-ng — it is
-  unmodified and the phonemes would differ, audibly and on one OS only.
+- **There is ONE provisioning recipe for both platforms: `native-deps/fetch-deps.py` (plus
+  `build-espeak.py`).** The `.ps1` and `.sh` files are harnesses that resolve Python and exec
+  it. Flag any change that puts recipe logic back into a harness, or adds a second
+  platform-specific script — the two former twins had already drifted when they were merged.
+  Platform differences belong in the `WHEELS` table and `layout()`. Also flag any suggestion
+  to use a distribution's own libespeak-ng: it is unmodified and the phonemes would differ,
+  audibly and on one OS only.
 - **The browser path must not reach Kindle types.** The host has three contexts:
   `ctx::CoreCtx` (paths, the one `NativeSynth`, the one `HostState`, `available_voices`),
   `pipe::KindleCtx` (core + `KindleCtl` + `KindleState`), and `webserve::WebCtx` (core +

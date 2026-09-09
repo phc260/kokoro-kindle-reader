@@ -64,6 +64,14 @@ jobs:
       - name: Install cargo-about (pinned)
         run: cargo install cargo-about --version 0.9.1 --locked --features cli
 
+      # The provisioning recipe is Python now (one recipe for Windows and Linux; the .ps1
+      # is a harness). windows-latest happens to ship a Python, but pin one rather than
+      # depend on a runner image: this is the release path, and "the image changed" is not a
+      # failure anyone wants to diagnose from a tagged build.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       # Provision native-deps/: the Dawn runtime DLLs (from the exact hash-pinned
       # onnxruntime-webgpu cp312 wheel) + an espeak-ng x64 build. Downloads + a build;
       # the slowest step.
