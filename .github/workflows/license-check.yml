@@ -14,10 +14,16 @@ on:
       - '.gitattributes'
       - 'packaging/about.toml'
       - 'packaging/about.hbs'
+      # The checks are Python; the .ps1 beside each one is a harness its callers still use.
+      - 'packaging/generate_dependency_licenses.py'
+      - 'packaging/verify_dependency_licenses.py'
+      - 'packaging/test_dependency_licenses.py'
+      - 'packaging/source_notices.py'
+      - 'packaging/dotnet_compat.py'
       - 'packaging/generate-dependency-licenses.ps1'
       - 'packaging/verify-dependency-licenses.ps1'
       - 'packaging/test-dependency-licenses.ps1'
-      - 'packaging/source-notices.ps1'
+      - 'packaging/python3.ps1'
       - 'packaging/source-notices.json'
       - 'legal.html'
       - 'legal.rs'
@@ -25,6 +31,7 @@ on:
       - 'packaging/verify-component-hashes.ps1'
       - 'packaging/license-texts.sha256'
       - 'packaging/verify-license-texts.ps1'
+      - 'packaging/verify-license-texts.py'
       # The installer/staging/notice-verifier/corresponding-source scripts control what ships;
       # touching them re-runs this gate at review time (the full extraction proof still runs on
       # the tag build in installer.yml, which needs the built -setup.exe).
@@ -52,6 +59,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Every check below is a Python script behind a .ps1 harness. windows-latest happens
+      # to ship a Python, but pin one rather than depend on a runner image: "the image
+      # changed" is not a failure anyone wants to diagnose from a licence gate.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -78,7 +92,10 @@ jobs:
         shell: pwsh
         run: ./packaging/generate-dependency-licenses.ps1
 
-      - name: Test notice-verification regressions (Windows PowerShell 5.1)
+      # The checks are Python, but keep driving them through the harness under Windows
+      # PowerShell 5.1: that is how CI and a developer invoke them, and it is the harness's
+      # App-Execution-Alias resolution that this proves still works.
+      - name: Test notice-verification regressions (via the PowerShell 5.1 harness)
         shell: powershell
         run: ./packaging/test-dependency-licenses.ps1
 

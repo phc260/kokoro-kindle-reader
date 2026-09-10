@@ -24,8 +24,9 @@ habit of not being checked at all.
 
 ## Packaging notice regression checks
 
-`powershell -NoProfile -File packaging/test-dependency-licenses.ps1` runs 26 small offline
-checks with invented notices. It covers exact UTF-8/HTML round trips, failed-clarification
+`python3 packaging/test_dependency_licenses.py` runs 26 small offline
+checks with invented notices (or `packaging/test-dependency-licenses.ps1`, the harness
+CI uses). It covers exact UTF-8/HTML round trips, failed-clarification
 fallbacks, changed/missing text, wrong-crate and wrong-version attribution, missing graph
 inventory, malformed hashes, and leading-comment extraction without collecting strings
 or documentation examples from code. The full appendix generator is also exercised with
