@@ -396,7 +396,9 @@ source above).
 
 Rebuilding
 ----------
-1. Install Git, CMake + MSVC, NSIS 3.12, and rustup. Install the recorded Rust toolchain:
+1. Install Git, CMake + MSVC, NSIS 3.12, Python 3, and rustup. (Python runs the native
+   dependency provisioning in step 4; any Python 3 will do, and it is not needed to run the
+   installed application.) Install the recorded Rust toolchain:
    ``rustup toolchain install $rustRelease --component rust-src --target i686-pc-windows-msvc``.
 2. Open PowerShell in the extracted kokoro-kindle-reader/ directory and run
    ``rustup override set $rustRelease``. Verify ``rustc --version --verbose`` reports

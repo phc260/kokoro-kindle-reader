@@ -154,3 +154,8 @@ jobs:
             GPL-covered binaries is the `corresponding-source-*.zip` attached to this
             release; the licence notices ship inside the installer. See `LICENSING.md` and
             `THIRD_PARTY_NOTICES.md` in the source for the full breakdown.
+
+            **Building from source** (including from that archive) now also needs
+            **Python 3**: the native-dependency provisioning is a Python script, shared with
+            the in-progress Linux port. Any Python 3 will do. It is *not* needed to install
+            or run the app — the installer bundles everything.
