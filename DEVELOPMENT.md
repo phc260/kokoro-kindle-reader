@@ -113,7 +113,7 @@ producing an artifact that describes a toolchain it wasn't built with:
 | **NSIS 3.12** exactly | `build-installer.ps1` | it reads `makensis /VERSION` and rejects any other version — the installed stub, the staged `COPYING` and `components.toml` all describe that one |
 | **`cargo-about`** (CI pins 0.9.1) | `build-installer.ps1`, via `generate-dependency-licenses.ps1` | that script throws without it; `--fail` on an unreviewed licence is the gate, not a formality |
 | **`rust-src`** component | `build-corresponding-source.ps1` | it needs the sysroot's `lib/rustlib/src/rust/library` tree, and fails loudly when absent |
-| **Python 3** | `native-deps/fetch-deps.ps1`, which is a harness over the shared `fetch-deps.py` | the harness resolves it by *running* `py`/`python`/`python3` and refuses with an install hint if none reports a version |
+| **Python 3** | `native-deps/fetch-deps.ps1` and the `packaging/` licence-notice checks — both are harnesses over shared Python | each resolves it by *running* `py`/`python`/`python3` and refuses with an install hint if none reports a version |
 
 See [Building from source](ARCHITECTURE.md#building-from-source).
 

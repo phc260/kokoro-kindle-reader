@@ -17,27 +17,49 @@ drafts a GitHub Release with both attached — see [`../DEVELOPMENT.md`](../DEVE
 |---|---|
 | `build-installer.ps1` | Release-builds both x64 crates, builds the three x86 artifacts, records source/toolchain provenance, stages everything into `staging\`, then runs `makensis`. `-SkipBuild` accepts only matching recorded outputs. |
 | `installer.nsi` | The NSIS script: install/uninstall sections, the elevation hooks, the Run value, the model-deletion prompt. Carries the product `VERSION`. |
-| `generate-dependency-licenses.ps1` | Runs `cargo about --locked` against each shipped crate's `Cargo.lock` and appends exact packaged licence files and source copyright headers; called automatically by `build-installer.ps1`. Needs `cargo install cargo-about --locked --features cli` once. |
+| `generate_dependency_licenses.py` | Runs `cargo about --locked` against each shipped crate's `Cargo.lock` and appends exact packaged licence files and source copyright headers; called automatically by `build-installer.ps1`. Needs `cargo install cargo-about --locked --features cli` once. |
 | `about.toml`, `about.hbs` | `cargo-about`'s config (the accepted-licence list; `GPL-3.0-only` granted per-crate to Slint only) and output template. |
-| `verify-dependency-licenses.ps1`, `test-dependency-licenses.ps1` | Verify every appendix text hash and block count, plus clarification/embedded-source hashes per crate/version (also inside the extracted installer); offline regression fixtures run on PowerShell 5.1. |
+| `verify_dependency_licenses.py`, `test_dependency_licenses.py` | Verify every appendix text hash and block count, plus clarification/embedded-source hashes per crate/version (also inside the extracted installer); 26 offline regression fixtures, driven in CI through the PS 5.1 harness. |
 
-**The four licence-notice scripts are one unit, not four.** `source-notices.ps1` is a
-function library dot-sourced by both `generate-` and `verify-dependency-licenses.ps1`;
-`generate-` invokes `verify-` at the end of each crate; and `test-dependency-licenses.ps1`
-**parses `generate-dependency-licenses.ps1`'s AST** and dot-sources individual function
-bodies out of it to test them in isolation. So renaming or reshaping a function in the
-generator breaks the tests somewhere that never mentions it, and none of the four can be
-moved, ported or reorganized without the other three. Their output contract is byte-exact
-as well: the generated HTML is staged into the installer and hashed by
-`verify-installer-notices.ps1`, so "it still runs" is not evidence a change was safe --
-regenerate and compare digests.
-| `source-notices.json`, `source-notices.ps1` | Reviewed versions, source paths, line ranges and complete-notice hashes for additional embedded terms; generation rejects changed source or unreviewed versions. |
+**These four are Python now, and the coupling that made them one unit is gone.**
+PowerShell cannot import a script without executing it, so `test-dependency-licenses.ps1`
+used to **parse `generate-dependency-licenses.ps1`'s AST**, find two functions by name and
+dot-source their extents -- which meant renaming a function in the generator broke the
+tests somewhere that never mentioned it, and none of the four could be moved or reorganized
+without the other three. `test_dependency_licenses.py` imports them instead. What remains
+is ordinary: `source_notices.py` is a library, `generate_` calls `verify_` after each
+crate, and `dotnet_compat.py` holds the .NET behaviours the output hashes depend on. The
+`.ps1` files beside them are harnesses so `build-installer.ps1`,
+`verify-installer-notices.ps1` and `license-check.yml` call them exactly as before.
+
+Their output contract is still byte-exact -- the generated HTML is staged into the
+installer and hashed by `verify-installer-notices.ps1` -- so "it still runs" is not
+evidence a change was safe: regenerate and compare digests. **Two things changed
+deliberately in the port**, both because the PowerShell was wrong rather than merely
+different, and neither alters a notice, a hash or a count:
+
+- **Ordering is ordinal, not `Sort-Object`.** That cmdlet compares with the *current
+  culture*: it treats `-` as ignorable (so `autocfg` sorted before `auto-launch`), and
+  under `da-DK` it sorts `aa` after `z`. The same lockfile therefore produced different
+  bytes for a Danish developer than an American one -- a poor property for an artifact CI
+  compares by hash between the build tree and the extracted installer. See
+  `dotnet_compat.ordinal_key`.
+- **A `licenses/` subdirectory is labelled with its real on-disk name.** PowerShell echoed
+  back the lowercase path it had constructed, so `const-field-offset`'s `LICENSES/` was
+  reported as `licenses/` -- a path that resolves only on a case-insensitive filesystem.
+
+The port was accepted on evidence, not on the suites passing: **1,656 notice blocks across
+594 package articles in all five reports** were compared against the PowerShell output, and
+every per-article multiset is equal once labels are normalized for those two changes.
+`about.generated.toml` and the three x86 reports are byte-identical; cargo-about's own
+output is byte-identical everywhere; and two independent runs produce identical bytes.
+| `source-notices.json`, `source_notices.py` | Reviewed versions, source paths, line ranges and complete-notice hashes for additional embedded terms; generation rejects changed source or unreviewed versions. |
 | `components.toml` | Checked-in inventory of every **non-Cargo** component (the toolchain-supplied Rust Standard Library, shipped native DLLs, compiled-in SVGs, NSIS stub, plus the not-shipped downloaded assets — OCR + voice models — for attribution): origin, version/revision, SHA-256, SPDX, notice files, modification status. |
 | `license-texts.sha256`, `verify-license-texts.ps1` | Reviewed SHA-256s for the shipped checked-in notice/licence files, normalized across CRLF/LF, plus the fail-closed verifier used by CI, the installer build, and the extraction test. |
 | `verify-installer-notices.ps1` | Extracts the built `-setup.exe`, derives exact component notice paths from `components.toml`, and fails if any is missing or empty. A CI step in `installer.yml` runs it after the build; run manually anytime (needs 7-Zip). |
 | `build-corresponding-source.ps1` | Builds `corresponding-source-<version>.zip` (GPLv3 §6 plus NSIS/LZMA CPL source) for attaching to a release. |
 | `staging\` | Build output — everything that goes into the installer. Regenerated by `build-installer.ps1`. |
-| `dependency-licenses\` | Output of `generate-dependency-licenses.ps1` — provisioned, not tracked (like `native-deps\runtime\notices\`). |
+| `dependency-licenses\` | Output of `generate_dependency_licenses.py` — provisioned, not tracked (like `native-deps\runtime\notices\`). |
 
 ## What gets staged
 

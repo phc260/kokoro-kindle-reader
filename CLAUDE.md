@@ -1025,7 +1025,7 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
 - **The Cargo dependency closure's licence notices are GENERATED, not hand-audited.**
   A checked-in prose list is what produced the misclassification above, and a lockfile of
   hundreds of transitive crates across two target triples was never going to stay accurate
-  by hand regardless. `packaging/generate-dependency-licenses.ps1` runs `cargo about`
+  by hand regardless. `packaging/generate_dependency_licenses.py` runs `cargo about`
   against each shipped crate's own `Cargo.lock` and target triple
   (`x86_64-pc-windows-msvc` for `kokoro-host`/`kokoro-panel`, `i686-pc-windows-msvc` for
   `kokoro-sapi`/`kokoro-hook`/`kokoro-inject`) and `build-installer.ps1` runs it on every
@@ -1082,9 +1082,14 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   clarifications too. Some published crates omit their licence files, and some put the
   copyright only in source comments; generic MIT templates cannot replace those notices.
   `cargo-about` 0.9.1 only warns if a clarification fails, so
-  `verify-dependency-licenses.ps1` checks every configured text hash per crate/version in
+  `verify_dependency_licenses.py` checks every configured text hash per crate/version in
   the generated AND extracted reports. AccessKit's Chromium BSD terms remain an `AND`
-  alongside its MIT/Apache choice. The offline regression script runs on PowerShell 5.1.
+  alongside its MIT/Apache choice. The offline regression script is Python, driven in CI
+  through its PowerShell 5.1 harness. **Ordering in these reports is ORDINAL, not
+  `Sort-Object`** — that cmdlet compares with the current culture (it treats `-` as
+  ignorable, and sorts `aa` after `z` under `da-DK`), so the same lockfile produced
+  different bytes on different machines for an artifact CI compares by hash. Don't put a
+  culture-aware sort back; see `packaging/dotnet_compat.py`.
   `source-notices.json` pins complete W3C terms from Tao/Winit/cursor-icon and Intel's ISC
   notice from Ring's native P-384 source; unreviewed versions or changed excerpts fail
   generation, and their hashes are required in generated and extracted reports.

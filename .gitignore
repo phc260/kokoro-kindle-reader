@@ -17,3 +17,7 @@ kokoro-protocol/Cargo.lock
 
 # Scratch audio dumps from the SAPI smoke test
 *.wav
+
+# Python bytecode from the packaging/native-deps scripts.
+__pycache__/
+*.pyc

@@ -293,7 +293,7 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
   read a copyright holder plus a pointer to `THIRD_PARTY_NOTICES.md` instead. If the espeak
   patch changes, the notice of modification in `THIRD_PARTY_NOTICES.md` must change with it.
 - **The Cargo dependency closure's own licence notices are generated, not hand-audited.**
-  `packaging/generate-dependency-licenses.ps1` runs `cargo about` against each shipped
+  `packaging/generate_dependency_licenses.py` runs `cargo about` against each shipped
   crate's `Cargo.lock`, on every installer build, and fails the build if a dependency's
   licence isn't on `packaging/about.toml`'s accepted list. Don't replace that with a
   hand-written prose list of "the unusual crates" — that's what drifted and shipped four
@@ -303,8 +303,12 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
   in `about.toml`), so a GPL dep through anything else fails `--fail`.
   Preserve the packaged-file/source-header appendices and the hash-pinned upstream
   clarifications. `cargo-about` only warns if a clarification fails; the separate
-  `verify-dependency-licenses.ps1` check must reject missing texts in the generated AND
+  `verify_dependency_licenses.py` check must reject missing texts in the generated AND
   extracted reports. MIT placeholders are not a substitute for upstream copyrights.
+  **Ordering in these reports is ORDINAL, not `Sort-Object`** — that cmdlet compares with
+  the current culture (it treats `-` as ignorable, and sorts `aa` after `z` under `da-DK`),
+  so the same lockfile produced different bytes on different machines for an artifact CI
+  compares by hash. Don't put a culture-aware sort back; see `packaging/dotnet_compat.py`.
   `source-notices.json` pins complete W3C terms from Tao/Winit/cursor-icon and Intel's ISC
   notice from Ring's native P-384 source; unreviewed versions or changed excerpts fail
   generation, and their hashes are required in generated and extracted reports.
