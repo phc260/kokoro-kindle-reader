@@ -282,7 +282,15 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 #    modified espeak-ng. Idempotent; --force to re-provision.
 python3 native-deps/fetch-deps.py
 
-# 3. Build + run. No tray: the host is a service that binds 127.0.0.1:8787 and serves.
+# 3. One-time: the models. On Windows the settings panel downloads these at first run; it
+#    does not build for Linux yet, so they are provisioned here instead. The voice model
+#    (~324 MiB) goes to the app-data dir the host reads; the OCR pair goes to native-deps/ocr,
+#    which webserve.rs falls back to when <app_data>/ocr is absent. Both are digest-pinned,
+#    idempotent, and re-runnable to repair.
+python3 native-deps/fetch-model.py
+python3 native-deps/fetch-ocr-models.py
+
+# 4. Build + run. No tray: the host is a service that binds 127.0.0.1:8787 and serves.
 #    It exits non-zero if it cannot create that endpoint, because on Linux nothing else
 #    can reach it.
 cargo run --manifest-path kokoro-host/Cargo.toml
@@ -298,6 +306,7 @@ expect it to be split when the panel and desktop integration land.
 | Symptom | Cause |
 |---|---|
 | `build.rs` panics naming `native-deps/linux/runtime` | step 2 was skipped, or it failed partway and left the tree unmarked |
+| `WARNING: model.onnx not found`, then silence when a page is read | step 3 was skipped; `fetch-model.py --verify-only` says which files are missing |
 | `cannot find -lespeak-ng` at link time | the espeak build produced no `.so` — look for the CMake failure above it |
 | undefined references to `espeak_ng_*` | the FFI in `espeak.rs` disagrees with the library that was actually built |
 | `libonnxruntime.so: cannot open shared object file` | the `$ORIGIN` rpath did not resolve; check `ldd target/debug/kokoro-host` |

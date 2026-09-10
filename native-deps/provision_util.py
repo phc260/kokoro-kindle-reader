@@ -20,7 +20,12 @@ USER_AGENT = {"User-Agent": "Kokoro-Kindle-Reader-dependency-provisioner/1.0"}
 
 def fail(msg):
     """Print to stderr and exit non-zero. Provisioning failures are not exceptions to be
-    caught somewhere else -- every one of them means the cache must not be marked."""
+    caught somewhere else -- every one of them means the cache must not be marked.
+
+    Flushes stdout first: it is block-buffered whenever it is not a terminal (a pipe, a CI
+    log) while stderr is not, so without this the failure prints ABOVE the progress lines
+    it is about -- which reads as a different, earlier failure."""
+    sys.stdout.flush()
     print(msg, file=sys.stderr)
     raise SystemExit(1)
 

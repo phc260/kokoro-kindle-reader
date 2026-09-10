@@ -100,6 +100,7 @@ On Linux:
 ```bash
 python3 native-deps/fetch-deps.py            # same, for linux/runtime/
 python3 native-deps/fetch-deps.py --force    # re-provision from scratch
+python3 native-deps/fetch-model.py           # the voice model - see below; Linux has no panel yet
 ```
 
 `kokoro-host`'s `build.rs` panics if the dep folders for the target being built are missing,
@@ -144,3 +145,36 @@ Two things it does that are worth knowing:
   the same sha256, so the check is that the file **is** those bytes rather than describes them.
   The dictionary is not an LFS file, and `media` 404s for anything that is not, so the two
   come from different hosts on purpose.
+
+## fetch-model.py
+
+The ~324 MiB Kokoro voice model, into the host's own app-data dir
+(`<app_data>/onnx-community/Kokoro-82M-v1.0-ONNX/`) rather than anywhere under `native-deps/`
+— that is where `kokoro-host` looks (`boot` in `main.rs`), and there is no dev fallback for
+the model as there is for the OCR pair.
+
+**It exists for Linux.** On Windows the settings panel downloads the model at first run and
+remains the normal route. The panel does not build for Linux yet (the port plan's
+desktop-integration step), so without this a freshly provisioned Ubuntu host starts, logs
+`model.onnx not found` and synthesizes nothing — which makes the Linux narration milestone
+unreachable on the machine it is about. It works on Windows too, and its `--verify-only` is
+the panel's **Verify & repair** without a GUI.
+
+It reads [`model-manifest.json`](../model-manifest.json) — **the same file the panel embeds**,
+not a copy of the digests. One more copy is one more thing to keep in sync, and the failure it
+would cause is a dev provisioning different weights from the ones a release installs. The
+`base_url` there pins an immutable HuggingFace revision.
+
+```bash
+python3 native-deps/fetch-model.py                 # idempotent; re-run to repair
+python3 native-deps/fetch-model.py --verify-only   # hash everything; never touches the network
+python3 native-deps/fetch-model.py --dest DIR      # provision somewhere else
+```
+
+Unlike the panel, an already-present file is **hashed** rather than accepted on its length: the
+panel skips on size because it has a progress bar and a repair button, and this script is that
+repair. A fetched file lands as `.part` and is renamed only once its digest matches, so an
+interrupted run never leaves a short file where the host would load it.
+
+**DEV only**, like `fetch-ocr-models.py`: a release install never runs it, and the installer
+stages no model.

@@ -80,6 +80,13 @@ native-deps\fetch-deps.ps1
 # provisions either platform. Python 3 is required on both; Linux calls it directly.
 python3 native-deps/fetch-deps.py
 
+# The voice model, into the app-data dir the host reads. DEV only, and in practice LINUX
+# only: on Windows the panel downloads it at first run and still does. The panel has no
+# Linux build yet, so without this an Ubuntu host logs "model.onnx not found" and
+# synthesizes nothing. Reads model-manifest.json - the same file the panel embeds, not a
+# copy. --verify-only is the panel's "Verify & repair" without a GUI.
+python3 native-deps/fetch-model.py
+
 # The host builds for two targets. Windows keeps the tray, the pipe and Kindle; Linux is
 # the core plus the loopback endpoint and nothing else. Both must stay warning-clean.
 cargo check --manifest-path kokoro-host\Cargo.toml --target x86_64-unknown-linux-gnu
