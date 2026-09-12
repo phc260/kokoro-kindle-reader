@@ -69,6 +69,13 @@ each script are harnesses, so `installer.yml`, `license-check.yml` and a local
 interpreter resolver (it resolves `py`/`python`/`python3` by RUNNING them - a Windows App
 Execution Alias is a 0-byte reparse point and a size check rejects a working install).
 
+**Standard library only.** No third-party packages: the corresponding-source README
+promises that any Python 3 will do, and a release path that needs `pip install` first is a
+release path that breaks on a clean runner. That is why the `components.toml` and
+`about.toml` readers are narrow fail-closed regexes rather than a TOML parser, and why the
+TLS trust-store correction in `provision_util.os_root_context` uses `ssl.enum_certificates`
+instead of `certifi` or `truststore`.
+
 `target_platform.py` holds what genuinely differs by platform - OS and architecture
 detection, the Rust target triple, the executable suffix, the release package format - and
 `build_installer.py`'s `PROFILES` holds the rest: which runtime libraries ship, which extra
