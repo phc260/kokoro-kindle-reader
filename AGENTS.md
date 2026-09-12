@@ -1,7 +1,8 @@
 # AGENTS.md
 
-Instructions for OpenAI Codex working in this repo. (Claude Code reads `CLAUDE.md`; the
-two are kept consistent, and `CLAUDE.md` is the fuller reference — read it.)
+Instructions for OpenAI Codex working in this repo. Read `CLAUDE.md` for the fuller
+technical reference; keep shared invariants consistent. Codex's role and local verification
+limits are defined below; commands in other docs do not override those limits.
 
 ## What this is
 
@@ -18,9 +19,15 @@ verification. Permission already given for that work remains valid within its sc
 ask again merely because the default workflow describes Codex as a reviewer. The read-only
 review workflow in `DEVELOPMENT.md` applies to review-only sessions, not user-authorized edits.
 
-Read the current diff before working: Claude and the user may have changed the tree since
-the last turn. Preserve their pending changes and keep your edits focused on the requested
-work. Commit or publish changes only when the user requests it.
+Carry authorized work through implementation and permitted verification. Resolve routine
+choices from the repo; ask only when missing information materially changes the scope or
+correctness and cannot be inferred. Continue unaffected work while a question is pending.
+
+Read `git status --short`, `git diff`, and `git diff --cached` before working: Claude and
+the user may have changed the tree since the last turn. Inspect relevant untracked files
+too; they are absent from the diff. Preserve pending work, re-read a file before patching
+if it changed during the task, and inspect the final diff for unintended edits. Never reset,
+stash, or delete others' changes to get a clean tree. Commit, push, or publish only when requested.
 
 Don't rewrite working code, and don't propose stylistic changes — formatting, naming, and
 comment density are settled and match the surrounding code deliberately.
@@ -37,6 +44,8 @@ because every finding gets hand-verified downstream.
 |---|---|
 | The invariants — start here | `CLAUDE.md` |
 | Engine chain, streaming/pacing, repo layout | `ARCHITECTURE.md` |
+| Test inventory and known coverage gaps | `TESTS.md` (subject to the limits below) |
+| Contributor workflow and commit conventions | `DEVELOPMENT.md` |
 | Installer, elevation flow, ACL staging | `packaging/README.md` |
 | Per-crate detail | `<crate>/README.md` |
 
@@ -51,18 +60,22 @@ because every finding gets hand-verified downstream.
 - **Don't register/unregister the COM server** or edit the Kindle MSIX hive. Both need
   elevation and change system state.
 
-## Git workflow (the one rule that is a reviewer's business)
+Choose the smallest permitted check that covers the change. Documentation-only edits need
+a content review and `git diff --check`, not compilation. For Rust, use the affected crate's
+`--manifest-path` and actual target; an x64 check does not verify the x86 artifacts. Shared
+host changes need both Windows and Linux checks when prerequisites are available. Report
+missing targets, native deps, or tool failures as verification gaps, not code failures or
+passes; do not weaken build gates to make a check succeed. A check does not prove runtime behavior.
+
+## Git workflow
 
 - **A tag is a release**, not a step in finishing a change. `installer.yml` fires on `v*`
-  and builds the installer plus corresponding source into a draft release. Worth flagging in
-  review if a change would trigger one, or would reach a released artifact without the
-  notice/source obligations that go with it.
+  and builds the installer plus corresponding source into a draft release. A request to
+  commit or push is not a request to tag or publish a release.
 
-This repo's other commit conventions — branching, trailers, hook and signing discipline —
-are in `CLAUDE.md` and `DEVELOPMENT.md`. They are deliberately **not** repeated here: a
-review-only session has nothing to apply them to, and on the sessions where the user does
-authorize a commit, those two files are the reference. The tag rule is the exception because
-it is the one a *reviewer* can act on — by flagging it.
+When a commit is requested, follow `CLAUDE.md` and `DEVELOPMENT.md` for branching, trailers,
+hooks and signing. Preserve the existing branch for ordinary changes; do not create one
+just because Codex is implementing. Credit an independent review only if one actually occurred.
 
 ## Invariants worth checking in review
 
@@ -379,9 +392,10 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
 
 ## Reporting format
 
-Number each finding. For each: the defect in one sentence, `file:line`, a concrete failure
-scenario (inputs/state → wrong outcome), and severity. Group by file. Lead with whether
-anything was found at all.
+For reviews, number each finding. For each: the defect in one sentence, `file:line`, a
+concrete failure scenario (inputs/state → wrong outcome), and severity. Group by file. Lead
+with whether anything was found at all. Verify the relevant callers and guards, and distinguish
+defects introduced by the reviewed change from pre-existing issues and unverified suspicions.
 
 For requested fixes, explain what changed, why, what was checked, and any unresolved issues.
 Distinguish checks you ran from results reported by the user or another agent; don't describe
