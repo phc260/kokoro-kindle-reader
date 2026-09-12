@@ -51,6 +51,19 @@ because every finding gets hand-verified downstream.
 - **Don't register/unregister the COM server** or edit the Kindle MSIX hive. Both need
   elevation and change system state.
 
+## Git workflow (the one rule that is a reviewer's business)
+
+- **A tag is a release**, not a step in finishing a change. `installer.yml` fires on `v*`
+  and builds the installer plus corresponding source into a draft release. Worth flagging in
+  review if a change would trigger one, or would reach a released artifact without the
+  notice/source obligations that go with it.
+
+This repo's other commit conventions — branching, trailers, hook and signing discipline —
+are in `CLAUDE.md` and `DEVELOPMENT.md`. They are deliberately **not** repeated here: a
+review-only session has nothing to apply them to, and on the sessions where the user does
+authorize a commit, those two files are the reference. The tag rule is the exception because
+it is the one a *reviewer* can act on — by flagging it.
+
 ## Invariants worth checking in review
 
 Full list and rationale in `CLAUDE.md` — these are the ones code changes actually break:

@@ -1,10 +1,10 @@
 # Downloaded / built third-party artifacts (re-created by fetch-deps.ps1 on Windows,
-# fetch-deps.sh on Linux).
+# fetch-deps.py directly on Linux).
 espeak-ng-src/
 espeak-ng-notices/
 onnxruntime/
 runtime/
-# The Linux provision (fetch-deps.sh): its own runtime tree, kept apart from the Windows
+# The Linux provision (fetch-deps.py): its own runtime tree, kept apart from the Windows
 # one so a machine that cross-builds both never mixes the two sets of libraries.
 linux/
 # The pinned OCR models, 9.80 MB, re-created by fetch-ocr-models.py. Their digests live in

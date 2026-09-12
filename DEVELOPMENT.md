@@ -39,12 +39,14 @@ The one ordering rule: `native-deps\fetch-deps.ps1` must run before building
 ```powershell
 bun test test/                                        # from kokoro-browser-extension/ - 145 tests
 cargo test --manifest-path kokoro-ocr\Cargo.toml      # 54 - needs no models
-cargo test --manifest-path kokoro-host\Cargo.toml     # 46
+cargo test --manifest-path kokoro-host\Cargo.toml     # 47
 ```
 
 All three run in seconds and need no host, no Kindle, no models and no network. **No CI workflow
-runs any of them** — see [TESTS.md](TESTS.md) for the full inventory, what each suite pins, the
-seven by-hand harnesses, and the known gaps.
+runs the browser extension's `bun test`**; the two Rust suites do run in CI, as a side effect of
+`linux.yml` proving the Ubuntu build links (`kokoro-host/**`, `kokoro-ocr/**`,
+`kokoro-protocol/**`, or `native-deps/*.py` changes) — see [TESTS.md](TESTS.md) for the full
+inventory, what each suite pins, the seven by-hand harnesses, and the known gaps.
 
 ## Code review
 
@@ -117,8 +119,9 @@ producing an artifact that describes a toolchain it wasn't built with:
 
 See [Building from source](ARCHITECTURE.md#building-from-source).
 
-1. Bump the product version in lockstep (8 `Cargo.toml`s + the two version lines in
-   `packaging/installer.nsi`) — the `/bump-version` command does exactly this.
+1. Bump the product version in lockstep — 13 locations: 8 `Cargo.toml`s, the two version
+   lines in `packaging/installer.nsi`, and the browser extension's two manifests plus its
+   `package.json`. The `/bump-version` command does exactly this.
 2. Commit on `main`, push.
 3. Tag and push the tag: `git tag vX.Y.Z && git push origin vX.Y.Z`. This triggers
    `installer.yml`, which builds the installer and creates a **draft** release.

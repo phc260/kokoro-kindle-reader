@@ -287,18 +287,22 @@ x86 crates have at all (none of them carries a `#[test]` suite).
 
 Recorded here rather than left implicit.
 
-### Nothing in CI runs any of these
+### The browser suite runs nowhere in CI; the two Rust suites now run on `linux.yml`
 
-The four workflows are `installer.yml` (builds the package on a `v*` tag or manual dispatch),
-`license-check.yml` (runs the Cargo licence gate plus component/notice integrity checks), `sapi.yml` (builds the x86 DLL and runs the
-COM smoke test), and `hook.yml` (compile-checks the x86 hook and injector).
-**None of them runs `bun test` or `cargo test`.** Every one of the 246 tests above passes or fails
-only when somebody runs it locally.
+`installer.yml` (builds the package on a `v*` tag or manual dispatch), `license-check.yml`
+(runs the Cargo licence gate plus component/notice integrity checks), `sapi.yml` (builds the
+x86 DLL and runs the COM smoke test), and `hook.yml` (compile-checks the x86 hook and
+injector) run none of the 246 tests above. `linux.yml` is the exception: as a side effect of
+proving the Ubuntu build actually links and runs, it runs `cargo test --manifest-path
+kokoro-host/Cargo.toml` and `cargo test --manifest-path kokoro-ocr/Cargo.toml` on every push
+that touches `kokoro-host/**`, `kokoro-ocr/**`, `kokoro-protocol/**`, or `native-deps/*.py` —
+so the 47 + 54 Rust tests do get a CI run on every ordinary source change to either crate
+(their tests live inline as `#[cfg(test)] mod tests`, not in a separate `tests/` directory,
+so there is no edit that touches the tests without also touching the path list above).
 
-That is the single largest gap in this document, and it is cheap to close: the extension suite
-needs `bun` and nothing else, and the two Rust suites need no models, no ORT DLL and no network.
-`kokoro-ocr`'s in particular was designed to run with nothing provisioned, which is most of the
-argument for adding it to CI first.
+**The 145-test browser extension suite is still not run anywhere in CI.** That remains the
+gap worth closing: the suite needs `bun` and nothing else, no models, no ORT DLL and no
+network.
 
 ### `ext-ocr.check.ts` can no longer run on a normal Chrome
 
