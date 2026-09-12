@@ -37,6 +37,8 @@ on:
       # the tag build in installer.yml, which needs the built -setup.exe).
       - 'packaging/build-installer.ps1'
       - 'packaging/installer.nsi'
+      - 'packaging/verify_installer_notices.py'
+      - 'packaging/target_platform.py'
       - 'packaging/verify-installer-notices.ps1'
       - 'packaging/build-corresponding-source.ps1'
       - 'THIRD_PARTY_NOTICES.md'
