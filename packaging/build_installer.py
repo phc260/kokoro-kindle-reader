@@ -189,12 +189,17 @@ def preflight(prof):
     # recorded SHA-256. license-check.yml runs this on PRs, but a tag or manual build can
     # start from a commit that never went through one.
     print("==> Verifying non-Cargo component hashes (components.toml)")
-    run(["powershell", "-NoProfile", "-File", HERE / "verify-component-hashes.ps1"],
-        what="component hash verification failed")
+    import verify_component_hashes
+    try:
+        verify_component_hashes.verify()
+    except ValueError as e:
+        raise Fail(str(e))
 
     # A file can be present and non-empty while still being truncated or copied from the
     # wrong upstream revision; verify the reviewed content before spending time on a build.
     print("==> Verifying checked-in licence texts")
+    # A subprocess rather than an import: the file name has a hyphen, so it is not
+    # importable, and sys.executable keeps it the same interpreter either way.
     run([sys.executable, HERE / "verify-license-texts.py"],
         what="checked-in licence-text verification FAILED (see above).")
 
