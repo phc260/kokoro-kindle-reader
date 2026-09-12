@@ -10,6 +10,7 @@ particular has a retry policy, and two copies of a retry policy is two behaviour
 import hashlib
 import os
 import shutil
+import ssl
 import stat
 import sys
 import time
@@ -50,20 +51,68 @@ def sha256_text(path):
     return hashlib.sha256(raw).hexdigest()
 
 
+def os_root_context():
+    """A verifying SSL context built from the OS root store itself, or None.
+
+    Exists because `ssl.create_default_context()` is not always the OS's own answer. On
+    Windows `load_default_certs()` pulls in more than the ROOT store - the cached
+    intermediate ("CA") store as well - and OpenSSL can then build a path through one of
+    those and fail, while a valid path through the real roots was available all along.
+
+    Measured on the dev machine: the default context loads 155 certificates and REJECTS
+    downloads.sourceforge.net with CERTIFICATE_VERIFY_FAILED; a context built from the 101
+    certificates in `enum_certificates("ROOT")` accepts it, along with PyPI, HuggingFace and
+    GitHub. That server's chain is fine - it is Let's Encrypt's newer ISRG Root YE / X2,
+    every certificate valid - so this is a local trust-store problem, and one that will get
+    more common as that transition proceeds.
+
+    `enum_certificates` is Windows-only; elsewhere the default context already reads the
+    system trust store directly and there is nothing to correct, so this returns None and
+    the caller keeps the error it had.
+    """
+    if not hasattr(ssl, "enum_certificates"):
+        return None
+    try:
+        pem = "\n".join(ssl.DER_cert_to_PEM_cert(der)
+                        for der, _encoding, _trust in ssl.enum_certificates("ROOT"))
+    except Exception:  # noqa: BLE001 - a store we cannot read is not a store we can fix with
+        return None
+    return ssl.create_default_context(cadata=pem) if pem else None
+
+
 def download(url, dest, attempts=3):
     """Fetch one immutable file, retrying.
 
     Every pinned artifact this project fetches is content-addressed by a digest the caller
     checks afterwards, so a retry can only ever produce the same bytes or fail. A flaky
     runner should not fail a provision that a second attempt would complete.
+
+    A certificate-verification failure is retried ONCE against the OS root store (see
+    `os_root_context`) rather than counted as a flake - repeating an identical handshake
+    against an identical trust store cannot succeed, so without this a stale intermediate
+    cache just burns the attempts and reports the same opaque error three times.
+    **Verification is never disabled**: the retry uses a stricter, more accurate trust set,
+    not a weaker one.
     """
+    context = None
     for attempt in range(attempts):
         try:
             req = urllib.request.Request(url, headers=USER_AGENT)
-            with urllib.request.urlopen(req, timeout=60) as r, open(dest, "wb") as f:
+            with urllib.request.urlopen(req, timeout=60, context=context) as r, \
+                    open(dest, "wb") as f:
                 shutil.copyfileobj(r, f)
             return
-        except Exception as e:  # noqa: BLE001 - every failure here is worth a retry
+        except urllib.error.URLError as e:
+            if context is None and isinstance(getattr(e, "reason", None), ssl.SSLError):
+                context = os_root_context()
+                if context is not None:
+                    print("==> TLS verification failed (%s); retrying against the OS root "
+                          "store" % e.reason)
+                    continue
+            if attempt == attempts - 1:
+                fail("downloading %s failed: %s" % (url, e))
+            time.sleep(2 * (attempt + 1))
+        except Exception as e:  # noqa: BLE001 - every other failure is worth a retry
             if attempt == attempts - 1:
                 fail("downloading %s failed: %s" % (url, e))
             time.sleep(2 * (attempt + 1))

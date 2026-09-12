@@ -31,12 +31,9 @@ Port of build-corresponding-source.ps1.
 """
 
 import argparse
-import hashlib
 import re
 import shutil
-import subprocess
 import sys
-import urllib.request
 import zipfile
 from pathlib import Path
 
@@ -64,38 +61,20 @@ USER_AGENT = {"User-Agent": "Kokoro-Kindle-Reader-source-packager/1.0"}
 
 
 def fetch(url, dest):
-    """Download one file, verifying TLS - via the stdlib, falling back to `curl`.
+    """Download one pinned file, using the project's one download policy.
 
-    The fallback is not belt-and-braces, it is load-bearing on a real machine. The
-    PowerShell original used `System.Net.WebClient`, which speaks SChannel and therefore
-    inherits Windows' root-certificate auto-update. Python's urllib is OpenSSL against
-    whatever roots the machine already has, and the two disagree in a case that is easy to
-    hit: SourceForge now serves a Let's Encrypt chain terminating at ISRG Root YE / Root X2
-    (issued 2026), so a trust store predating those roots can only build a path through an
-    expired cross-signed certificate. OpenSSL refuses it; Windows fetches the missing root
-    and proceeds. Measured here - curl 200s the same URL that urllib rejects with
-    CERTIFICATE_VERIFY_FAILED.
+    `provision_util.download` already owns retries and the TLS trust-store correction that
+    this needed; reimplementing either here would be a second behaviour to keep in step,
+    which is the mistake that module exists to prevent. The import reaches across to
+    native-deps/ because that is where the policy lives - packaging already depends on that
+    directory for the provision markers and the espeak recipe digest.
 
-    So: try the stdlib, and on a *transport* failure fall back to curl, which carries its
-    own CA bundle and still verifies. Neither path disables verification, and the caller
-    checks the artifact's pinned SHA-256 afterwards regardless - that digest, not the
-    transport, is what makes the download safe to publish.
+    `download` exits the process on failure (provisioning has nothing to catch it); that is
+    the right outcome here too, so it is not wrapped.
     """
-    try:
-        req = urllib.request.Request(url, headers=USER_AGENT)
-        with urllib.request.urlopen(req, timeout=120) as r, open(dest, "wb") as f:
-            shutil.copyfileobj(r, f)
-        return
-    except urllib.error.URLError as e:
-        curl = shutil.which("curl")
-        if curl is None:
-            raise Fail("Downloading %s failed (%s) and curl is not available to retry it."
-                       % (url, e))
-        print("    stdlib fetch failed (%s); retrying with curl" % e)
-    rc = subprocess.run([curl, "-fsSL", "--proto", "=https", "--tlsv1.2",
-                         "-A", USER_AGENT["User-Agent"], "-o", str(dest), url]).returncode
-    if rc:
-        raise Fail("Downloading %s failed (curl exit %d)." % (url, rc))
+    sys.path.insert(0, str(ROOT / "native-deps"))
+    from provision_util import download
+    download(url, dest)
 
 
 def tree_manifest(root):
