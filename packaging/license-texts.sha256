@@ -4,7 +4,7 @@
 # commits recorded in components.toml. Update a hash only after checking the replacement
 # against the named upstream revision.
 4bf2d3cbe91fd448fbb1153a1ee99f5a96abcb8b7f1485f6c7a6c7ff5d06bb2d  LICENSE
-ae9b861a3ad66ecc3651c66dfe637912ef23647baf5cee4fdba9c702439ca414  THIRD_PARTY_NOTICES.md
+1bb7d3d96719367c8b1c04e651c3d5dcf4aa859ce58128a02ae963b221423fa6  THIRD_PARTY_NOTICES.md
 cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30  licenses/Apache-2.0.txt
 b1d6df41ed3aa96806e74c729444d7c121d90e6660a6aed01d298e03fde475a0  licenses/dasp_sample-MIT.txt
 e2908f7576fb12be5bdb8480cddb0be62badb498cadb821d043aeaf01b0b0899  licenses/dawn-BSD-3-Clause.txt

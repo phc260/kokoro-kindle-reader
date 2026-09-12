@@ -1008,8 +1008,10 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   same redistributable package, per Microsoft's terms — no second file needed),
   `unicode-ident`'s `(MIT OR Apache-2.0) AND Unicode-3.0` had no Unicode text (the
   **`AND`** is why picking Apache doesn't discharge it, and it's in 6 of the **7** tracked
-  lockfiles — `kokoro-protocol` has none of its own), and Dawn/Tint's BSD-3-Clause was
-  pointed at upstream. All three now have texts in `licenses/`.
+  lockfiles — the one without is `kokoro-ocr`, which pulls in no proc-macro crate and so
+  needs none of `syn`'s dependents; `kokoro-protocol` keeps no lockfile of its own, which
+  is why there are 7 and not 8; all five *shipped* binaries carry it), and Dawn/Tint's
+  BSD-3-Clause was pointed at upstream. All three now have texts in `licenses/`.
 - **A licence that is *misclassified* as already-covered is the same bug wearing a
   different shape.** `THIRD_PARTY_NOTICES.md` once described `untrusted`, `slotmap`,
   `foldhash` and `webpki-roots` as `OR` alternatives the shipped Apache-2.0/MIT text
@@ -1165,6 +1167,21 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   license claim that has to stay perfectly in sync with the source tree to remain true. The
   x86 artifacts set no such field at all and are genuinely MIT-only — the SAPI shim is
   connect-only with no GPL deps.
+
+### Git workflow (committing, branching, tagging)
+- **A tag is a release.** `installer.yml` fires on `v*` and builds the installer plus the
+  corresponding-source archive into a draft release. So `git tag` / `git push --tags` /
+  `git push origin v*` are **never** part of finishing a change — tagging is a separate,
+  deliberate, explicitly-requested act, and publishing the draft stays manual on top of that.
+- **Committing on `main` is normal here** — the release flow commits version bumps directly
+  on `main` and tags afterward. Don't auto-create a branch for an ordinary change; branch
+  only when the work is clearly unrelated to the main line.
+- **`Reviewed-by:` goes above `Co-Authored-By:`**, naming the model that actually reviewed —
+  only when a review shaped what landed, never guessed, and never a product name where a
+  model id belongs. Full convention and rationale: `DEVELOPMENT.md` under "Code review";
+  the mechanics are in [`.claude/commands/codex-review.md`](.claude/commands/codex-review.md).
+- Never `--no-verify`, never bypass signing, never force-push or amend already-pushed
+  commits without an explicit request. A failing pre-commit hook is a thing to fix, not skip.
 
 ## Environment quirks
 

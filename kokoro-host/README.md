@@ -40,6 +40,7 @@ cargo run   # windowless tray daemon; right-click the tray → Settings for the 
 | `espeak.rs` | The espeak-ng FFI + one-segment phoneme trace. |
 | `split_text.rs` | The sentence-chunk splitter `pipe.rs` uses. Returns `Chunk { text, start_utf16 }` - the absolute offset comes from here because chunks are trimmed and so do **not** abut. |
 | `model_patch.rs` | The 273-byte ONNX graph edit appended to `model.onnx`'s bytes at session build, exporting the per-token durations the length regulator already computes (`durations_frames`, `duration_cumsum`). A pure append, because protobuf merges a repeated `ModelProto.graph`. Its unit test byte-matches the encoder against the ranges `onnx` itself serialized, so a wrong field number cannot pass as a different-but-valid graph. |
+| `webserve.rs` | The browser path's loopback HTTP endpoint (127.0.0.1:8787): bind + origin allowlist + bearer token + `Host` check, `/synth` (calls `native_synth::synth` directly — unpaced, never the Kindle path) and `/ocr` (the `kokoro-ocr` worker). Shared code only; builds its own `WebCtx` and never reaches into `KindleCtx`. See its own doc comments and [CLAUDE.md](../CLAUDE.md) for the four security checks. |
 
 ## Invariants (do not rediscover)
 

@@ -60,9 +60,9 @@ limit the whole pass to that one.
 
 6. **Report — then stop before committing.** Print a table: action · old pin → new pin ·
    latest release · breaking-change verdict (OK / notes). Do **not** commit or push as
-   part of this command — hand off to `/commit-push` or wait for an explicit go, per this
-   repo's gate discipline. A workflow file changing under `.github/` never justifies an
-   auto-push.
+   part of this command — wait for an explicit go, per this repo's gate discipline. A
+   workflow file changing under `.github/` never justifies an auto-push, and a tag is a
+   release (`installer.yml` fires on `v*`), so tagging is never part of finishing this.
 
 ## Hard limits (do not cross)
 - **Never** pin-bump the release-triggering behavior or touch tags — editing

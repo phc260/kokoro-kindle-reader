@@ -309,9 +309,11 @@ picking MIT or Apache-2.0, so their notices must also ship:
   `MIT OR Apache-2.0` choice. The generated reports retain its upstream `LICENSE.chromium`
   and copyright headers, as well as AccessKit's `AUTHORS` and MIT licence text.
 
-- `unicode-ident` — a dependency of six of the seven crate lockfiles, and so of nearly
-  every binary here — is `(MIT OR Apache-2.0) AND Unicode-3.0`. The `AND` is the point:
-  choosing Apache-2.0 does not discharge the Unicode licence, whose text is in
+- `unicode-ident` — a dependency of six of the seven crate lockfiles (the exception is
+  `kokoro-ocr`, which pulls in no proc-macro crate and so needs none of `syn`'s dependents;
+  `kokoro-protocol` keeps no lockfile of its own), and so of every one of the five shipped
+  binaries — is `(MIT OR Apache-2.0) AND Unicode-3.0`. The `AND` is the point: choosing
+  Apache-2.0 does not discharge the Unicode licence, whose text is in
   [`licenses/Unicode-3.0.txt`](licenses/Unicode-3.0.txt).
 - Several crates in the panel's closure carry a **sole** licence with no MIT/Apache-2.0
   alternative at all — despite an earlier version of this section describing them as
