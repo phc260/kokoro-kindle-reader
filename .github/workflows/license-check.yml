@@ -28,6 +28,7 @@ on:
       - 'legal.html'
       - 'legal.rs'
       - 'packaging/components.toml'
+      - 'packaging/verify_component_hashes.py'
       - 'packaging/verify-component-hashes.ps1'
       - 'packaging/license-texts.sha256'
       - 'packaging/verify-license-texts.ps1'
@@ -35,6 +36,8 @@ on:
       # The installer/staging/notice-verifier/corresponding-source scripts control what ships;
       # touching them re-runs this gate at review time (the full extraction proof still runs on
       # the tag build in installer.yml, which needs the built -setup.exe).
+      - 'packaging/build_installer.py'
+      - 'packaging/build_corresponding_source.py'
       - 'packaging/build-installer.ps1'
       - 'packaging/installer.nsi'
       - 'packaging/verify_installer_notices.py'
