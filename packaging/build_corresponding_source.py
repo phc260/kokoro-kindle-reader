@@ -227,8 +227,8 @@ def main(argv=None):
     print("==> Rust standard library: %s (%s)" % (rust_release, rust_commit))
     provenance = check_installer_provenance()
 
-    stage = HERE / "corresponding-source-%s" % version
-    out = HERE / "corresponding-source-%s.zip" % version
+    stage = HERE / ("corresponding-source-%s" % version)
+    out = HERE / ("corresponding-source-%s.zip" % version)
     shutil.rmtree(stage, ignore_errors=True)
     out.unlink(missing_ok=True)
     stage.mkdir(parents=True)
