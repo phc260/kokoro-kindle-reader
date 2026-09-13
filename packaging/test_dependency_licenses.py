@@ -80,6 +80,16 @@ def main():
         print("PASS: exact UTF-8 notice and HTML round trip")
         passed += 1
 
+        # A Windows checkout of about.toml is CRLF (it has no .gitattributes entry), and
+        # every other fixture here writes LF - which is exactly how an anchor that could
+        # not match a CR (\r) shipped. A CRLF config must verify identically; the failure it
+        # caused was not a parse error but a silent count of zero declarations.
+        write_all_text(config, toml.replace(chr(10), chr(13) + chr(10)))
+        verifier.verify(report, config)
+        print("PASS: CRLF about.toml verifies the same as LF")
+        passed += 1
+        write_all_text(config, toml)
+
         set_report(inventory + section.replace(html_encode(notice),
                                                "Copyright &lt;year&gt; &lt;owner&gt;") + packaged)
         rejected("canonical fallback after failed clarification", check())

@@ -24,7 +24,7 @@ habit of not being checked at all.
 
 ## Packaging notice regression checks
 
-`python3 packaging/test_dependency_licenses.py` runs 26 small offline
+`python3 packaging/test_dependency_licenses.py` runs 27 small offline
 checks with invented notices — the same invocation CI uses. It covers exact UTF-8/HTML
 round trips, failed-clarification
 fallbacks, changed/missing text, wrong-crate and wrong-version attribution, missing graph

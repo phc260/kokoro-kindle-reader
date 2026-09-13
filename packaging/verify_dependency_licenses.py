@@ -24,11 +24,16 @@ import source_notices  # noqa: E402
 
 # Deliberately limited to our configuration's unquoted crate keys and one-line checksum
 # fields. Reject schema drift instead of silently skipping a requirement.
-DECLARATION = re.compile(r"^[ \t]*\[\[[^\r\n]*\.clarify\.(?:git|files)\]\][ \t]*$", re.M)
+#
+# Line endings are NOT schema. about.toml has no .gitattributes entry, so a Windows
+# checkout of it is CRLF, and an anchor that does not allow the \r matches nothing at
+# all - which this file reads as "no clarifications are declared", not as a parse
+# failure. Same [ \t\r]*$ idiom as _COMPONENT in verify_installer_notices.py.
+DECLARATION = re.compile(r"^[ \t]*\[\[[^\r\n]*\.clarify\.(?:git|files)\]\][ \t\r]*$", re.M)
 BLOCK = re.compile(
     r"^\[\[(?P<crate>[A-Za-z0-9_-]+)\.clarify\.(?:git|files)\]\]\r?\n(?P<fields>.*?)(?=^\[|\Z)",
     re.M | re.S)
-CHECKSUM = re.compile(r'^checksum = "(?P<hash>[0-9a-f]{64})"[ \t]*$', re.M)
+CHECKSUM = re.compile(r'^checksum = "(?P<hash>[0-9a-f]{64})"[ \t\r]*$', re.M)
 
 COUNT_MARKER = re.compile(r'data-packaged-notice-count="(?P<count>[0-9]+)"')
 APPENDIX_TEXT = re.compile(

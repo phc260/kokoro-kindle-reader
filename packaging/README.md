@@ -19,7 +19,7 @@ drafts a GitHub Release with both attached — see [`../DEVELOPMENT.md`](../DEVE
 | `installer.nsi` | The NSIS script: install/uninstall sections, the elevation hooks, the Run value, the model-deletion prompt. Carries the product `VERSION`. |
 | `generate_dependency_licenses.py` | Runs `cargo about --locked` against each shipped crate's `Cargo.lock` and appends exact packaged licence files and source copyright headers; called automatically by `build_installer.py`. Needs `cargo install cargo-about --locked --features cli` once. |
 | `about.toml`, `about.hbs` | `cargo-about`'s config (the accepted-licence list; `GPL-3.0-only` granted per-crate to Slint only) and output template. |
-| `verify_dependency_licenses.py`, `test_dependency_licenses.py` | Verify every appendix text hash and block count, plus clarification/embedded-source hashes per crate/version (also inside the extracted installer); 26 offline regression fixtures, run in CI by `license-check.yml`. |
+| `verify_dependency_licenses.py`, `test_dependency_licenses.py` | Verify every appendix text hash and block count, plus clarification/embedded-source hashes per crate/version (also inside the extracted installer); 27 offline regression fixtures, run in CI by `license-check.yml`. |
 
 **These four are Python now, and the coupling that made them one unit is gone.**
 PowerShell cannot import a script without executing it, so `test_dependency_licenses.py`
