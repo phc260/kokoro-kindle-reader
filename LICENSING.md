@@ -91,7 +91,7 @@ worth having.
 The GPL-covered binaries (`kokoro-host.exe`, `kokoro-panel.exe`, `espeak-ng.dll` +
 `espeak-ng-data/`) are conveyed with complete corresponding source. Each binary release
 carries a `corresponding-source-X.Y.Z.zip` beside the installer, built by
-[`packaging/build-corresponding-source.ps1`](packaging/build-corresponding-source.ps1) and
+[`packaging/build_corresponding_source.py`](packaging/build_corresponding_source.py) and
 linked from the release body (GPLv3 §6(d): equivalent access from the same place, with clear
 directions). Its contents are listed in that script and in `THIRD_PARTY_NOTICES.md`. The
 archive contains the project source at the matching tag, the modified espeak-ng tree, and
@@ -103,8 +103,8 @@ statically linked standard library.
 
 ## How this is enforced
 
-- **`cargo-about --fail`** (`packaging/generate-dependency-licenses.ps1`, run by
-  `build-installer.ps1` and in CI) refuses any Cargo dependency whose licence is not in
+- **`cargo-about --fail`** (`packaging/generate_dependency_licenses.py`, run by
+  `build_installer.py` and in CI) refuses any Cargo dependency whose licence is not in
   `packaging/about.toml`'s `accepted` list. `GPL-3.0-only` is accepted **only** for the
   Slint crates, so a GPL dependency arriving through anything else fails the build. The
   generator also appends exact packaged licence/notice files and leading source copyright
@@ -113,15 +113,15 @@ statically linked standard library.
   Chromium BSD terms. `source-notices.json` pins the complete W3C notices in Tao,
   Winit and cursor-icon, and Intel's ISC notice in Ring's native P-384 implementation;
   it rejects source drift or a new package version until reviewed.
-  `verify-dependency-licenses.ps1` requires every configured text's
+  `verify_dependency_licenses.py` requires every configured text's
   hash in each affected crate/version's rendered report. It also checks every ordinary
   appendix text and its recorded block count, catching changed or removed packaged
   notices. These checks run before staging and after installer
   extraction. This is separate from `--fail`: cargo-about 0.9.1 only warns when a
   clarification cannot be retrieved or validated, then falls back to generic text.
 - **The Rust Standard Library is provisioned from the build toolchain**, not inferred from
-  Cargo metadata. `build-installer.ps1` requires and stages that rustc sysroot's generated
-  `COPYRIGHT-library.html` plus its release/commit; `build-corresponding-source.ps1` requires
+  Cargo metadata. `build_installer.py` requires and stages that rustc sysroot's generated
+  `COPYRIGHT-library.html` plus its release/commit; `build_corresponding_source.py` requires
   `rust-src`, requires the current toolchain to equal the installer's staged `TOOLCHAIN.txt`,
   and includes the exact `library/` source tree. CI installs `rust-src` explicitly.
 - **Native cache provenance is fail-closed.** ORT's marker identifies the exact CPython 3.12
@@ -136,7 +136,7 @@ statically linked standard library.
   plus the Rust toolchain. Reuse refuses a mismatch even if a standalone build overwrote an
   executable. The installer freezes these records and espeak's source manifest in its staging
   tree, so corresponding-source packaging cannot use a later build or provision's records.
-- **The NSIS pin is checked locally as well as installed by CI.** `build-installer.ps1`
+- **The NSIS pin is checked locally as well as installed by CI.** `build_installer.py`
   requires `makensis /VERSION` to report 3.12 before it packages the stub and stages that
   toolchain's `COPYING`; a different local NSIS cannot be mislabeled as the inventoried one.
   The matching source package downloads the exact official NSIS 3.12 source archive and

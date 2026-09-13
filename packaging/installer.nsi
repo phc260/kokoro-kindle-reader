@@ -4,7 +4,7 @@
 ; the SAPI voice via voice-setup.ps1 (self-elevating). Per-user install, unelevated;
 ; the registration raises one UAC prompt.
 ;
-; Build via packaging/build-installer.ps1 (stages files into packaging/staging then
+; Build via packaging/build_installer.py (stages files into packaging/staging then
 ; runs makensis). See packaging/README.md.
 
 Unicode true

@@ -11,7 +11,8 @@ licenses/, plus root LICENSE, THIRD_PARTY_NOTICES.md and legal.html. --allow-add
 used against an extracted installer, whose licenses/ directory also contains provisioned and
 generated notice trees.
 
-`verify-license-texts.ps1` is a thin harness over this.
+    python3 packaging/verify-license-texts.py
+    python3 packaging/verify-license-texts.py --root <extracted-tree> --allow-additional
 """
 
 import argparse

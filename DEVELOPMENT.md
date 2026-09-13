@@ -31,7 +31,7 @@ initializing a local Git index (`git init`, `git add --all`) for the packaging s
 ## Building
 
 Follow "Building from source" in [ARCHITECTURE.md](ARCHITECTURE.md#building-from-source).
-The one ordering rule: `native-deps\fetch-deps.ps1` must run before building
+The one ordering rule: `native-deps\fetch-deps.py` must run before building
 `kokoro-host` (its `build.rs` panics without the provisioned deps).
 
 ## Testing
@@ -94,7 +94,7 @@ to co-author to work around it.
 
 | Workflow | Trigger | What it does |
 |---|---|---|
-| `installer.yml` | `v*` tag push, or manual dispatch | Full installer build (both exes + the 3 x86 artifacts + NSIS, pinned). Installs `cargo-about` (pinned) for the Cargo licence gate and `rust-src` for the exact Standard Library corresponding source; verifies the built installer's notice tree (`verify-installer-notices.ps1`). Its Actions artifact always contains the setup.exe **and** `corresponding-source-*.zip`; on a tag it also drafts a release with both. |
+| `installer.yml` | `v*` tag push, or manual dispatch | Full installer build (both exes + the 3 x86 artifacts + NSIS, pinned). Installs `cargo-about` (pinned) for the Cargo licence gate and `rust-src` for the exact Standard Library corresponding source; verifies the built installer's notice tree (`verify_installer_notices.py`). Its Actions artifact always contains the setup.exe **and** `corresponding-source-*.zip`; on a tag it also drafts a release with both. |
 | `license-check.yml` | PRs touching dependency, component, packaging, or notice inputs | Runs the `cargo-about --fail` gate plus component and fixed notice-text integrity checks at review time — no full build. |
 | `sapi.yml` | `kokoro-sapi/**`, `kokoro-sapi-smoke/**`, or `kokoro-protocol/**` changes | Builds the x86 SAPI DLL + runs the no-Kindle COM smoke test (`kokoro-sapi-smoke`). It does not upload the bare intermediate DLL; the licensed installer is the distribution path. |
 | `hook.yml` | `kokoro-hook/**` / `kokoro-inject/**` changes | Compile-checks the x86 hook + injector. |
@@ -112,10 +112,10 @@ producing an artifact that describes a toolchain it wasn't built with:
 
 | Tool | Needed by | Enforced by |
 |---|---|---|
-| **NSIS 3.12** exactly | `build-installer.ps1` | it reads `makensis /VERSION` and rejects any other version — the installed stub, the staged `COPYING` and `components.toml` all describe that one |
-| **`cargo-about`** (CI pins 0.9.1) | `build-installer.ps1`, via `generate-dependency-licenses.ps1` | that script throws without it; `--fail` on an unreviewed licence is the gate, not a formality |
-| **`rust-src`** component | `build-corresponding-source.ps1` | it needs the sysroot's `lib/rustlib/src/rust/library` tree, and fails loudly when absent |
-| **Python 3** | `native-deps/fetch-deps.ps1` and the `packaging/` licence-notice checks — both are harnesses over shared Python | each resolves it by *running* `py`/`python`/`python3` and refuses with an install hint if none reports a version |
+| **NSIS 3.12** exactly | `build_installer.py` | it reads `makensis /VERSION` and rejects any other version — the installed stub, the staged `COPYING` and `components.toml` all describe that one |
+| **`cargo-about`** (CI pins 0.9.1) | `build_installer.py`, via `generate_dependency_licenses.py` | that script throws without it; `--fail` on an unreviewed licence is the gate, not a formality |
+| **`rust-src`** component | `build_corresponding_source.py` | it needs the sysroot's `lib/rustlib/src/rust/library` tree, and fails loudly when absent |
+| **Python 3**, on `PATH` | `native-deps/fetch-deps.py`, `packaging/build_installer.py` and every `packaging/` licence-notice check | the whole build and provisioning chain is Python and is invoked directly (`python <script>.py`) — nothing resolves an interpreter for you, so a bare `python`/`python3` has to work in the shell you build from |
 
 See [Building from source](ARCHITECTURE.md#building-from-source).
 

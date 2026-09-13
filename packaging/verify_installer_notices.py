@@ -9,8 +9,6 @@ contract as the OCR-model digests - the installer build is not "done" until this
     python3 packaging/verify_installer_notices.py                 # newest packaging/*-setup.exe
     python3 packaging/verify_installer_notices.py --setup path.exe
 
-Port of verify-installer-notices.ps1.
-
 **Everything here is platform-agnostic except `unpack`.** What must ship, how a shipped
 file is located, and every content check are the same questions for any package; only
 "how do I get the files out of this thing" differs, and that is one dispatch table. When

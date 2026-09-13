@@ -6,12 +6,11 @@ here, and `cargo metadata` is replaced by a callback rather than run. Fixture no
 INVENTED, never copied from a real dependency - a fixture built from real text passes
 every test there is, which is exactly how it goes unnoticed.
 
-Port of test-dependency-licenses.ps1, with one thing gone. That script could not import
-the generator without executing it, so it parsed the generator's AST, found
-`Get-LeadingCopyrightNotice` and `Add-PackagedLicenseAppendix` by name, and dot-sourced
-their extents. That coupling is why the four scripts were treated as one indivisible unit.
-Python imports them, so the tests exercise the production functions directly and the hack
-is deleted rather than translated.
+These import the generator and exercise its production functions directly. That is worth
+stating because it used to be impossible: the predecessor could not import the generator
+without executing it, so it parsed the generator's source, found two functions by name and
+evaluated their extents - which is why the four scripts were once treated as one
+indivisible unit. They are ordinary modules now.
 """
 
 import json

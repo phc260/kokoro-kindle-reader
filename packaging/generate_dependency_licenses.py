@@ -11,11 +11,11 @@ every crate's licence expression against the ACCEPTED list in about.toml, and re
 full text (with that crate's own copyright holder, where known) via packaging/about.hbs.
 THIRD_PARTY_NOTICES.md stays the human-readable overview; this is the notice of record for
 the Cargo closure. The Rust standard library comes from the compiler sysroot rather than
-this graph and is staged separately by build-installer.ps1.
+this graph and is staged separately by build_installer.py.
 
 `--fail` is the mechanism that satisfies "detect new licence categories when dependencies
 change": a crate whose resolved expression cannot be satisfied from about.toml's `accepted`
-list makes cargo-about exit non-zero, which this script (and build-installer.ps1, which
+list makes cargo-about exit non-zero, which this script (and build_installer.py, which
 calls it) turns into a build failure - the same "fail loudly rather than ship incomplete"
 shape as the ONNX Runtime notices and the OCR model digests.
 
@@ -29,11 +29,12 @@ included here.
 
 Output is PROVISIONED, not tracked - same reasoning as native-deps/runtime/notices/ (see
 fetch-deps.py): committing a generated report invites it to go stale the moment a lockfile
-changes without anyone re-running this script. build-installer.ps1 calls it on every build
+changes without anyone re-running this script. build_installer.py calls it on every build
 so the shipped notices always match what was just compiled.
 
-Port of generate-dependency-licenses.ps1. One behaviour differs on purpose and it is a fix:
-ordering is ordinal rather than locale-dependent - see `dotnet_compat.ordinal_key`.
+Ordering is ordinal, never locale-dependent - see `dotnet_compat.ordinal_key`. CI compares
+these reports by hash, and a culture-aware sort makes the same lockfile render differently
+on different machines.
 """
 
 import argparse

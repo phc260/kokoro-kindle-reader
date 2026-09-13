@@ -1,5 +1,4 @@
-# Downloaded / built third-party artifacts (re-created by fetch-deps.ps1 on Windows,
-# fetch-deps.py directly on Linux).
+# Downloaded / built third-party artifacts (re-created by fetch-deps.py on either platform).
 espeak-ng-src/
 espeak-ng-notices/
 onnxruntime/

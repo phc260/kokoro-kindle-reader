@@ -7,7 +7,7 @@ ONE recipe for both platforms. This file replaced a PowerShell script and a bash
 had to be kept pin-for-pin identical by hand -- an invariant that existed only because the
 recipe was duplicated, whose failure mode was the worst kind: a phoneme difference does not
 raise an error, it makes the voice say something slightly different, on one OS only.
-`build-espeak.ps1` is now a thin harness that calls this; Linux invokes it directly.
+Normally invoked by fetch-deps.py rather than directly.
 
 Two things make parity exact:
 

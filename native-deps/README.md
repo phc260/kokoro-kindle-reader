@@ -4,17 +4,20 @@
 Populates the gitignored dep folders alongside them (`runtime/` or `linux/runtime/`, plus
 `espeak-ng-src/`; re-created by the scripts).
 
-## One recipe, two harnesses
+## One recipe, one language
 
-`fetch-deps.py` and `build-espeak.py` are the recipe, shared by both platforms.
-`fetch-deps.ps1` and `build-espeak.ps1` are harnesses over it, so the entry points and flags
-Windows callers already use keep working — and because they earn their keep: they resolve
-Python by *running* `py`/`python`/`python3`, since a Windows App Execution Alias is a 0-byte
-reparse point that works fine, and they give an install hint when there is none. Linux calls
-`fetch-deps.py` directly; python3 is guaranteed there, so a shell wrapper would only be a
-second name for the same call.
+`fetch-deps.py` and `build-espeak.py` are the recipe, shared by both platforms and invoked
+the same way on each:
 
-That is a deliberate reversal. These were once a PowerShell script and a bash twin that had
+```
+python3 native-deps/fetch-deps.py          # or: python native-deps\fetch-deps.py
+```
+
+There is no wrapper on either side. Windows had a `.ps1` harness over each of these for a
+while, which resolved an interpreter and forwarded flags; they held no logic, so they were
+removed rather than maintained as a second set of entry points.
+
+That leaves one recipe. These were once a PowerShell script and a bash twin that had
 to be kept pin-for-pin identical **by hand** — an invariant that existed only because the
 recipe was duplicated, and whose failure mode was the worst kind: a phoneme or pin
 difference raises no error, it just makes one platform quietly build something else. They
@@ -23,12 +26,14 @@ found anywhere in the wheel, exactly the lax check the PowerShell side's comment
 against). Platform differences now live in the `WHEELS` table and `layout()`, where they can
 be read side by side.
 
-**Python 3 is therefore a prerequisite on both platforms.** The recipe uses only the standard
-library. The `.ps1` harnesses resolve it by *running* `py`/`python`/`python3` and matching
-`Python 3` in the output — not by looking at the file, because a Windows App Execution Alias
-is a 0-byte reparse point that works perfectly when Python is installed.
+**Python 3 is therefore a prerequisite on both platforms**, and on Windows it must be on
+`PATH` — nothing goes looking for it any more. The recipe uses only the standard library, so
+any Python 3 will do. Note that `py`, `python` and `python3` under
+`%LOCALAPPDATA%\Microsoft\WindowsApps\` are App Execution Aliases: 0-byte reparse points
+that run a real Python when one is installed and open the Store when it is not, so judge
+them by running them, never by what they look like on disk.
 
-**Windows** (`fetch-deps.ps1` -> `runtime/`):
+**Windows** (`fetch-deps.py` -> `runtime/`):
 
 - the **Dawn/WebGPU runtime DLLs** from the exact SHA-256-pinned
   `onnxruntime-webgpu` CPython 3.12 Windows wheel
@@ -84,8 +89,8 @@ matches it.
 ## Run this first
 
 ```powershell
-.\fetch-deps.ps1        # downloads the wheel + builds espeak; idempotent (-Force to redo)
-.\fetch-ocr-models.ps1  # the 9.80 MB PP-OCR pair + dictionary; network only, no toolchain
+.\fetch-deps.py        # downloads the wheel + builds espeak; idempotent (-Force to redo)
+.\fetch-ocr-models.py  # the 9.80 MB PP-OCR pair + dictionary; network only, no toolchain
 ```
 
 Or the recipes directly, on either platform:
@@ -123,13 +128,14 @@ refuses to build a tree carrying any modification beyond that one.
 ## fetch-ocr-models.py
 
 Separate because it needs **network and nothing else** — no compiler, no CMake, minutes
-faster. (It does need Python, like every recipe here; `fetch-ocr-models.ps1` is its harness.) It is also not a build dependency: `kokoro-ocr` loads these at run time, so the host
+faster. (It does need Python, like every recipe here.) It is also not a build dependency:
+`kokoro-ocr` loads these at run time, so the host
 builds without them and reports OCR `missing` until they are there.
 
 **This is for DEV only.** The OCR models are **not bundled in the installer** — the settings
 panel downloads them at first run into `%APPDATA%\...\ocr\`, exactly like the Kokoro voice model
 (see [`ocr-manifest.json`](../ocr-manifest.json) and `kokoro-panel::download`). So
-`build-installer.ps1` stages nothing under `ocr\` and no longer calls this script. Run it to
+`build_installer.py` stages nothing under `ocr\` and no longer calls this script. Run it to
 populate `native-deps\ocr\` so a debug `cargo run` of the host finds the models without a
 download; the digests and URLs here are the same ones `ocr-manifest.json` and
 `kokoro-ocr/src/lib.rs` carry (keep the three in sync).

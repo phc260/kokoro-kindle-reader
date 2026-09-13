@@ -204,23 +204,23 @@ against the engine the user actually has installed.
 | `kokoro-panel/` | The native settings panel (Slint/Fluent): `ui/panel.slint` + `src/main.rs` (incl. the 1 Hz host heartbeat), and the framework-agnostic `download.rs` / `preview.rs` (`CMD_PREVIEW`) / `benchmark.rs` (the GPU-vs-CPU speed test's `CMD_BENCH` client) / `hostlink.rs` (the `CMD_KINDLE` client — the panel's entire relationship with Kindle). Writes `controls.json`. Has no Win32 or UI Automation dependency, and must not grow one: the host owns Kindle. |
 | `kokoro-hook/` | x86 `cdylib` injected into Kindle 18632+: `DllMain` patches the shared `ISpVoice::SetVoice` vtable slot (index 18) → Kokoro token. `selftest` bin proves it Kindle-free. |
 | `kokoro-inject/` | x86 exe the host spawns: `LoadLibrary`-injects `kokoro_hook.dll` into `Kindle.exe`. |
-| `native-deps/` | Synth **dependency provisioning** only (no source): `fetch-deps.ps1` populates the gitignored dep folders alongside itself (`native-deps/runtime/` + `espeak-ng-src/`) — the Dawn/WebGPU runtime DLLs (from the `onnxruntime-webgpu` wheel) + espeak-ng (x64 build + import lib + `espeak-ng-data`). |
+| `native-deps/` | Synth **dependency provisioning** only (no source): `fetch-deps.py` populates the gitignored dep folders alongside itself (`native-deps/runtime/` + `espeak-ng-src/`) — the Dawn/WebGPU runtime DLLs (from the `onnxruntime-webgpu` wheel) + espeak-ng (x64 build + import lib + `espeak-ng-data`). |
 | `kokoro-sapi/` | The x86 SAPI engine — a Rust `cdylib` (thin COM shim + pipe client, no deps): `lib.rs` (COM exports + registration), `engine.rs` (`ISpTTSEngine`), `worker.rs` (pipe client), `sapi.rs` (hand-declared `sapiddk.h` interfaces). Plus the `voice-setup.ps1` / `kindle-voice-guard.ps1` (Kindle hive patch) / `test-speak.ps1` scripts. |
 | `kokoro-sapi-smoke/` | No-Kindle COM + Speak smoke test for the engine (`run-speak-test.ps1`). |
 | `kokoro-protocol/` | The named-pipe wire constants (pipe name, the `'S'`/`'A'`/`'P'`/`'T'`/`'B'`/`'K'` commands, `STREAM_END`/`SYNTH_ERROR`/`CHUNK_INFO`/`CHUNK_ALIGNED` + the shared `mark_is_valid` rule, sample rate, the speaking debounce) as a small crate shared by `kokoro-host`, `kokoro-sapi` and `kokoro-panel` — the single source of truth for the format. |
 | `model-manifest.json` | Files the model downloads from HF (paths + sizes + SHA-256); embedded in `kokoro-panel` (the narrator list is derived from it). |
 | `icons/` | Shared app icons (LFS); embedded in the exes' version resource and the installer. |
-| `packaging/` | `installer.nsi` + `build-installer.ps1` (standalone NSIS build) — per-user install with self-elevating voice registration. See [`packaging/README.md`](packaging/README.md). |
-| `THIRD_PARTY_NOTICES.md` + `licenses/` | Bundle licensing: the repository source is MIT except for the files ported from `kokoro-js` and PaddleOCR and the Google Material Symbols SVGs (Apache-2.0, attributed there file by file), but the shipped binaries link espeak-ng (GPL-3.0-or-later, **modified** by `build-espeak.py`) and Slint-under-GPL, so a release is conveyed under GPLv3. `build-installer.ps1` stages these notices plus the active Rust toolchain's generated Standard Library report — they must ship *with* the binaries, not just live here. |
+| `packaging/` | `installer.nsi` + `build_installer.py` (standalone NSIS build) — per-user install with self-elevating voice registration. See [`packaging/README.md`](packaging/README.md). |
+| `THIRD_PARTY_NOTICES.md` + `licenses/` | Bundle licensing: the repository source is MIT except for the files ported from `kokoro-js` and PaddleOCR and the Google Material Symbols SVGs (Apache-2.0, attributed there file by file), but the shipped binaries link espeak-ng (GPL-3.0-or-later, **modified** by `build-espeak.py`) and Slint-under-GPL, so a release is conveyed under GPLv3. `build_installer.py` stages these notices plus the active Rust toolchain's generated Standard Library report — they must ship *with* the binaries, not just live here. |
 
 ## Building from source
 
 Prerequisites: Rust (x64 + the `i686-pc-windows-msvc` target for the SAPI DLL), Visual
 Studio with the MSVC toolchain + CMake, and **Python 3** — the provisioning recipe
-(`native-deps/fetch-deps.py`) is one shared script for Windows and Linux; the `.ps1`
-beside it is a thin harness that calls it, and Linux invokes it directly. It uses only
-the standard library, so any Python 3 will do; nothing about the pinned wheel depends on
-which one, and the digest check is what guarantees that. Building the packaged
+(`native-deps/fetch-deps.py`) is one shared script for Windows and Linux, invoked directly
+on both. It must be on `PATH`; nothing resolves an interpreter for you. It uses only the
+standard library, so any Python 3 will do; nothing about the pinned wheel depends on which
+one, and the digest check is what guarantees that. Building the packaged
 **installer** needs a further toolchain — see [Releasing](DEVELOPMENT.md#releasing). Get
 the source by **cloning with Git LFS** — not from a release's auto-generated "Source
 code" archive, which doesn't resolve LFS (see [DEVELOPMENT.md](DEVELOPMENT.md)).
@@ -228,7 +228,7 @@ code" archive, which doesn't resolve LFS (see [DEVELOPMENT.md](DEVELOPMENT.md)).
 ```powershell
 # 1. One-time: provision the synth runtime deps
 #    (Dawn runtime DLLs + espeak-ng x64 import lib/DLL + espeak-ng-data)
-.\native-deps\fetch-deps.ps1
+python native-deps\fetch-deps.py
 rustup target add i686-pc-windows-msvc   # for the x86 SAPI DLL
 
 # 2. Build + run the headless host (tray). Right-click the tray → Settings for the panel.
@@ -250,7 +250,7 @@ To build the packaged installer (release-builds both crates, stages everything, 
 runs `makensis`):
 
 ```powershell
-.\packaging\build-installer.ps1
+python packaging\build_installer.py
 ```
 
 CI does this on a `v*` tag or manual dispatch (`.github/workflows/installer.yml`). Every

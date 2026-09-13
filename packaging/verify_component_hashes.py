@@ -13,7 +13,6 @@ icon.ico is an LFS asset with no digest in the manifest.
 
     python3 packaging/verify_component_hashes.py
 
-Port of verify-component-hashes.ps1.
 """
 
 import hashlib

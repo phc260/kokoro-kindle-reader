@@ -50,9 +50,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends build-essential cmake
 
-      # The recipe is invoked directly: python3 is guaranteed on Ubuntu, so a shell
-      # harness would only be a second name for the same call. (Windows keeps its .ps1,
-      # which earns its place resolving App Execution Aliases.) build-espeak.py checks out
+      # The recipe is invoked directly, the same way installer.yml invokes it on Windows -
+      # one script, one entry point, no wrappers. build-espeak.py checks out
       # an immutable commit and refuses to build a tree carrying anything but the one
       # documented modification, which it verifies by digest.
       - name: Provision native dependencies

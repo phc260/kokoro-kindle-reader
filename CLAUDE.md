@@ -71,13 +71,13 @@ Load the detail on demand:
 ```powershell
 # One-time: provision the synth runtime deps (Dawn ORT runtime DLLs + espeak-ng x64
 # import lib/DLL + espeak-ng-data). Must run before building kokoro-host.
-native-deps\fetch-deps.ps1
+native-deps\fetch-deps.py
 
 # Same, for a Linux build (CPU ONNX Runtime + the same modified espeak). Separate tree
 # (native-deps/linux/), separate pins; build.rs branches on the TARGET, so cross-checking
 # a Linux target from Windows needs THIS provision, not the Windows one.
-# The .ps1 above is a HARNESS over the shared recipe below, which is what actually
-# provisions either platform. Python 3 is required on both; Linux calls it directly.
+# Same script as above - it provisions either platform and branches internally. Python 3
+# is required on both, and must be on PATH: nothing goes looking for an interpreter.
 python3 native-deps/fetch-deps.py
 
 # The voice model, into the app-data dir the host reads. DEV only, and in practice LINUX
@@ -129,7 +129,7 @@ C:\Windows\SysWOW64\regsvr32.exe "kokoro-sapi\target\i686-pc-windows-msvc\releas
 
 # Packaged installer — builds the x86 DLL + release-builds both crates, stages everything,
 # then runs makensis. NSIS. See packaging/README.md.
-packaging\build-installer.ps1
+packaging\build_installer.py
 # CI does this on a v* tag (.github/workflows/installer.yml); sapi.yml
 # builds the x86 DLL + runs the COM smoke test on kokoro-sapi/** / kokoro-sapi-smoke/**
 # / kokoro-protocol/** changes; hook.yml compile-checks the x86 hook + injector on
@@ -282,7 +282,7 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   `refresh` now touches no UIA at all: process list plus the Kindle audio clock, neither of
   which anything else is mutating. The toggle's AutomationId is still used to notice the
   flyout is **open** (it traps Ctrl+A and must be dismissed) — never to ask what it says.
-- **`fetch-deps.ps1` must run before building `kokoro-host`.** `build.rs` panics if the
+- **`fetch-deps.py` must run before building `kokoro-host`.** `build.rs` panics if the
   provisioned dep folders under `native-deps/` (ORT + Dawn DLLs + espeak) are missing.
   It also stages the 5 runtime DLLs next to the exe.
 
@@ -732,7 +732,7 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   `missing` until the download lands. The digests live in **three** places on purpose — the
   manifest (fetch spec), `kokoro-ocr`'s consts (the load/probe gate, which re-verifies
   independently), and `fetch-ocr-models.py` (dev provisioning) — keep them in sync. The
-  installer stages **nothing** under `ocr\`, and `build-installer.ps1` no longer runs
+  installer stages **nothing** under `ocr\`, and `build_installer.py` no longer runs
   `fetch-ocr-models.py --verify-only`.
 - **`fetch-ocr-models.py` (dev provisioning) and `ocr-manifest.json` pin a revision per URL and
   pull the recognizer from
@@ -920,10 +920,12 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   for a failed session build, and doing it silently would leave the panel showing GPU while
   CPU did the work.
 - **There is ONE provisioning recipe, `native-deps/fetch-deps.py`, for both platforms**, plus
-  `build-espeak.py` beside it. The `.ps1` files are harnesses over it; Linux invokes the
-  recipe directly, since python3 is guaranteed there and a shell wrapper would only be a
-  second name for the same call. The Windows harness earns its keep: it resolves App
-  Execution Aliases by running them (see the quirk below). This replaced a PowerShell script and a bash twin that had to be kept
+  `build-espeak.py` beside it. Both platforms invoke it directly — there is no wrapper on
+  either side. Windows had a `.ps1` harness over each script for a while; they resolved an
+  interpreter and forwarded flags, held no logic, and were removed rather than kept as a
+  second set of entry points. The cost is that **Python 3 must be on `PATH`** (see the App
+  Execution Alias quirk below — judge one by running it, not by its size). This replaced a
+  PowerShell script and a bash twin that had to be kept
   pin-for-pin identical by hand — an invariant that existed only because the recipe was
   duplicated, and whose failure mode was the worst kind: a phoneme or pin difference does not
   raise an error, it makes one platform quietly build something else. They had **already**
@@ -1000,7 +1002,7 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   §5(a) requires a stated notice of modification + date. It's in
   `THIRD_PARTY_NOTICES.md`; if the patch changes, update that notice.
 - **Invariant: `LICENSE` + `THIRD_PARTY_NOTICES.md` + `licenses/` must ship inside the
-  installer** (staged by `build-installer.ps1`, installed by `installer.nsi`) — GPLv3
+  installer** (staged by `build_installer.py`, installed by `installer.nsi`) — GPLv3
   requires the text to accompany the binaries. `licenses/` is staged and installed
   **recursively**, so adding a text there needs no packaging edit.
 - **A licence that is NAMED but whose text isn't shipped is the bug.** Three were:
@@ -1030,7 +1032,7 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   by hand regardless. `packaging/generate_dependency_licenses.py` runs `cargo about`
   against each shipped crate's own `Cargo.lock` and target triple
   (`x86_64-pc-windows-msvc` for `kokoro-host`/`kokoro-panel`, `i686-pc-windows-msvc` for
-  `kokoro-sapi`/`kokoro-hook`/`kokoro-inject`) and `build-installer.ps1` runs it on every
+  `kokoro-sapi`/`kokoro-hook`/`kokoro-inject`) and `build_installer.py` runs it on every
   build — not provisioned once, because this closure moves with ordinary `cargo update`s
   in a way the ORT wheel doesn't. `packaging/about.toml`'s `accepted` list is what this
   project has reviewed; a dependency whose licence isn't on it makes generation **fail the
@@ -1040,9 +1042,9 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   `kokoro-panel`: the first two embed ported/derived Rust files and the panel embeds the
   Material Symbols; plain `MIT` for the rest) — `cargo-about` treats an unset `license`
   field as an error, and that field was simply missing everywhere before.
-- **ONNX Runtime's notices are PROVISIONED, not tracked** — `fetch-deps.ps1` keeps the
+- **ONNX Runtime's notices are PROVISIONED, not tracked** — `fetch-deps.py` keeps the
   wheel's own `LICENSE`/`Privacy.md`/`ThirdPartyNotices.txt` into
-  `native-deps/runtime/notices/` and `build-installer.ps1` stages them to
+  `native-deps/runtime/notices/` and `build_installer.py` stages them to
   `licenses/onnxruntime/`. The exact cp312 win_amd64 wheel is pinned by filename plus its PyPI
   SHA-256; selecting by the machine's Python is forbidden because the 1.27.0 cp311-cp314
   wheels contain different native DLL bytes. That keeps notices matched to the exact wheel; a
@@ -1061,19 +1063,19 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
 - **espeak-ng's and NSIS's notices are PROVISIONED the same way, and both must ship.** We
   distribute a *modified* espeak-ng.dll + `espeak-ng-data/`, so its own `COPYING*` set —
   `COPYING` (GPLv3), `COPYING.APACHE`, `COPYING.BSD2`, `COPYING.UCD` — is copied by
-  `fetch-deps.ps1` from the exact 1.52.0 clone into `native-deps/espeak-ng-notices/` and
+  `fetch-deps.py` from the exact 1.52.0 clone into `native-deps/espeak-ng-notices/` and
   staged to `licenses/espeak-ng/`. **`COPYING.UCD` is NOT `licenses/Unicode-3.0.txt`** — the
   former covers the UCD data baked into `espeak-ng-data/`, the latter is the `unicode-ident`
   crate's Unicode-v3 licence; both are required and they are different documents. The
   installer/uninstaller stub is NSIS compressed with LZMA (`SetCompressor /SOLID lzma`), so
-  `build-installer.ps1` stages NSIS's own `COPYING` (zlib + bzip2 + CPL-1.0 with the LZMA
+  `build_installer.py` stages NSIS's own `COPYING` (zlib + bzip2 + CPL-1.0 with the LZMA
   linking exception) from the installed toolchain to `licenses/nsis/NSIS-COPYING.txt`. NSIS
   is **pinned** in `installer.yml` (`--version=3.12`) so that shipped licence matches the
   version actually used. Both stagers **throw** when the text is absent — a modified GPL
   binary or an LZMA stub shipped without its licence is the failure they exist to prevent.
 - **`cargo-about` must run in CI, and `GPL-3.0-only` is accepted for Slint ONLY.**
   `installer.yml` installs `cargo about` (pinned `0.9.1`, `--locked --features cli`) before
-  `build-installer.ps1`; without it `generate-dependency-licenses.ps1` throws, so this is a
+  `build_installer.py`; without it `generate_dependency_licenses.py` throws, so this is a
   build prerequisite, not just a compliance step (it was missing, and the gate had never
   run in CI). `license-check.yml` runs the same gate on PRs that touch the closure.
   `about.toml` grants `GPL-3.0-only` via **per-crate** `[<slint-crate>] accepted` entries,
@@ -1086,8 +1088,8 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   `cargo-about` 0.9.1 only warns if a clarification fails, so
   `verify_dependency_licenses.py` checks every configured text hash per crate/version in
   the generated AND extracted reports. AccessKit's Chromium BSD terms remain an `AND`
-  alongside its MIT/Apache choice. The offline regression script is Python, driven in CI
-  through its PowerShell 5.1 harness. **Ordering in these reports is ORDINAL, not
+  alongside its MIT/Apache choice. The offline regression fixtures run in CI via
+  `license-check.yml`. **Ordering in these reports is ORDINAL, not
   `Sort-Object`** — that cmdlet compares with the current culture (it treats `-` as
   ignorable, and sorts `aa` after `z` under `da-DK`), so the same lockfile produced
   different bytes on different machines for an artifact CI compares by hash. Don't put a
@@ -1110,24 +1112,24 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   `cargo-about` sees only Cargo packages; the Rust Standard Library supplied by the toolchain,
   every native DLL, ONNX model, compiled-in SVG, the icon and the NSIS stub are recorded there
   (origin, version/revision, SHA-256 where pinned, SPDX, notice files, modification status).
-  The standard library is not a Cargo package: `build-installer.ps1` stages the active
+  The standard library is not a Cargo package: `build_installer.py` stages the active
   toolchain's generated `COPYRIGHT-library.html` plus a `TOOLCHAIN.txt` with its immutable
-  commit, and `installer.yml` installs `rust-src` so `build-corresponding-source.ps1` can put
+  commit, and `installer.yml` installs `rust-src` so `build_corresponding_source.py` can put
   that exact `library/` tree into the source archive. The source packager requires its active
   toolchain to equal the installer's staged `TOOLCHAIN.txt`, so a local toolchain switch cannot
-  pair different standard-library source with the binary. `verify-installer-notices.ps1` extracts
+  pair different standard-library source with the binary. `verify_installer_notices.py` extracts
   the built `-setup.exe` in CI and fails if any required notice is missing or empty —
   proving the tree is *in the installer*, not merely in staging. `LICENSING.md` is the
   authoritative per-artifact map + the aggregation boundary (the x86 clients stay MIT) + the
   §6 procedure; `THIRD_PARTY_NOTICES.md` is the shipped prose.
 - **Checked-in licence texts are content-pinned, not merely presence-checked.**
   `packaging/license-texts.sha256` inventories `LICENSE`, `THIRD_PARTY_NOTICES.md`, and every
-  file under `licenses/` after newline normalization. `verify-license-texts.ps1` runs in PR
+  file under `licenses/` after newline normalization. `verify-license-texts.py` runs in PR
   CI, before an installer build, and against the extracted installer; update a hash only after
   comparing the complete replacement with the exact pinned upstream revision. Provisioned
   espeak/ORT/NSIS notices must be the exact named, non-empty files rather than any wildcard
   match.
-- **A native cache must prove which recipe produced it.** `fetch-deps.ps1` writes exact ORT
+- **A native cache must prove which recipe produced it.** `fetch-deps.py` writes exact ORT
   and espeak provision markers only after all expected outputs and notices exist; a missing or
   mismatched marker forces re-provisioning. Installer staging reads those marked runtime files
   directly, not copies left in a host target directory. The espeak marker names immutable
@@ -1141,12 +1143,12 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   packager uses records frozen in `staging/provenance/`, including espeak's source manifest,
   and independently compares the current tracked tree to the build-time manifest. This
   prevents a clean tagged checkout from pairing stale binaries with different source.
-- **The NSIS 3.12 pin is enforced, not documentary.** `build-installer.ps1` checks
+- **The NSIS 3.12 pin is enforced, not documentary.** `build_installer.py` checks
   `makensis /VERSION` before packaging and rejects any other local version; otherwise the
   installed stub, staged `COPYING`, `components.toml`, and corresponding-source instructions
   could describe different toolchains even though CI happens to install the pinned one.
 - **GPL binaries ship with complete corresponding source (§6).**
-  `build-corresponding-source.ps1` builds `corresponding-source-X.Y.Z.zip` (tracked project
+  `build_corresponding_source.py` builds `corresponding-source-X.Y.Z.zip` (tracked project
   source with LFS resolved, all lockfiles/scripts, the *modified* espeak-ng 1.52.0 tree and
   the exact Rust Standard Library source with SHA-256 manifests, the hash-verified official
   NSIS 3.12 source archive for its CPL-covered LZMA module, and a rebuild README);
@@ -1205,9 +1207,10 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   that run the installed Python, or open the Store when there isn't one. So a launcher that
   rejects them on size (or on `Get-Item ... .Length -eq 0`) rejects a perfectly good install
   — measured on the dev machine, where all three are 0-byte aliases and all three report
-  Python 3.14.7. `native-deps/*.ps1` resolve Python by **running** each candidate and
-  matching `Python 3` in its `--version`, which is the only test that tells a live alias from
-  a dead one.
+  Python 3.14.7. Nothing in the tree resolves an interpreter any more (the `.ps1` harnesses
+  that did are gone, and the scripts are invoked as `python <script>.py` directly), so this
+  is now a rule for a *person* debugging a "Python 3 not found": run the candidate, never
+  judge it by what it looks like on disk.
 - **File locks:** rebuilds hit LNK1104 / "Access is denied" while Kindle holds
   `KokoroSapi.dll` or a running `kokoro-panel.exe`/`kokoro-host.exe` holds its exe — stop
   them first. Port lingers after a crashed session.

@@ -29,8 +29,7 @@ fn main() {
         "linux" => linux_deps(&tp, &profile_dir),
         other => panic!(
             "kokoro-host: no native-dependency recipe for target OS '{other}'. \
-             Windows and Linux are provisioned by native-deps/fetch-deps.ps1 and \
-             native-deps/fetch-deps.py respectively."
+             Windows and Linux are both provisioned by native-deps/fetch-deps.py."
         ),
     }
 }
@@ -52,7 +51,7 @@ fn windows_deps(tp: &Path, profile_dir: &Path) {
     for p in [&espk_lib, &runtime, &espk_data] {
         if !p.exists() {
             panic!(
-                "kokoro-host: missing {} — run native-deps/fetch-deps.ps1 \
+                "kokoro-host: missing {} — run `python native-deps/fetch-deps.py` \
                  (which downloads the ORT/Dawn runtime and builds the espeak artifacts) first",
                 p.display()
             );

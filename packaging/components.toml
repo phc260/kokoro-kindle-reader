@@ -1,6 +1,6 @@
 # Non-Cargo shipped-component manifest (authoritative inventory)
 #
-# cargo-about (packaging/generate-dependency-licenses.ps1) enumerates the CARGO PACKAGE
+# cargo-about (packaging/generate_dependency_licenses.py) enumerates the CARGO PACKAGE
 # closure statically linked into the executables and the x86 DLLs. It cannot see the Rust
 # standard library supplied by the toolchain, the native DLLs, the ONNX models, the SVG
 # assets baked into the panel, or the NSIS installer stub. This file is the checked-in
@@ -12,12 +12,12 @@
 # lives in LICENSING.md; THIRD_PARTY_NOTICES.md carries the human-readable prose.
 #
 # What actually enforces this file (so the inventory can't quietly drift from the tree):
-#   - verify-component-hashes.ps1 (run in license-check.yml AND at the top of
-#     build-installer.ps1) recomputes the sha256 of every in-repo asset pinned here - the
+#   - verify_component_hashes.py (run in license-check.yml AND at the top of
+#     build_installer.py) recomputes the sha256 of every in-repo asset pinned here - the
 #     five kokoro-panel/ui/*.svg - fails on a mismatch, AND asserts that set equals the SVGs
 #     panel.slint actually compiles in (so a deleted block or an un-inventoried new glyph both
 #     fail), so the SVG inventory here cannot drift from the tree.
-#   - verify-installer-notices.ps1 (run after the installer build) parses every `notice`
+#   - verify_installer_notices.py (run after the installer build) parses every `notice`
 #     field below and asserts each exact file is present and non-empty in the built -setup.exe.
 #     It also rejects an unparseable field, a component without exactly one field, or a
 #     directory-level notice path, so this manifest and the extraction proof cannot drift.
@@ -56,11 +56,11 @@ modified = false
 notice = ["licenses/rust/COPYRIGHT-library.html", "licenses/rust/TOOLCHAIN.txt", "THIRD_PARTY_NOTICES.md"]
 corresponding_source = "corresponding-source-X.Y.Z.zip carries the exact rust-src library tree from this toolchain"
 provisioned_by = "the active rustc sysroot"
-staged_by = "packaging/build-installer.ps1"
+staged_by = "packaging/build_installer.py"
 
 # --- ONNX Runtime (WebGPU) wheel: four redistributed DLLs -------------------------------
 # All four come from the exact onnxruntime-webgpu 1.27.0 cp312 win_amd64 Python wheel pinned
-# by URL + SHA-256 in fetch-deps.ps1. The cp311-cp314 native DLL bytes differ, so a bare
+# by URL + SHA-256 in fetch-deps.py. The cp311-cp314 native DLL bytes differ, so a bare
 # release-number pin is not sufficient even though their embedded source IDs agree.
 # The wheel's own LICENSE / ThirdPartyNotices.txt / Privacy.md ship in licenses/onnxruntime/.
 
@@ -72,8 +72,8 @@ upstream = "https://github.com/microsoft/onnxruntime"
 spdx = "MIT"
 modified = false
 notice = ["licenses/onnxruntime/ORT-LICENSE.txt", "licenses/onnxruntime/ORT-ThirdPartyNotices.txt", "THIRD_PARTY_NOTICES.md"]
-provisioned_by = "native-deps/fetch-deps.ps1"
-staged_by = "packaging/build-installer.ps1"
+provisioned_by = "native-deps/fetch-deps.py"
+staged_by = "packaging/build_installer.py"
 sha256_note = "fixed by the exact wheel SHA-256; native-deps/runtime/ORT-PROVISION.txt records that wheel and prevents cache substitution"
 
 [[component]]
@@ -84,8 +84,8 @@ upstream = "https://github.com/microsoft/onnxruntime"
 spdx = "MIT"
 modified = false
 notice = ["licenses/onnxruntime/ORT-LICENSE.txt", "licenses/onnxruntime/ORT-ThirdPartyNotices.txt", "THIRD_PARTY_NOTICES.md"]
-provisioned_by = "native-deps/fetch-deps.ps1"
-staged_by = "packaging/build-installer.ps1"
+provisioned_by = "native-deps/fetch-deps.py"
+staged_by = "packaging/build_installer.py"
 sha256_note = "fixed by the exact wheel SHA-256; native-deps/runtime/ORT-PROVISION.txt records that wheel and prevents cache substitution"
 
 # Dawn / Tint are statically linked INSIDE onnxruntime.dll (no separate file), and implement
@@ -103,8 +103,8 @@ modified = false
 # The checked-in file is the exact LICENSE at the pinned Dawn commit (not a newer
 # main-branch copy); ORT's own notice independently reproduces the same 2017-2023 notice.
 notice = ["licenses/dawn-BSD-3-Clause.txt", "licenses/onnxruntime/ORT-ThirdPartyNotices.txt"]
-provisioned_by = "native-deps/fetch-deps.ps1 (as part of onnxruntime.dll)"
-staged_by = "packaging/build-installer.ps1"
+provisioned_by = "native-deps/fetch-deps.py (as part of onnxruntime.dll)"
+staged_by = "packaging/build_installer.py"
 
 [[component]]
 name = "dxcompiler.dll"
@@ -116,8 +116,8 @@ upstream = "https://github.com/microsoft/DirectXShaderCompiler"
 spdx = "NCSA AND LicenseRef-DXC-Bundled-Third-Party"
 modified = false
 notice = ["licenses/dxcompiler-NCSA.txt", "THIRD_PARTY_NOTICES.md"]
-provisioned_by = "native-deps/fetch-deps.ps1"
-staged_by = "packaging/build-installer.ps1"
+provisioned_by = "native-deps/fetch-deps.py"
+staged_by = "packaging/build_installer.py"
 sha256_note = "fixed by the exact wheel SHA-256; native-deps/runtime/ORT-PROVISION.txt records that wheel and prevents cache substitution"
 
 [[component]]
@@ -131,8 +131,8 @@ modified = false
 # (the complete upstream text in dxcompiler-NCSA.txt) covers all other files in it, dxil.dll
 # included.
 notice = ["licenses/dxcompiler-NCSA.txt", "THIRD_PARTY_NOTICES.md"]
-provisioned_by = "native-deps/fetch-deps.ps1"
-staged_by = "packaging/build-installer.ps1"
+provisioned_by = "native-deps/fetch-deps.py"
+staged_by = "packaging/build_installer.py"
 sha256_note = "fixed by the exact wheel SHA-256; native-deps/runtime/ORT-PROVISION.txt records that wheel and prevents cache substitution"
 
 # --- espeak-ng: MODIFIED GPL component (the whole reason binaries are GPLv3) -------------
@@ -148,8 +148,8 @@ modification = "phsource/ph_english_us: phoneme o@ reverted from horse-hoarse me
 # also reproduces the NetBSD copyright and contributor notice from src/compat/getopt.c.
 notice = ["licenses/espeak-ng/COPYING", "licenses/espeak-ng/COPYING.APACHE", "licenses/espeak-ng/COPYING.BSD2", "licenses/espeak-ng/COPYING.UCD", "licenses/espeak-ng-BSD-2-Clause.txt", "licenses/GPL-3.0.txt"]
 corresponding_source = "native-deps/build-espeak.py (patch + build recipe, itself SHA-256-bound to the cache); corresponding-source-X.Y.Z.zip must match the build-time source SHA-256 manifest"
-provisioned_by = "native-deps/fetch-deps.py -> build-espeak.py (entered via fetch-deps.ps1 on Windows)"
-staged_by = "packaging/build-installer.ps1"
+provisioned_by = "native-deps/fetch-deps.py -> build-espeak.py"
+staged_by = "packaging/build_installer.py"
 sha256_note = "per-build (built with whatever MSVC vswhere -latest finds; not hash-pinned by design)"
 
 [[component]]
@@ -164,8 +164,8 @@ modification = "derived from the modified phsource above (the o@ revert affects 
 # DIFFERENT document from licenses/Unicode-3.0.txt (which is for the unicode-ident crate).
 notice = ["licenses/espeak-ng/COPYING", "licenses/espeak-ng/COPYING.UCD", "licenses/GPL-3.0.txt"]
 corresponding_source = "native-deps/build-espeak.py; corresponding-source-X.Y.Z.zip"
-provisioned_by = "native-deps/fetch-deps.py -> build-espeak.py (entered via fetch-deps.ps1 on Windows)"
-staged_by = "packaging/build-installer.ps1"
+provisioned_by = "native-deps/fetch-deps.py -> build-espeak.py"
+staged_by = "packaging/build_installer.py"
 
 # --- Cloud Reader OCR models: NOT shipped - downloaded at first run ----------------------
 # Like the Kokoro voice model, these are downloaded on first run by kokoro-panel into
@@ -273,7 +273,7 @@ upstream = "this repository (icons/)"
 spdx = "MIT"
 modified = false
 notice = ["LICENSE"]
-staged_by = "packaging/build-installer.ps1"
+staged_by = "packaging/build_installer.py"
 
 # --- NSIS installer/uninstaller stub ----------------------------------------------------
 [[component]]
@@ -287,7 +287,7 @@ spdx = "Zlib AND bzip2-1.0.6 AND CPL-1.0"
 modified = false
 notice = ["licenses/nsis/NSIS-COPYING.txt", "THIRD_PARTY_NOTICES.md"]
 corresponding_source = "corresponding-source-X.Y.Z.zip carries the exact hash-verified official NSIS 3.12 source archive"
-staged_by = "packaging/build-installer.ps1 (from the installed NSIS COPYING)"
+staged_by = "packaging/build_installer.py (from the installed NSIS COPYING)"
 
 # --- Model weights: NOT shipped (runtime download) --------------------------------------
 [[component]]

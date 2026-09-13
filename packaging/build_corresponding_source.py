@@ -27,7 +27,6 @@ REFUSES to build unless the working tree is clean AND HEAD carries the v<version
 `--allow-uncommitted` is the local dry-run escape hatch; it stamps the README as a
 NON-release build so such an archive cannot be mistaken for the real thing.
 
-Port of build-corresponding-source.ps1.
 """
 
 import argparse
@@ -455,8 +454,9 @@ source above).
 Rebuilding
 ----------
 1. Install Git, CMake + MSVC, NSIS 3.12, Python 3, and rustup. (Python runs the native
-   dependency provisioning in step 4 and the packaging scripts; any Python 3 will do, and it
-   is not needed to run the installed application.) Install the recorded Rust toolchain:
+   dependency provisioning in step 4 and the packaging scripts; any Python 3 will do, it
+   must be on PATH, and it is not needed to run the installed application.) Install the
+   recorded Rust toolchain:
    ``rustup toolchain install %(rust_release)s --component rust-src --target i686-pc-windows-msvc``.
 2. Open a shell in the extracted kokoro-kindle-reader/ directory and run
    ``rustup override set %(rust_release)s``. Verify ``rustc --version --verbose`` reports
@@ -465,9 +465,10 @@ Rebuilding
 3. This source archive has resolved Git-LFS assets but no .git directory. Initialize the
    local file index needed by the packaging scripts: ``git init`` then ``git add --all``.
    No commit, user identity, or remote is required to build the installer.
-4. Run ``native-deps\\fetch-deps.ps1`` and then ``packaging\\build-installer.ps1``. The
-   provisioner fetches the exact upstream espeak commit and reapplies the documented patch;
-   it also downloads the pinned ORT wheel. OCR models download at app runtime.
+4. Run ``python native-deps\\fetch-deps.py`` and then ``python
+   packaging\\build_installer.py``. The provisioner fetches the exact upstream espeak
+   commit and reapplies the documented patch; it also downloads the pinned ORT wheel.
+   OCR models download at app runtime.
    The included espeak-ng-modified-1.52.0/ is the matching modified source for inspection
    and modification, not a Git checkout to copy over native-deps/espeak-ng-src/.
 See ARCHITECTURE.md and packaging/README.md in the project source for detail.

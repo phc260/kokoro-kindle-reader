@@ -2,9 +2,9 @@ name: Installer (kokoro-host + panel)
 
 # Builds the installer: the tray host (kokoro-host) + the Slint settings panel
 # (kokoro-panel) + the native Dawn WebGPU runtime + the x86 KokoroSapi.dll (Rust),
-# packaged by packaging/build-installer.ps1 (makensis). This is the only edition now
+# packaged by packaging/build_installer.py (makensis). This is the only edition now
 # (the old Tauri/WebView2 build is retired), so it owns the vX.Y.Z release tags.
-# Windows-only. The synth runtime deps are provisioned by fetch-deps.ps1 (the
+# Windows-only. The synth runtime deps are provisioned by fetch-deps.py (the
 # onnxruntime-webgpu wheel for the Dawn runtime DLLs + an espeak-ng x64 build). The Cloud
 # Reader OCR models are NOT bundled - the app downloads them at first run - so they are not
 # provisioned here. The synth core is pure Rust; onnxruntime.dll is loaded at runtime via
@@ -51,23 +51,24 @@ jobs:
 
       # NSIS is PINNED: the installer/uninstaller stub is NSIS, so its version is part of
       # what we ship (its COPYING is staged into licenses\nsis\ from this exact toolchain -
-      # see build-installer.ps1). Bump this in lockstep when intentionally upgrading NSIS;
+      # see build_installer.py). Bump this in lockstep when intentionally upgrading NSIS;
       # the value must be a version the choco `nsis` package actually publishes.
       - name: Install NSIS (pinned)
         run: choco install nsis --version=3.12.0 -y --no-progress
 
       # cargo-about generates the Rust dependency-licence notices and, via `--fail`, is the
       # gate that refuses a dependency under a licence not in packaging\about.toml. Without
-      # it here, build-installer.ps1 -> generate-dependency-licenses.ps1 THROWS, so this is
+      # it here, build_installer.py -> generate_dependency_licenses.py THROWS, so this is
       # a build-breaking prerequisite, not only a compliance step. Pinned so the closure
       # notices are reproducible; --features cli matches how the tool is normally installed.
       - name: Install cargo-about (pinned)
         run: cargo install cargo-about --version 0.9.1 --locked --features cli
 
-      # The provisioning recipe is Python now (one recipe for Windows and Linux; the .ps1
-      # is a harness). windows-latest happens to ship a Python, but pin one rather than
-      # depend on a runner image: this is the release path, and "the image changed" is not a
-      # failure anyone wants to diagnose from a tagged build.
+      # The provisioning recipe is one shared Python script for Windows and Linux, and the
+      # whole packaging chain below is Python too - so this is a hard prerequisite, not a
+      # convenience. windows-latest happens to ship a Python, but pin one rather than depend
+      # on a runner image: this is the release path, and "the image changed" is not a failure
+      # anyone wants to diagnose from a tagged build.
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -76,8 +77,7 @@ jobs:
       # onnxruntime-webgpu cp312 wheel) + an espeak-ng x64 build. Downloads + a build;
       # the slowest step.
       - name: Provision native deps (ORT runtime + espeak)
-        shell: pwsh
-        run: ./native-deps/fetch-deps.ps1
+        run: python native-deps/fetch-deps.py
 
       # The Cloud Reader OCR models are NOT bundled - the panel downloads them at first run
       # (see ocr-manifest.json / kokoro-panel::download), so the installer build does not need
@@ -85,15 +85,13 @@ jobs:
 
       # Build the x86 Rust SAPI DLL + release-build both crates, stage, run makensis.
       - name: Build installer
-        shell: pwsh
-        run: ./packaging/build-installer.ps1
+        run: python packaging/build_installer.py
 
       # Prove the installer actually CONTAINS the licence/notice tree (GPLv3 requires the
       # notices accompany the binaries). Extracts the produced -setup.exe and fails if any
       # required notice is missing or empty - same "fail loudly" contract as the OCR digests.
       - name: Verify installer notices
-        shell: pwsh
-        run: ./packaging/verify-installer-notices.ps1
+        run: python packaging/verify_installer_notices.py
 
       # Complete corresponding source (GPLv3 section 6) for the GPL-covered binaries.
       # A tag build must satisfy the strict clean+matching-tag proof. A manual build is not
@@ -101,13 +99,11 @@ jobs:
       # archive from the same checkout and stamp that archive NON-RELEASE.
       - name: Build corresponding source (release)
         if: startsWith(github.ref, 'refs/tags/v')
-        shell: pwsh
-        run: ./packaging/build-corresponding-source.ps1
+        run: python packaging/build_corresponding_source.py
 
       - name: Build corresponding source (manual CI artifact)
         if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
-        shell: pwsh
-        run: ./packaging/build-corresponding-source.ps1 -AllowUncommitted
+        run: python packaging/build_corresponding_source.py --allow-uncommitted
 
       # Never upload the GPL-covered installer as a standalone Actions artifact. This path
       # runs on manual dispatch too, where there is no GitHub Release to pair the source.

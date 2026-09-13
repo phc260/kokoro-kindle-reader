@@ -116,9 +116,9 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
   (a UTF-8 BOM does it silently) and a missing key alike. Flag any fix that writes an initial
   `controls.json` instead, and any silent GPU→CPU substitution: the fallback must log.
 - **There is ONE provisioning recipe for both platforms: `native-deps/fetch-deps.py` (plus
-  `build-espeak.py`).** The `.ps1` files are harnesses that resolve Python and exec it;
-  Linux calls the recipe directly. Flag any change that puts recipe logic back into a
-  harness, or adds a second platform-specific script — the two former twins had already drifted when they were merged.
+  `build-espeak.py`).** Both platforms invoke it directly; there is no wrapper on either
+  side. Flag any change that adds a platform-specific wrapper back, or a second
+  platform-specific script — the two former twins had already drifted when they were merged.
   Platform differences belong in the `WHEELS` table and `layout()`. Also flag any suggestion
   to use a distribution's own libespeak-ng: it is unmodified and the phonemes would differ,
   audibly and on one OS only.
@@ -313,7 +313,7 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
 - **The bundle is GPLv3 even though the source is permissive.** The app links espeak-ng
   (GPL-3.0-or-later, and *modified* by `native-deps/build-espeak.py`) and Slint under its
   GPL-3.0 option. So `LICENSE` + `THIRD_PARTY_NOTICES.md` + `licenses/` must stay staged
-  by `build-installer.ps1` and installed by `installer.nsi`. No shipped artifact may claim
+  by `build_installer.py` and installed by `installer.nsi`. No shipped artifact may claim
   a bare licence name in its version resource — that's `installer.nsi`'s `VIAddVersionKey`
   plus `LegalCopyright` in `kokoro-host/build.rs` and `kokoro-panel/build.rs`; all three
   read a copyright holder plus a pointer to `THIRD_PARTY_NOTICES.md` instead. If the espeak
@@ -343,22 +343,22 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
   The tray and Settings must keep **About & licenses** available independently of narration;
   it opens installed `legal.html`, whose content and local links are checked in packaging.
 - **Provisioned notices that must ship, and the checks that prove they do.** Besides the ORT
-  wheel notices, `fetch-deps.ps1` provisions espeak-ng's own `COPYING*` (incl. `COPYING.UCD`,
-  which is NOT `licenses/Unicode-3.0.txt`) and `build-installer.ps1` stages NSIS's `COPYING`
+  wheel notices, `fetch-deps.py` provisions espeak-ng's own `COPYING*` (incl. `COPYING.UCD`,
+  which is NOT `licenses/Unicode-3.0.txt`) and `build_installer.py` stages NSIS's `COPYING`
   (LZMA/CPL exception) from the pinned toolchain — both `throw` when absent.
-  `verify-installer-notices.ps1` extracts the built `-setup.exe` in CI and fails on any
+  `verify_installer_notices.py` extracts the built `-setup.exe` in CI and fails on any
   missing/empty notice. The Rust Standard Library is outside Cargo's graph too:
-  `build-installer.ps1` stages the exact toolchain's generated `COPYRIGHT-library.html` plus
+  `build_installer.py` stages the exact toolchain's generated `COPYRIGHT-library.html` plus
   its release/commit, CI installs `rust-src`, and the corresponding-source archive carries
   that full `library/` tree after matching the active toolchain to the installer's staged
   `TOOLCHAIN.txt`. `packaging/components.toml` inventories every non-Cargo shipped
   component; `LICENSING.md` is the authoritative per-artifact map + §6 procedure.
 - **Checked-in licence texts are content-pinned.** `packaging/license-texts.sha256` covers
   `LICENSE`, `THIRD_PARTY_NOTICES.md`, and every file under `licenses/` after newline
-  normalization; `verify-license-texts.ps1` runs in PR CI, before an installer build, and
+  normalization; `verify-license-texts.py` runs in PR CI, before an installer build, and
   against the extracted installer. Update a hash only after comparing the complete replacement
   with the pinned upstream revision. Provisioned notices must be exact named, non-empty files.
-- **Native caches carry provenance.** `fetch-deps.ps1` pins ORT's exact cp312 win_amd64 wheel
+- **Native caches carry provenance.** `fetch-deps.py` pins ORT's exact cp312 win_amd64 wheel
   by filename and PyPI SHA-256 (the 1.27.0 wheels contain different native DLL bytes), and
   writes ORT/espeak recipe markers only after all expected outputs and notices exist. A missing
   or mismatched marker forces a fresh provision, and installer staging reads that cache directly.
@@ -371,10 +371,10 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
   Reuse requires all to match; corresponding-source packaging uses the records frozen in
   `staging/provenance/` (including espeak's source manifest) and checks the tracked tree again; never let
   a clean tag bless arbitrary stale binaries from `target/`.
-- **NSIS is pinned in code as well as CI.** `build-installer.ps1` rejects `makensis` unless
+- **NSIS is pinned in code as well as CI.** `build_installer.py` rejects `makensis` unless
   `/VERSION` reports 3.12, keeping the stub, its staged `COPYING`, `components.toml`, and the
   corresponding-source instructions on the same toolchain.
-- **GPL binaries ship corresponding source.** `build-corresponding-source.ps1` produces
+- **GPL binaries ship corresponding source.** `build_corresponding_source.py` produces
   `corresponding-source-X.Y.Z.zip` (LFS-resolved source, lockfiles/scripts, the modified
   espeak-ng tree and the exact Rust Standard Library source, both with SHA-256 manifests,
   plus the hash-verified official NSIS 3.12 source for its CPL-covered LZMA module)
@@ -385,7 +385,8 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
 ## Encoding rules (real bugs, not style)
 
 - **`.ps1` files must be ASCII.** PowerShell 5.1 misreads a UTF-8-no-BOM em-dash. Use `-`
-  and `...`, never `—` or `…`.
+  and `...`, never `—` or `…`. Only the four shipped/by-hand scripts under `kokoro-sapi/`
+  and `kokoro-sapi-smoke/` are left; the build and provisioning scripts are Python.
 - **`packaging/installer.nsi` must be ASCII.** `makensis` parses it as ACP, so non-ASCII in
   a user-visible `DetailPrint`/`MessageBox` renders as mojibake in the install UI.
 - Rust and `.slint` files handle Unicode fine.

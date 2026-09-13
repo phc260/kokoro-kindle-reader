@@ -52,7 +52,7 @@ accepted = ["GPL-3.0-only"]
 # cargo-about succeeds but emits an MIT template with copyright placeholders.
 # Fetch from each package's .cargo_vcs_info.json commit, NOT a branch or a fixed
 # override that could silently survive a dependency update. Hashes cover the entire
-# upstream files, including attribution. verify-dependency-licenses.ps1 also checks
+# upstream files, including attribution. verify_dependency_licenses.py also checks
 # the rendered texts: cargo-about 0.9.1 only WARNS when a clarification fails.
 
 # taffy 0.10.1, 639f0acdd20f914f847abffbeaa903d66cae4882 (Visly/stretch origin).

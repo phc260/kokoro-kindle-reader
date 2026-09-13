@@ -1,6 +1,6 @@
 name: License check (cargo-about gate)
 
-# Runs the cargo-about --fail gate (the same one build-installer.ps1 runs) on pull requests
+# Runs the cargo-about --fail gate (the same one build_installer.py runs) on pull requests
 # that could change the licence closure, so a dependency under a licence not in
 # packaging/about.toml's `accepted` list is caught at review time - not only on a release
 # tag. This does NOT build the installer or the native deps; it only resolves and renders
@@ -14,36 +14,26 @@ on:
       - '.gitattributes'
       - 'packaging/about.toml'
       - 'packaging/about.hbs'
-      # The checks are Python; the .ps1 beside each one is a harness its callers still use.
       - 'packaging/generate_dependency_licenses.py'
       - 'packaging/verify_dependency_licenses.py'
       - 'packaging/test_dependency_licenses.py'
       - 'packaging/source_notices.py'
       - 'packaging/dotnet_compat.py'
-      - 'packaging/generate-dependency-licenses.ps1'
-      - 'packaging/verify-dependency-licenses.ps1'
-      - 'packaging/test-dependency-licenses.ps1'
-      - 'packaging/python3.ps1'
       - 'packaging/source-notices.json'
       - 'legal.html'
       - 'legal.rs'
       - 'packaging/components.toml'
       - 'packaging/verify_component_hashes.py'
-      - 'packaging/verify-component-hashes.ps1'
       - 'packaging/license-texts.sha256'
-      - 'packaging/verify-license-texts.ps1'
       - 'packaging/verify-license-texts.py'
       # The installer/staging/notice-verifier/corresponding-source scripts control what ships;
       # touching them re-runs this gate at review time (the full extraction proof still runs on
       # the tag build in installer.yml, which needs the built -setup.exe).
       - 'packaging/build_installer.py'
       - 'packaging/build_corresponding_source.py'
-      - 'packaging/build-installer.ps1'
       - 'packaging/installer.nsi'
       - 'packaging/verify_installer_notices.py'
       - 'packaging/target_platform.py'
-      - 'packaging/verify-installer-notices.ps1'
-      - 'packaging/build-corresponding-source.ps1'
       - 'THIRD_PARTY_NOTICES.md'
       - 'LICENSING.md'
       - 'LICENSE'
@@ -64,9 +54,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # Every check below is a Python script behind a .ps1 harness. windows-latest happens
-      # to ship a Python, but pin one rather than depend on a runner image: "the image
-      # changed" is not a failure anyone wants to diagnose from a licence gate.
+      # Every check below is a Python script invoked directly. windows-latest happens to
+      # ship a Python, but pin one rather than depend on a runner image: "the image changed"
+      # is not a failure anyone wants to diagnose from a licence gate.
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -94,25 +84,21 @@ jobs:
       # crate whose resolved licence is not accepted for it in about.toml. A new licence
       # category (or GPL arriving through anything other than Slint) fails this job.
       - name: Run the licence gate
-        shell: pwsh
-        run: ./packaging/generate-dependency-licenses.ps1
+        run: python packaging/generate_dependency_licenses.py
 
-      # The checks are Python, but keep driving them through the harness under Windows
-      # PowerShell 5.1: that is how CI and a developer invoke them, and it is the harness's
-      # App-Execution-Alias resolution that this proves still works.
-      - name: Test notice-verification regressions (via the PowerShell 5.1 harness)
-        shell: powershell
-        run: ./packaging/test-dependency-licenses.ps1
+      # 26 offline fixtures over the notice verifier - invented notices only, no network
+      # and no built installer, so a regression in the verifier is caught here rather than
+      # on a release tag.
+      - name: Test notice-verification regressions
+        run: python packaging/test_dependency_licenses.py
 
       # Verify the in-repo assets pinned in components.toml (the five Material Symbols SVGs
       # compiled into kokoro-panel.exe) still hash to their recorded sha256 - so the non-Cargo
       # inventory can't silently drift from the tree.
       - name: Verify component hashes
-        shell: pwsh
-        run: ./packaging/verify-component-hashes.ps1
+        run: python packaging/verify_component_hashes.py
 
       # A present, non-empty licence file can still be truncated or copied from the wrong
       # upstream revision. Pin the fixed checked-in texts after normalizing CRLF/LF.
       - name: Verify checked-in licence texts
-        shell: pwsh
-        run: ./packaging/verify-license-texts.ps1
+        run: python packaging/verify-license-texts.py

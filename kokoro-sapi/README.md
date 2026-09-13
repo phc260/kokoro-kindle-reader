@@ -5,7 +5,7 @@ It's **connect-only**: an `ISpTTSEngine` that forwards each `Speak` over
 `\\.\pipe\KokoroSapiSynth` to the running `kokoro-host`, which synthesizes and streams
 PCM back. It does no synthesis itself, so **`kokoro-host` must be running for Kindle to
 speak**. This is the shipping engine — bundled and registered by the installer
-(`packaging/build-installer.ps1` → `voice-setup.ps1`).
+(`packaging/build_installer.py` → `voice-setup.ps1`).
 
 It must stay **x86** because Kindle is a 32-bit process that loads the DLL in-process by
 registry path. A Rust panic can never unwind into Kindle — the crate builds with

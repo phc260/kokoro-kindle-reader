@@ -113,7 +113,7 @@ Running it against a fresh upstream clone reproduces the modified source and the
 configuration used for the shipped `espeak-ng.dll` and `espeak-ng-data/`. (It does not
 promise a byte-identical DLL: the script builds with whatever MSVC toolchain
 `vswhere -latest` finds, and the build is not otherwise pinned or hash-verified.)
-`native-deps/fetch-deps.ps1` records a manifest of the exact source tree used for that build;
+`native-deps/fetch-deps.py` records a manifest of the exact source tree used for that build;
 the corresponding-source packager compares the archive tree against it and fails on any drift.
 See "Obtaining corresponding source" below.
 
@@ -125,7 +125,7 @@ the tree includes Apache-2.0 code, and the `espeak-ng-data/` directory this inst
 includes
 **Unicode Character Database (UCD)** data under the Unicode licence. espeak-ng's own
 `COPYING*` set — `COPYING` (GPLv3), `COPYING.APACHE`, `COPYING.BSD2` and `COPYING.UCD` —
-is provisioned from the exact `1.52.0` source by `native-deps/fetch-deps.ps1` and installed
+is provisioned from the exact `1.52.0` source by `native-deps/fetch-deps.py` and installed
 into **`licenses\espeak-ng\`** beside the application (like `licenses\onnxruntime\`, that
 directory exists in an install, not in this source tree). Note that `COPYING.UCD` is a
 *distinct* document from [`licenses/Unicode-3.0.txt`](licenses/Unicode-3.0.txt): the latter
@@ -181,8 +181,8 @@ installed application**, taken verbatim from the same wheel the DLLs came out of
 provisioned rather than checked in, so that directory exists in an install and not in the
 source tree.) That is the authoritative and complete list of what ORT bundles — far
 more than this file enumerates — and provisioning it with the binaries is what keeps it
-matched to the exact build being shipped. `native-deps/fetch-deps.ps1` retains it and
-`packaging/build-installer.ps1` stages it; both fail loudly rather than ship the DLLs with
+matched to the exact build being shipped. `native-deps/fetch-deps.py` retains it and
+`packaging/build_installer.py` stages it; both fail loudly rather than ship the DLLs with
 no notices.
 
 ### DirectX Shader Compiler — `dxcompiler.dll`, `dxil.dll`
@@ -245,7 +245,7 @@ of this section: four crates it described as already-covered `OR` alternatives t
 to be sole-licensed under terms this file shipped no text for. **This section no longer
 tries to enumerate the closure by hand.**
 
-Instead, [`packaging/generate-dependency-licenses.ps1`](packaging/generate-dependency-licenses.ps1)
+Instead, [`packaging/generate_dependency_licenses.py`](packaging/generate_dependency_licenses.py)
 runs [`cargo about`](https://github.com/EmbarkStudios/cargo-about) against the exact
 `Cargo.lock` each shipped binary was built from — `kokoro-host` and `kokoro-panel` for
 `x86_64-pc-windows-msvc`, `kokoro-sapi`/`kokoro-hook`/`kokoro-inject` for
@@ -259,7 +259,7 @@ dependency whose licence isn't on that list makes generation **fail the build** 
 than ship silently uncovered — that's the mechanism for "a new licence category showed
 up," not a person re-reading the whole tree by hand.
 
-`packaging/build-installer.ps1` runs the generator on every build (not once, provisioned —
+`packaging/build_installer.py` runs the generator on every build (not once, provisioned —
 the Cargo closure moves with ordinary `cargo update`s in a way a pinned wheel doesn't) and
 stages its output into `licenses\dependencies\` beside the installed application. That
 directory, like `licenses\onnxruntime\`, exists in an install and not in this source tree.
@@ -267,7 +267,7 @@ The tray menu and Settings panel both offer **About & licenses**, opening the in
 `legal.html` page with copyright, warranty, GPL redistribution terms and links to these
 local notices, the GPL text and the matching release's source-download location.
 To reproduce it yourself: `cargo install cargo-about --locked --features cli`, then
-`packaging\generate-dependency-licenses.ps1`.
+`python packaging\generate_dependency_licenses.py`.
 
 Each report also appends the exact `LICENSE*`, `LICENCE*`, `COPYING*`, `NOTICE*`,
 `COPYRIGHT*`, `AUTHORS*`, and `CONTRIBUTORS*` files from every resolved dependency that
@@ -287,7 +287,7 @@ notice hashes are required in the rendered reports, including after installer ex
 
 For packages that omit their upstream licence files, `about.toml` pins complete upstream
 texts by SHA-256 and retrieves them at the package's own source commit. The rendered
-reports are checked again by `verify-dependency-licenses.ps1`, including after installer
+reports are checked again by `verify_dependency_licenses.py`, including after installer
 extraction: a failed retrieval or hash check must not silently become a generic template.
 The exact RustAudio notice for `dasp_sample` 0.11.0 is also kept locally in
 [`licenses/dasp_sample-MIT.txt`](licenses/dasp_sample-MIT.txt), copied from
@@ -339,7 +339,7 @@ entire Rust closure therefore omitted both the standard library's contributor no
 the additional licence terms carried by its bundled code.
 
 Rust generates **`COPYRIGHT-library.html`** for exactly this boundary. On every installer
-build, `packaging/build-installer.ps1` copies that report from the same toolchain that built
+build, `packaging/build_installer.py` copies that report from the same toolchain that built
 the binaries into `licenses\rust\COPYRIGHT-library.html`; it also writes
 `licenses\rust\TOOLCHAIN.txt` with `rustc --version --verbose`, including the immutable
 compiler commit. The report is authoritative for that moving per-toolchain composition and
@@ -395,7 +395,7 @@ at that tag (with Git-LFS assets resolved), all lockfiles and build/install scri
 exact `rust-src` Standard Library tree used by the build (also with a SHA-256 manifest), and
 the exact NSIS 3.12 source archive, and a rebuild README with tool versions and immutable
 commits. It is produced by
-[`packaging/build-corresponding-source.ps1`](https://github.com/phc260/kokoro-kindle-reader/blob/main/packaging/build-corresponding-source.ps1).
+[`packaging/build_corresponding_source.py`](https://github.com/phc260/kokoro-kindle-reader/blob/main/packaging/build_corresponding_source.py).
 
 The build workflow never uploads the installer by itself: its Actions artifact contains this
 source archive too, including on a manual non-release run (where the archive is visibly stamped

@@ -7,8 +7,6 @@ then hand the staging tree to the platform's packager.
 
 Output: packaging/kokoro-kindle-reader-<version>-setup.exe
 
-Port of build-installer.ps1.
-
 **The logic here is platform-agnostic; the platform-specific facts are the `PROFILES`
 table.** Which runtime libraries ship, what the extra client artifacts are, which packager
 turns a staging tree into an installable file - those differ. The order of operations, the

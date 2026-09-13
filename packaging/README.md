@@ -4,7 +4,7 @@ Builds `kokoro-kindle-reader-X.Y.Z-setup.exe`. **Standalone NSIS** via `makensis
 a Tauri bundler.
 
 ```powershell
-.\packaging\build-installer.ps1
+python packaging\build_installer.py
 ```
 
 CI runs this on a `v*` tag or manual dispatch (`.github/workflows/installer.yml`). Its Actions
@@ -17,23 +17,21 @@ drafts a GitHub Release with both attached — see [`../DEVELOPMENT.md`](../DEVE
 |---|---|
 | `build_installer.py` | Release-builds both x64 crates, builds the three x86 artifacts, records source/toolchain provenance, stages everything into `staging\`, then runs `makensis`. `-SkipBuild` accepts only matching recorded outputs. |
 | `installer.nsi` | The NSIS script: install/uninstall sections, the elevation hooks, the Run value, the model-deletion prompt. Carries the product `VERSION`. |
-| `generate_dependency_licenses.py` | Runs `cargo about --locked` against each shipped crate's `Cargo.lock` and appends exact packaged licence files and source copyright headers; called automatically by `build-installer.ps1`. Needs `cargo install cargo-about --locked --features cli` once. |
+| `generate_dependency_licenses.py` | Runs `cargo about --locked` against each shipped crate's `Cargo.lock` and appends exact packaged licence files and source copyright headers; called automatically by `build_installer.py`. Needs `cargo install cargo-about --locked --features cli` once. |
 | `about.toml`, `about.hbs` | `cargo-about`'s config (the accepted-licence list; `GPL-3.0-only` granted per-crate to Slint only) and output template. |
-| `verify_dependency_licenses.py`, `test_dependency_licenses.py` | Verify every appendix text hash and block count, plus clarification/embedded-source hashes per crate/version (also inside the extracted installer); 26 offline regression fixtures, driven in CI through the PS 5.1 harness. |
+| `verify_dependency_licenses.py`, `test_dependency_licenses.py` | Verify every appendix text hash and block count, plus clarification/embedded-source hashes per crate/version (also inside the extracted installer); 26 offline regression fixtures, run in CI by `license-check.yml`. |
 
 **These four are Python now, and the coupling that made them one unit is gone.**
-PowerShell cannot import a script without executing it, so `test-dependency-licenses.ps1`
-used to **parse `generate-dependency-licenses.ps1`'s AST**, find two functions by name and
+PowerShell cannot import a script without executing it, so `test_dependency_licenses.py`
+used to **parse `generate_dependency_licenses.py`'s AST**, find two functions by name and
 dot-source their extents -- which meant renaming a function in the generator broke the
 tests somewhere that never mentioned it, and none of the four could be moved or reorganized
 without the other three. `test_dependency_licenses.py` imports them instead. What remains
 is ordinary: `source_notices.py` is a library, `generate_` calls `verify_` after each
-crate, and `dotnet_compat.py` holds the .NET behaviours the output hashes depend on. The
-`.ps1` files beside them are harnesses so `build-installer.ps1`,
-`verify-installer-notices.ps1` and `license-check.yml` call them exactly as before.
+crate, and `dotnet_compat.py` holds the .NET behaviours the output hashes depend on.
 
 Their output contract is still byte-exact -- the generated HTML is staged into the
-installer and hashed by `verify-installer-notices.ps1` -- so "it still runs" is not
+installer and hashed by `verify_installer_notices.py` -- so "it still runs" is not
 evidence a change was safe: regenerate and compare digests. **Two things changed
 deliberately in the port**, both because the PowerShell was wrong rather than merely
 different, and neither alters a notice, a hash or a count:
@@ -56,19 +54,26 @@ output is byte-identical everywhere; and two independent runs produce identical 
 | `source-notices.json`, `source_notices.py` | Reviewed versions, source paths, line ranges and complete-notice hashes for additional embedded terms; generation rejects changed source or unreviewed versions. |
 | `components.toml` | Checked-in inventory of every **non-Cargo** component (the toolchain-supplied Rust Standard Library, shipped native DLLs, compiled-in SVGs, NSIS stub, plus the not-shipped downloaded assets — OCR + voice models — for attribution): origin, version/revision, SHA-256, SPDX, notice files, modification status. |
 | `verify_component_hashes.py` | Re-hashes the in-repo assets `components.toml` pins by SHA-256 (the five Material Symbols SVGs compiled into `kokoro-panel.exe`) and fails if any drifted — the in-repo half of provenance; `verify_installer_notices.py` covers the shipped side. Run by `license-check.yml`. |
-| `license-texts.sha256`, `verify-license-texts.ps1` | Reviewed SHA-256s for the shipped checked-in notice/licence files, normalized across CRLF/LF, plus the fail-closed verifier used by CI, the installer build, and the extraction test. |
+| `license-texts.sha256`, `verify-license-texts.py` | Reviewed SHA-256s for the shipped checked-in notice/licence files, normalized across CRLF/LF, plus the fail-closed verifier used by CI, the installer build, and the extraction test. |
 | `verify_installer_notices.py` | Extracts the built `-setup.exe`, derives exact component notice paths from `components.toml`, and fails if any is missing or empty. A CI step in `installer.yml` runs it after the build; run manually anytime (needs 7-Zip). |
 | `build_corresponding_source.py` | Builds `corresponding-source-<version>.zip` (GPLv3 §6 plus NSIS/LZMA CPL source) for attaching to a release. |
-| `staging\` | Build output — everything that goes into the installer. Regenerated by `build-installer.ps1`. |
+| `staging\` | Build output — everything that goes into the installer. Regenerated by `build_installer.py`. |
 | `dependency-licenses\` | Output of `generate_dependency_licenses.py` — provisioned, not tracked (like `native-deps\runtime\notices\`). |
 
 ## One language in packaging/
 
-Everything here is Python now; the `.ps1` files beside
-each script are harnesses, so `installer.yml`, `license-check.yml` and a local
-`packaginguild-installer.ps1` all call them exactly as before. `python3.ps1` is the shared
-interpreter resolver (it resolves `py`/`python`/`python3` by RUNNING them - a Windows App
-Execution Alias is a 0-byte reparse point and a size check rejects a working install).
+Everything here is Python, invoked directly:
+
+```
+python packaging\build_installer.py
+```
+
+Each script had a `.ps1` harness beside it for a while, which resolved an interpreter and
+forwarded flags. They held no logic, so they were removed rather than kept as a second set
+of entry points; `installer.yml`, `license-check.yml` and a local build all call the `.py`
+now. The consequence is that **Python 3 must be on `PATH`** - nothing goes looking for it.
+If a `py`/`python`/`python3` on Windows looks like a 0-byte file, that is an App Execution
+Alias and it works: judge one by running it, never by its size.
 
 **Standard library only.** No third-party packages: the corresponding-source README
 promises that any Python 3 will do, and a release path that needs `pip install` first is a
@@ -91,7 +96,7 @@ verifier was run against a real built installer under both implementations and r
 same verdict. That was only possible because provenance records are now compared as a SET of
 lines rather than as joined text - see `build_installer.records_match`.
 
-It also found a live bug. `build-corresponding-source.ps1` re-hashed the espeak-ng tree with
+It also found a live bug. `build_corresponding_source.py` re-hashed the espeak-ng tree with
 `Sort-Object` and compared it byte for byte against the manifest `native-deps/fetch-deps.py`
 writes in ordinal byte order. On the real 2579-file tree those orderings diverge at line 8,
 so once provisioning became Python that check was guaranteed to throw - on a tagged release
@@ -132,7 +137,7 @@ them from the staging list or the `File` directives. `licenses/` is staged and i
 `Apache-2.0.txt` alongside `GPL-3.0.txt` without a second list to forget.
 
 ONNX Runtime's own licence and notice set is the first exception: it is **provisioned, not
-tracked**. `fetch-deps.ps1` keeps it from the wheel into `native-deps\runtime\notices\` and
+tracked**. `fetch-deps.py` keeps it from the wheel into `native-deps\runtime\notices\` and
 this script stages it into `licenses\onnxruntime\`, so it stays matched to the exact build
 the DLLs came from instead of being a hand copy that goes stale at the next version bump.
 The runtime cache marker records the exact CPython 3.12 Windows wheel filename and its
@@ -149,13 +154,13 @@ The fixed texts tracked in `licenses\`, plus `LICENSE`, `THIRD_PARTY_NOTICES.md`
 `legal.html`, have a
 different drift risk: a stale, truncated, or wrong-revision copy still passes a presence
 check. `license-texts.sha256` pins their reviewed content after newline normalization.
-`verify-license-texts.ps1` also requires every tracked licence text to appear exactly once in
+`verify-license-texts.py` also requires every tracked licence text to appear exactly once in
 that manifest, and runs in pull requests and before the installer build.
 
 The Cargo dependency closure is the second, and for the same reason: hundreds of transitive
 crates across two target triples cannot be kept accurate by a checked-in list (one drifted
 and shipped four sole-licensed crates as if MIT/Apache-2.0 already covered them — see
-`THIRD_PARTY_NOTICES.md`'s "Cargo crates" section). `generate-dependency-licenses.ps1` runs
+`THIRD_PARTY_NOTICES.md`'s "Cargo crates" section). `generate_dependency_licenses.py` runs
 [`cargo about`](https://github.com/EmbarkStudios/cargo-about) against each shipped crate's
 own `Cargo.lock` and target triple and this script stages the result into
 `licenses\dependencies\`. It **fails the build** if a dependency's licence isn't on
@@ -166,7 +171,7 @@ for the real notice in a crate's package. Leading source copyright comments are 
 as labelled excerpts too. For packages that omit their upstream notices, `about.toml`
 pins the exact texts and fetches them at the package's own source commit. The one local
 RustAudio copy uses an `@project/` path expanded in a generated config; only the HTML
-reports, not that machine-specific config, are staged. `verify-dependency-licenses.ps1`
+reports, not that machine-specific config, are staged. `verify_dependency_licenses.py`
 then checks every appendix text hash and its expected block count, plus the separately
 pinned clarification hashes: cargo-about 0.9.1 itself only warns on failed
 clarifications and can still return success with canonical fallback text.
@@ -179,7 +184,7 @@ requires these hashes for each affected crate/version in both generated and extr
 Installer extraction also verifies every local link from `legal.html`.
 
 espeak-ng's and NSIS's own notices are the third and fourth exceptions, provisioned the
-same way. We ship a **modified** espeak-ng.dll + `espeak-ng-data\`, so `fetch-deps.ps1`
+same way. We ship a **modified** espeak-ng.dll + `espeak-ng-data\`, so `fetch-deps.py`
 provisions espeak-ng's `COPYING`/`COPYING.APACHE`/`COPYING.BSD2`/`COPYING.UCD` from the exact
 1.52.0 commit into `native-deps\espeak-ng-notices\` and this script stages them to
 `licenses\espeak-ng\`. `COPYING.UCD` is **not** `licenses\Unicode-3.0.txt` — it covers the
@@ -190,19 +195,19 @@ CPL-1.0-with-linking-exception) from the installed toolchain to `licenses\nsis\`
 **pinned** in `installer.yml` so that text matches the version used. Both stagers **throw**
 when the text is absent. The espeak cache marker includes `build-espeak.py`'s normalized
 SHA-256, so any patch/build-recipe change forces a rebuild; its build-time source manifest
-must match the tree placed in the corresponding-source archive. `build-installer.ps1` also
+must match the tree placed in the corresponding-source archive. `build_installer.py` also
 rejects an installed `makensis` other than 3.12;
 otherwise a local build could ship a different stub while the inventory still claimed 3.12.
 
 The Rust Standard Library is a fifth provisioned notice set. It is statically linked into
 every Rust output but is supplied by the rustc sysroot rather than any `Cargo.lock`, so
-`cargo-about` cannot see it. `build-installer.ps1` copies the toolchain-generated
+`cargo-about` cannot see it. `build_installer.py` copies the toolchain-generated
 `COPYRIGHT-library.html` into `licenses\rust\` and records `rustc`'s release plus immutable
-commit in `TOOLCHAIN.txt`. `build-corresponding-source.ps1` also requires the matching
+commit in `TOOLCHAIN.txt`. `build_corresponding_source.py` also requires the matching
 `rust-src` component, checks the active toolchain against the installer's staged
 `TOOLCHAIN.txt`, and places its full `library/` tree in the release source archive.
 
-After `makensis`, `verify-installer-notices.ps1` extracts the produced `-setup.exe` and
+After `makensis`, `verify_installer_notices.py` extracts the produced `-setup.exe` and
 **fails the build** if any required notice is missing or empty — and if any fixed checked-in
 text differs from its reviewed SHA-256 — proving the right notice tree is *in the installer*,
 not just in `staging\`. Component notice paths come directly from

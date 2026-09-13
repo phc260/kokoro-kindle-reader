@@ -9,7 +9,6 @@ header to be replaced or removed while the special clarifications still passed.
 
 Runs against extracted reports as well as generated ones; no builds, no network.
 
-Port of verify-dependency-licenses.ps1.
 """
 
 import argparse

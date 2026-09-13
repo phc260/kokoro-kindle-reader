@@ -96,7 +96,7 @@ Drift-prone claim types to check explicitly:
 
 - **File/path references** — every file named in prose or a Layout table still exists at that
   path (e.g. `kokoro-sapi/*.ps1`, the DLL path, `kokoro-host/src/*`, `kokoro-panel/src/*`,
-  `native-deps/*.ps1` and `*.py`, `packaging/*.py`, `model-manifest.json`,
+  `native-deps/*.py`, `packaging/*.py`, `model-manifest.json`,
   `ocr-manifest.json`, `icons/`). **Grep the bare identifier, not an anchored one** — a
   pattern requiring backticks or a path prefix is what hid the tail of a rename last time; the
   count went 2 -> 6 -> 9 across three passes because of exactly that.
@@ -122,17 +122,17 @@ Drift-prone claim types to check explicitly:
   pacing lead / sub-frame are *not* in the file — they're fixed constants in `pipe.rs`, so
   docs must not describe them as user-tunable.
 - **Dependency pins / versions** — the ORT / `onnxruntime-webgpu` pin matches what the docs
-  claim. **The provisioning recipe is `native-deps/fetch-deps.py`; the `.ps1` is a harness
-  over it** — and the version is written in *both* (`ORT_VERSION` in the Python, the
-  `-OrtVersion` parameter default in the PowerShell), so treat those two as a drift pair and
-  check they agree. The product version agrees across `packaging/installer.nsi` (`VERSION`)
+  claim. **The provisioning recipe is `native-deps/fetch-deps.py`, and it is the only place
+  the ORT version is written** (`ORT_VERSION`) — there is no longer a wrapper carrying a
+  second copy of it as a parameter default, so the drift pair that used to need checking is
+  gone. The product version agrees across `packaging/installer.nsi` (`VERSION`)
   and the `FileVersion` in `kokoro-host/build.rs` + `kokoro-panel/build.rs` (both derive it
   from `CARGO_PKG_VERSION`). NSIS is pinned to 3.12 in `installer.yml` and enforced at build
-  time by `build-installer.ps1`, so a doc naming a different NSIS version is wrong, not merely
+  time by `build_installer.py`, so a doc naming a different NSIS version is wrong, not merely
   stale.
 - **Command snippets** — the PowerShell/cargo/python commands in fenced blocks still run as
-  written (`fetch-deps.ps1`, `fetch-deps.py`, `cargo run --manifest-path ...`,
-  `build-installer.ps1`, `bun run build.ts --stage`).
+  written (`fetch-deps.py`, `fetch-deps.py`, `cargo run --manifest-path ...`,
+  `build_installer.py`, `bun run build.ts --stage`).
 - **The OCR model digests live in THREE places** and all three must agree: `ocr-manifest.json`
   (the fetch spec `kokoro-panel` embeds), `kokoro-ocr`'s own consts (the independent
   load/probe gate), and `native-deps/fetch-ocr-models.py` (dev provisioning). The models are
@@ -150,7 +150,7 @@ Drift-prone claim types to check explicitly:
   Linux is the synth core plus the loopback endpoint and nothing else.
 - **Licence texts are content-pinned, not presence-checked.** `packaging/license-texts.sha256`
   inventories `LICENSE`, `THIRD_PARTY_NOTICES.md` and every file under `licenses/` after
-  newline normalization; `verify-license-texts.ps1` runs in PR CI, before an installer build,
+  newline normalization; `verify-license-texts.py` runs in PR CI, before an installer build,
   and against the extracted installer. So **an edit to `THIRD_PARTY_NOTICES.md` breaks CI
   until the inventory is updated**. Report the edit and say the hash needs refreshing —
   **never update the hash yourself.** A hash bumped to match an edit is precisely the check
@@ -189,8 +189,8 @@ side is wrong:
   as an error and fails the build), and the values must agree with `LICENSING.md`'s
   per-artifact map: `MIT AND Apache-2.0` for `kokoro-host`, `kokoro-ocr`, `kokoro-panel`;
   plain `MIT` for the rest.
-- **Build ordering** — `native-deps/fetch-deps.ps1` must run before building `kokoro-host`
-  (its `build.rs` panics without the provisioned dep folders); `build-installer.ps1` builds
+- **Build ordering** — `native-deps/fetch-deps.py` must run before building `kokoro-host`
+  (its `build.rs` panics without the provisioned dep folders); `build_installer.py` builds
   the x86 SAPI DLL (`kokoro-sapi`, needs the `i686-pc-windows-msvc` target). `build.rs`
   branches on `CARGO_CFG_TARGET_OS`, never `cfg!(windows)` — a doc saying otherwise is
   describing a bug.
@@ -217,9 +217,10 @@ side is wrong:
 - **Never edit anything under `.claude/`, or the packaging provenance records.** Every tracked
   source file is hashed into `kkr-project-source.SHA256SUMS.txt` at installer-build time, so
   an edit there invalidates a `-SkipBuild` build for reasons unrelated to documentation.
-- Keep `.ps1` files and `packaging/installer.nsi` **ASCII** — PowerShell 5.1 and `makensis`
-  both misread UTF-8 em-dashes/ellipses. Use `-` and `...` there. (Rust, `.md` and `.slint`
-  are fine with Unicode.)
+- Keep the remaining `.ps1` files (the four under `kokoro-sapi/` and `kokoro-sapi-smoke/`)
+  and `packaging/installer.nsi` **ASCII** — PowerShell 5.1 and `makensis` both misread UTF-8
+  em-dashes/ellipses. Use `-` and `...` there. (Rust, `.md` and `.slint` are fine with
+  Unicode.)
 - **Don't quote benchmark figures into the tree.** They date, they are machine-specific, and
   nothing here reproduces them. If a doc already carries some, flag them; don't add more.
 - Don't commit. Leave changes in the working tree.

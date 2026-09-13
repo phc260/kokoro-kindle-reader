@@ -6,7 +6,6 @@ UTF-8 joined with LF, no final LF. A new dependency version or changed excerpt r
 reviewing the upstream notice - which is what `require` refusing an unreviewed version is
 for: a dependency bump must not silently carry last version's notice forward.
 
-Port of source-notices.ps1, which was dot-sourced by the generator and the verifier.
 """
 
 import os
