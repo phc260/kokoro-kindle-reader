@@ -217,12 +217,13 @@ against the engine the user actually has installed.
 
 Prerequisites: Rust (x64 + the `i686-pc-windows-msvc` target for the SAPI DLL), Visual
 Studio with the MSVC toolchain + CMake, and **Python 3** — the provisioning recipe
-(`native-deps/fetch-deps.py`) is one shared script for Windows and Linux, and the `.ps1`
-and `.sh` files beside it are thin harnesses that call it. It uses only the standard
-library, so any Python 3 will do; nothing about the pinned wheel depends on which one, and
-the digest check is what guarantees that. Building the packaged **installer** needs a
-further toolchain — see [Releasing](DEVELOPMENT.md#releasing). Get the source by **cloning with Git LFS** — not from a release's auto-generated "Source code" archive, which
-doesn't resolve LFS (see [DEVELOPMENT.md](DEVELOPMENT.md)).
+(`native-deps/fetch-deps.py`) is one shared script for Windows and Linux; the `.ps1`
+beside it is a thin harness that calls it, and Linux invokes it directly. It uses only
+the standard library, so any Python 3 will do; nothing about the pinned wheel depends on
+which one, and the digest check is what guarantees that. Building the packaged
+**installer** needs a further toolchain — see [Releasing](DEVELOPMENT.md#releasing). Get
+the source by **cloning with Git LFS** — not from a release's auto-generated "Source
+code" archive, which doesn't resolve LFS (see [DEVELOPMENT.md](DEVELOPMENT.md)).
 
 ```powershell
 # 1. One-time: provision the synth runtime deps
