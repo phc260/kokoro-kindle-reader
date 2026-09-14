@@ -20,7 +20,7 @@ Nothing is sent to the cloud — [Kokoro-82M](https://huggingface.co/onnx-commun
 runs entirely on your machine. kokoro-kindle-reader is two things in one app:
 
 1. **A voice control panel** — choose your narrator and tune speed and volume,
-   with a **Preview** button to hear how it sounds.
+   with a preview button to hear how it sounds.
 2. **A natural voice for Kindle for PC** — "Kokoro (SAPI5)" shows up in Windows'
    voice list, so **Kindle's Read Aloud** narrates your books in Kokoro's voice
    instead of the robotic system one.
@@ -70,11 +70,12 @@ live whenever Kokoro is narrating. The narrator and slider controls below stay g
 out until the engine is ready and **Narrate Kindle with Kokoro** is ticked.
 
 1. Pick a **Narrator** with the three dropdowns (accent, gender, and name).
-2. Adjust **Speed** and **Volume**, and **Sentences per chunk** if you want.
+2. Adjust **Reading Speed** and **Volume**, and **Sentences per chunk** if you want.
 3. Tick **Narrate Kindle with Kokoro** to make Kindle read with Kokoro; untick it
    to hand Kindle back its built-in voice. No admin prompt. A Yes/No prompt confirms
    the change and closes Kindle for you — reopen it afterward to pick up the new voice.
-4. Click **Preview** to hear the selected narrator read a short sample line.
+4. Click the **play** button ("Preview voice" when you hover it) to hear the selected
+   narrator read a short sample line.
 5. Not sure whether to leave **Synthesize on GPU** ticked? Click the **runner** button
    next to it — it times both and picks the faster one for your PC. See
    [GPU or CPU?](#gpu-or-cpu).

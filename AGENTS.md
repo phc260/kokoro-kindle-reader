@@ -366,7 +366,7 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
   commit `4870adfa25b1a32b4361592f1be8a40337c58d6c`, the modification, and the normalized
   `build-espeak.py` SHA-256; its build-time source manifest must match the corresponding-source
   tree exactly.
-- **`-SkipBuild` still proves source identity.** A full installer build records SHA-256s for
+- **`--skip-build` still proves source identity.** A full installer build records SHA-256s for
   every tracked source file, both x64 executables, and the Rust toolchain beside the host output.
   Reuse requires all to match; corresponding-source packaging uses the records frozen in
   `staging/provenance/` (including espeak's source manifest) and checks the tracked tree again; never let

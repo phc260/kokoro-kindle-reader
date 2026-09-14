@@ -131,7 +131,7 @@ statically linked standard library.
   marker includes `build-espeak.py`'s normalized SHA-256, so a patch/build-recipe change
   forces a rebuild. It also records the source tree's SHA-256 manifest; corresponding-source
   packaging refuses to pair the binary with a source tree that has changed since the build.
-- **Project source is paired with the binaries, including under `-SkipBuild`.** A successful
+- **Project source is paired with the binaries, including under `--skip-build`.** A successful
   full installer build records SHA-256s for every tracked source file and both x64 executables
   plus the Rust toolchain. Reuse refuses a mismatch even if a standalone build overwrote an
   executable. The installer freezes these records and espeak's source manifest in its staging

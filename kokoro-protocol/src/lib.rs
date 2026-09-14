@@ -45,10 +45,14 @@
 //!   last wrote audio to *any* client, or [`u32::MAX`] if it never has. Answered inline
 //!   (not on the serialized synth worker), so it returns immediately even while another
 //!   client is mid-utterance — the pipe server is multi-instance, so a status query and
-//!   an in-flight `CMD_SYNTH` ride separate connections. Lets a peer (the settings panel)
-//!   tell whether Kokoro is *currently* producing audio; the caller applies its own
-//!   debounce, since a reader like Kindle sends one `CMD_SYNTH` per page and this value
-//!   dips between pages rather than going fully idle.
+//!   an in-flight `CMD_SYNTH` ride separate connections.
+//!
+//!   **Legacy: served, but nothing sends it.** The panel asked this to tell whether Kokoro
+//!   was *currently* producing audio, and it is the wrong question — a value that dips
+//!   between pages cannot distinguish an idle host from a stopped one, and reachability
+//!   can. The panel proves health with real I/O over [`CMD_KINDLE`] instead, which is why
+//!   `unwrap_or(false)` on this reply is called out as a bug in `CLAUDE.md`. Kept because
+//!   the byte is spent and an old client may still send it; don't build on it.
 //!
 //! - [`CMD_PREVIEW`] (`'P'`): the settings panel's Preview/intro synth. Byte-for-byte the
 //!   same request and response as [`CMD_SYNTH`], with two differences the *host* applies:

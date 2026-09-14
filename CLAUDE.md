@@ -23,7 +23,7 @@ artifacts Kindle loads in-process:
 ```
 Kindle.exe (x86) ──in-proc COM (LoadLibrary + vtable)──▶ KokoroSapi.dll (x86 shim)
    ▲                                                        │ named pipe \\.\pipe\KokoroSapiSynth
-   │ Ctrl+A / UIA / WM_CLOSE                                 │  'S' synth · 'B' bench
+   │ Ctrl+A / UIA / WM_CLOSE                                 │  'S'/'A' synth · 'B' bench
    │ (kindle_ctl.rs — the ONLY code that touches Kindle)     │  'P' preview · 'K' Kindle control
    │                                                         │
 Chrome/Edge (Firefox: see below)                             │
@@ -71,7 +71,7 @@ Load the detail on demand:
 ```powershell
 # One-time: provision the synth runtime deps (Dawn ORT runtime DLLs + espeak-ng x64
 # import lib/DLL + espeak-ng-data). Must run before building kokoro-host.
-native-deps\fetch-deps.py
+python native-deps\fetch-deps.py
 
 # Same, for a Linux build (CPU ONNX Runtime + the same modified espeak). Separate tree
 # (native-deps/linux/), separate pins; build.rs branches on the TARGET, so cross-checking
@@ -129,7 +129,7 @@ C:\Windows\SysWOW64\regsvr32.exe "kokoro-sapi\target\i686-pc-windows-msvc\releas
 
 # Packaged installer — builds the x86 DLL + release-builds both crates, stages everything,
 # then runs makensis. NSIS. See packaging/README.md.
-packaging\build_installer.py
+python packaging\build_installer.py
 # CI does this on a v* tag (.github/workflows/installer.yml); sapi.yml
 # builds the x86 DLL + runs the COM smoke test on kokoro-sapi/** / kokoro-sapi-smoke/**
 # / kokoro-protocol/** changes; hook.yml compile-checks the x86 hook + injector on
@@ -1050,13 +1050,13 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   wheels contain different native DLL bytes. That keeps notices matched to the exact wheel; a
   hand copy goes stale at the next version bump. Both ends **throw** when they're missing —
   and the fetch re-runs when the notices are absent even if the DLLs are present, or an old
-  provision would never acquire them. The glob is `Get-ChildItem $wex -Recurse -File
-  -Include …` on the **bare** directory: on the real 1.27.0 wheel, those three files sit one
-  level down under `onnxruntime\`, not at `$wex`'s own root, and adding the conventional
-  trailing `\*` matches **nothing** for files one level deeper than the passed path
-  (measured against the real wheel: 3 vs 0). That's a property of the files not sitting
-  directly under the passed path — not a general PS 5.1 `-Include` rule, and not "0 vs 4"
-  against a fixture that didn't match the real layout. Staging preserves each file's path
+  provision would never acquire them. The search is **recursive** (`extracted.rglob`) and not a
+  fixed path: on the real 1.27.0 wheel those three files sit one level down under
+  `onnxruntime/`, not at the extraction root, so anything anchored at the root matches
+  **nothing** — and "no notice found" is fail-loud here, never "fine, carry on". Finding *a*
+  notice isn't enough either: ORT's **own** `LICENSE` + `ThirdPartyNotices` are the pair at the
+  package root (`capi`'s parent), which is what stops a vendored dependency's `LICENSE.third-party`
+  or a bare `Privacy.md` standing in for them. Staging preserves each file's path
   **relative to the wheel root**, not just its basename — a basename-plus-parent-directory
   collision scheme can still lose a file when two distinct ones share both, and a full
   relative path can't collide because extraction already gave every file a distinct path.
@@ -1136,9 +1136,9 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   commit `4870adfa25b1a32b4361592f1be8a40337c58d6c` plus the horse-hoarse revert, and its
   build-time source SHA-256 manifest must exactly match the tree copied into corresponding
   source. Otherwise the release would describe or offer source for a different binary.
-- **`-SkipBuild` cannot mean "trust whatever is in target".** A successful full installer
+- **`--skip-build` cannot mean "trust whatever is in target".** A successful full installer
   build records every tracked source file's SHA-256, both x64 executable hashes, and
-  `rustc --version --verbose` beside the host output. `-SkipBuild` requires all records to
+  `rustc --version --verbose` beside the host output. `--skip-build` requires all records to
   match, including after a standalone build overwrites an executable. The corresponding-source
   packager uses records frozen in `staging/provenance/`, including espeak's source manifest,
   and independently compares the current tracked tree to the build-time manifest. This

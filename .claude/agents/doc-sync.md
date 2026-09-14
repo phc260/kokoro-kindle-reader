@@ -1,6 +1,6 @@
 ---
 name: doc-sync
-description: Cross-checks this repo's documentation and cross-file invariants against the current code and fixes drift. Use for /sync-docs, or whenever docs need verifying against code after a change. Read-heavy sweep across ~19 doc files plus the source they describe — run it here so the raw material never enters the main thread.
+description: Cross-checks this repo's documentation and cross-file invariants against the current code and fixes drift. Use for /sync-docs, or whenever docs need verifying against code after a change. Read-heavy sweep across ~24 doc files plus the source they describe — run it here so the raw material never enters the main thread.
 tools: Read, Grep, Glob, Edit, Bash
 model: opus
 ---
@@ -157,6 +157,24 @@ Drift-prone claim types to check explicitly:
   being defeated, and the same rule applies to `packaging/components.toml` and
   `source-notices.json`.
 
+### The five docs under `.claude/` - READ, report, never edit
+
+These carry claims about the repo and go stale exactly like the rest, but the Constraints
+below forbid editing them, so the loop is: you verify, you report, the main thread fixes.
+That loop works - it is how the two stale claims in this very file were caught - but only if
+you actually open them, so they are named here rather than left to the enumeration step.
+
+- `.claude/agents/doc-sync.md` - this file. It describes the repo (script names, flags, file
+  layout) and has been wrong twice. Check it against the tree like any other doc.
+- `.claude/commands/bump-version.md` - its enumerated bump locations must equal the real set;
+  it is the authoritative list `DEVELOPMENT.md` defers to, so the two must agree in count.
+- `.claude/commands/codex-review.md` - the `Reviewed-by:` convention and trailer order must
+  match `DEVELOPMENT.md` and `CLAUDE.md`.
+- `.claude/commands/sync-docs.md` - the command that dispatches you. Where it describes your
+  scope or output, that description must match this file.
+- `.claude/commands/update-workflow-actions.md` - the workflow set it names must equal the
+  files actually under `.github/workflows/`.
+
 ## 2. Cross-file invariants (the only comments in scope)
 
 Facts asserted in one place that must agree with another. Verify each pair and fix whichever
@@ -200,8 +218,9 @@ side is wrong:
   directly in `native-deps/` (no `third_party/` wrapper), so a rename in one place must update
   all three. The `.gitignore` check is one-directional: every provisioned folder must be
   ignored, but extra entries there (`onnxruntime/`, `build/`) are deliberate defensive slack —
-  leave them alone. **Read its comments, not just its entries**: they currently credit a
-  `native-deps/fetch-deps.sh` that no longer exists (Linux invokes `fetch-deps.py` directly).
+  leave them alone. **Read its comments, not just its entries** - a comment naming a script
+  that no longer exists is exactly the drift this pass is for, and that file has carried one
+  before (it credited a `native-deps/fetch-deps.sh` until 7ce0a83).
 - **Icons in LFS** — `icons/*` are tracked via Git LFS (`.gitattributes`); CI checks out with
   `lfs: true` so `icon.ico` bundles. `kokoro-browser-extension/build.ts` copies
   `32x32.png`/`128x128.png` into each `dist/<target>/icons/` rather than keeping a second
@@ -216,7 +235,7 @@ side is wrong:
   `source-notices.json`, or a model digest. Report that one needs refreshing and stop.
 - **Never edit anything under `.claude/`, or the packaging provenance records.** Every tracked
   source file is hashed into `kkr-project-source.SHA256SUMS.txt` at installer-build time, so
-  an edit there invalidates a `-SkipBuild` build for reasons unrelated to documentation.
+  an edit there invalidates a `--skip-build` build for reasons unrelated to documentation.
 - Keep the remaining `.ps1` files (the four under `kokoro-sapi/` and `kokoro-sapi-smoke/`)
   and `packaging/installer.nsi` **ASCII** — PowerShell 5.1 and `makensis` both misread UTF-8
   em-dashes/ellipses. Use `-` and `...` there. (Rust, `.md` and `.slint` are fine with

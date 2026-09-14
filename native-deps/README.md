@@ -89,11 +89,11 @@ matches it.
 ## Run this first
 
 ```powershell
-.\fetch-deps.py        # downloads the wheel + builds espeak; idempotent (-Force to redo)
-.\fetch-ocr-models.py  # the 9.80 MB PP-OCR pair + dictionary; network only, no toolchain
+python native-deps\fetch-deps.py         # downloads the wheel + builds espeak; idempotent (--force to redo)
+python native-deps\fetch-ocr-models.py   # the 9.80 MB PP-OCR pair + dictionary; network only, no toolchain
 ```
 
-Or the recipes directly, on either platform:
+The same two recipes from a POSIX shell — they are the same files, invoked the same way:
 
 ```bash
 python3 native-deps/fetch-deps.py

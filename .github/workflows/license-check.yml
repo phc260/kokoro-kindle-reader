@@ -86,7 +86,7 @@ jobs:
       - name: Run the licence gate
         run: python packaging/generate_dependency_licenses.py
 
-      # 26 offline fixtures over the notice verifier - invented notices only, no network
+      # 27 offline fixtures over the notice verifier - invented notices only, no network
       # and no built installer, so a regression in the verifier is caught here rather than
       # on a release tag.
       - name: Test notice-verification regressions
