@@ -1129,6 +1129,20 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   comparing the complete replacement with the exact pinned upstream revision. Provisioned
   espeak/ORT/NSIS notices must be the exact named, non-empty files rather than any wildcard
   match.
+- **A digest over a text file must say which line endings it is over, and there are exactly
+  two right answers here.** Either hash NORMALIZED (fold CRLF/CR to LF first) or pin the
+  checkout with `text eol=lf` in `.gitattributes` — never neither, because `core.autocrlf`
+  then decides the digest and the check passes only on the machine that recorded it. Every
+  text hash in the tree normalizes and says so in its docstring
+  (`verify-license-texts.normalized_sha256`, `provision_util.sha256_text`,
+  `build_installer.normalized_text_sha256`, `build-espeak.sha256_text`) *except*
+  `components.toml`'s five Material Symbols, which are deliberately **byte-exact against LF**
+  so `sha256sum` reproduces them — held there by `kokoro-panel/ui/*.svg text eol=lf`, the same
+  device `licenses/dasp_sample-MIT.txt` uses for cargo-about's byte-exact clarification hash.
+  Four of those five had been recorded from CRLF-smudged copies and one from LF, so
+  `verify_component_hashes.py` was green on one machine and would fail every fresh clone; it
+  now names CRLF as the cause instead of reporting a bare mismatch. **Re-pin from a freshly
+  checked-out file, never from what an editor last saved.**
 - **A native cache must prove which recipe produced it.** `fetch-deps.py` writes exact ORT
   and espeak provision markers only after all expected outputs and notices exist; a missing or
   mismatched marker forces re-provisioning. Installer staging reads those marked runtime files

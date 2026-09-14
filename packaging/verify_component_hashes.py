@@ -67,11 +67,29 @@ def verify():
             errors.append("component '%s' references missing file %s"
                           % (name, (UI_DIR / svg).as_posix()))
             continue
-        actual = hashlib.sha256(path.read_bytes()).hexdigest()
+        raw = path.read_bytes()
+        actual = hashlib.sha256(raw).hexdigest()
         if actual != expected:
-            errors.append("%s sha256 mismatch: components.toml has %s, file is %s - update "
-                          "components.toml (and re-check the notice) if the change is "
-                          "intended." % ((UI_DIR / svg).as_posix(), expected, actual))
+            # These digests are BYTE-EXACT on purpose - they identify upstream's own glyph
+            # bytes, so `sha256sum` on the file must reproduce the pin. That only holds if the
+            # checkout is deterministic, which `kokoro-panel/ui/*.svg text eol=lf` in
+            # .gitattributes is what guarantees. When it does not hold the pin is right and the
+            # bytes are smudged, so say so instead of reporting a bare mismatch: four of these
+            # five pins were once recorded from CRLF-smudged copies and one from LF, which made
+            # this check pass only on the machine that recorded them.
+            if b"\r" in raw:
+                errors.append(
+                    "%s has CRLF line endings, so a byte-exact sha256 cannot match: "
+                    "components.toml has %s, the file hashes to %s. The pin is against LF - "
+                    "what Git stores - and .gitattributes should have checked it out that "
+                    "way. Restore the file (git add --renormalize . && git checkout -- %s) "
+                    "rather than re-pinning to the smudged bytes."
+                    % ((UI_DIR / svg).as_posix(), expected, actual,
+                       (UI_DIR / svg).as_posix()))
+            else:
+                errors.append("%s sha256 mismatch: components.toml has %s, file is %s - update "
+                              "components.toml (and re-check the notice) if the change is "
+                              "intended." % ((UI_DIR / svg).as_posix(), expected, actual))
         else:
             checked += 1
 

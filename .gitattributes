@@ -10,3 +10,9 @@ licenses/dasp_sample-MIT.txt text eol=lf
 # Same for the shared provisioning recipe: it carries a shebang and can be run
 # directly, so a CRLF checkout would break it on Linux exactly as it would a .sh.
 *.py text eol=lf
+# The Material Symbols compiled into kokoro-panel.exe are pinned BYTE-EXACT in
+# packaging/components.toml, so their checkout must not depend on core.autocrlf. Four of
+# the five digests had been recorded from CRLF-smudged copies and one from LF, so the
+# check passed only on the machine that recorded them. Same reason as dasp_sample-MIT.txt;
+# the normalized inventories (license-texts.sha256) need no such pin.
+kokoro-panel/ui/*.svg text eol=lf

@@ -358,6 +358,12 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
   normalization; `verify-license-texts.py` runs in PR CI, before an installer build, and
   against the extracted installer. Update a hash only after comparing the complete replacement
   with the pinned upstream revision. Provisioned notices must be exact named, non-empty files.
+- **A digest over a text file must be normalized OR pinned by `.gitattributes`, never
+  neither.** With neither, `core.autocrlf` picks the bytes and the check is green only on the
+  machine that recorded it. Every text hash here normalizes except `components.toml`'s five
+  Material Symbols, which are byte-exact against LF and held by `kokoro-panel/ui/*.svg text
+  eol=lf`. Flag any new digest over a text file that has neither, and any re-pin taken from a
+  working copy rather than a fresh checkout.
 - **Native caches carry provenance.** `fetch-deps.py` pins ORT's exact cp312 win_amd64 wheel
   by filename and PyPI SHA-256 (the 1.27.0 wheels contain different native DLL bytes), and
   writes ORT/espeak recipe markers only after all expected outputs and notices exist. A missing

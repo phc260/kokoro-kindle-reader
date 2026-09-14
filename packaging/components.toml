@@ -208,11 +208,19 @@ downloaded_by = "kokoro-panel (ocr-manifest.json); native-deps/fetch-ocr-models.
 # Checked into kokoro-panel/ui/ as SVG and compiled by slint-build. Upstream does not
 # version individual glyphs; the checked-in SHA-256 is the immutable identifier of what
 # ships. Set: Material Symbols (Rounded).
+#
+# These five digests are BYTE-EXACT against LF - the bytes Git stores and upstream ships -
+# so `sha256sum kokoro-panel/ui/<glyph>.svg` reproduces the pin on any platform. That is
+# only true because `.gitattributes` carries `kokoro-panel/ui/*.svg text eol=lf`; without
+# it, core.autocrlf hands a Windows clone CRLF and every digest here is wrong. Four of the
+# five were in fact recorded from CRLF-smudged copies and one from LF, so the check passed
+# on exactly one machine. If you re-pin one of these, re-pin it from a freshly checked-out
+# file, never from whatever an editor last saved.
 [[component]]
 name = "play-arrow.svg (Material Symbols)"
 shipped_as = "compiled into kokoro-panel.exe"
 version = "Material Symbols Rounded (upstream glyph revision not recorded at download; pinned by sha256)"
-sha256 = "6b54a9f7ec6750b667eac040a5bd3b54a2c8ea172c89a327ab70deaeadaddadd"
+sha256 = "c99d5929af7725f86b28d8c69e87e84b23b57185ce729640283192b5aecef827"
 upstream = "https://github.com/google/material-design-icons"
 spdx = "Apache-2.0"
 modified = false
@@ -223,7 +231,7 @@ staged_by = "compiled by slint-build into kokoro-panel.exe"
 name = "pause.svg (Material Symbols)"
 shipped_as = "compiled into kokoro-panel.exe"
 version = "Material Symbols Rounded (pinned by sha256)"
-sha256 = "291bd435d0751390433cf450fbfa60440bb380ead50e65737e7404dc81441aad"
+sha256 = "70aeaf2c44fd0c4c9156ba420fac64622a598290334ae1d5f84bb1eed866f48c"
 upstream = "https://github.com/google/material-design-icons"
 spdx = "Apache-2.0"
 modified = false
@@ -234,7 +242,7 @@ staged_by = "compiled by slint-build into kokoro-panel.exe"
 name = "stop.svg (Material Symbols)"
 shipped_as = "compiled into kokoro-panel.exe"
 version = "Material Symbols Rounded (pinned by sha256)"
-sha256 = "0df047629b161c910b9ffaae7f702229520018bc2eef34c92e185d5a7b905606"
+sha256 = "5921b352b782c7d5fce45644f2faec81d4e57617801151795654eee622670870"
 upstream = "https://github.com/google/material-design-icons"
 spdx = "Apache-2.0"
 modified = false
@@ -245,7 +253,7 @@ staged_by = "compiled by slint-build into kokoro-panel.exe"
 name = "sprint.svg (Material Symbols)"
 shipped_as = "compiled into kokoro-panel.exe"
 version = "Material Symbols Rounded (pinned by sha256)"
-sha256 = "e1d5265262e2653c76d85ceab45ed3762be110e99620472d1369017313b6577e"
+sha256 = "8a1e22278a1dc2fdfadb7de3218b30c1008382b71d2393967eae769c100512fc"
 upstream = "https://github.com/google/material-design-icons"
 spdx = "Apache-2.0"
 modified = false
