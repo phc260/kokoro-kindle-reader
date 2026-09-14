@@ -110,6 +110,14 @@ Releases are built by CI from a tag, so the flow below needs nothing installed l
 tool is enforced rather than assumed — a missing one fails the build rather than quietly
 producing an artifact that describes a toolchain it wasn't built with:
 
+`.\packaging\doctor.ps1 -For installer` answers "do I have all of this?" in one pass,
+reporting every missing tool together rather than one failed build apart. It builds and
+installs nothing. It is shell rather than Python so it still runs on a machine with no
+Python - the one prerequisite a Python script can never report. It is Windows only; the
+Linux twin is not written yet. It covers the table below and nothing more: whether this
+checkout is actually provisioned is enforced by `build_installer.py`'s preflight, which
+owns those pins.
+
 | Tool | Needed by | Enforced by |
 |---|---|---|
 | **NSIS 3.12** exactly | `build_installer.py` | it reads `makensis /VERSION` and rejects any other version — the installed stub, the staged `COPYING` and `components.toml` all describe that one |

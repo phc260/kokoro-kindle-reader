@@ -69,6 +69,14 @@ Load the detail on demand:
 ## Commands
 
 ```powershell
+# Are the TOOLS installed? flutter-doctor style: reports every missing one in a single
+# pass rather than one failed build at a time, and builds nothing itself. It is SHELL,
+# not Python, because it must work on a machine with no Python - the one prerequisite a
+# Python script can never report, since it needs one to start. It does NOT check whether
+# this checkout is provisioned; that stays in build_installer.py's preflight, which owns
+# the markers and digests it turns on. WINDOWS ONLY - no Linux twin yet.
+.\packaging\doctor.ps1 -For installer     # or app / source / extension / all
+
 # One-time: provision the synth runtime deps (Dawn ORT runtime DLLs + espeak-ng x64
 # import lib/DLL + espeak-ng-data). Must run before building kokoro-host.
 python native-deps\fetch-deps.py
