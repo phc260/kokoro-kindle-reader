@@ -37,6 +37,7 @@ Idempotent: pass --force to re-provision.
 import argparse
 import os
 import re
+import runpy
 import shutil
 import subprocess
 import sys
@@ -403,9 +404,13 @@ def provision_espeak(paths, force):
     rmtree_force(runtime / "espeak-ng-data")
 
     print("==> Building espeak-ng (1.52.0 + horse-hoarse revert)")
-    rc = subprocess.run([sys.executable, str(HERE / "build-espeak.py")]).returncode
-    if rc != 0:
-        fail("build-espeak.py failed (%d)" % rc)
+    # Run build-espeak.py in THIS process - it has a main() and raises SystemExit on failure -
+    # rather than forking a second interpreter just to run our own script.
+    try:
+        runpy.run_path(str(HERE / "build-espeak.py"), run_name="__main__")
+    except SystemExit as exc:
+        if exc.code:
+            fail("espeak-ng build failed (%s)" % exc.code)
 
     lib_dir = None
     for cand in paths["espeak_lib_dirs"]:

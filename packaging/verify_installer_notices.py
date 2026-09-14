@@ -19,8 +19,11 @@ off a case-insensitive filesystem.
 """
 
 import argparse
+import contextlib
+import io
 import os
 import re
+import runpy
 import shutil
 import subprocess
 import sys
@@ -238,11 +241,19 @@ def verify(setup):
         # Presence is insufficient for the fixed, checked-in texts: verify the installer
         # carries the reviewed bytes, not a truncated or wrong-revision file. Provisioned
         # notice trees are intentionally allowed as additions.
-        texts = subprocess.run([sys.executable, str(HERE / "verify-license-texts.py"),
-                                "--root", str(root), "--allow-additional"],
-                               capture_output=True)
-        if texts.returncode:
-            group.append("checked-in licence texts do not match packaging/license-texts.sha256")
+        # Run verify-license-texts.py in THIS process (output hushed, since we build our own
+        # report) rather than forking a second interpreter; it raises SystemExit on a mismatch.
+        argv_bak, sys.argv = sys.argv, [str(HERE / "verify-license-texts.py"),
+                                        "--root", str(root), "--allow-additional"]
+        hushed = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(hushed), contextlib.redirect_stderr(hushed):
+                runpy.run_path(str(HERE / "verify-license-texts.py"), run_name="__main__")
+        except SystemExit as exc:
+            if exc.code:
+                group.append("checked-in licence texts do not match packaging/license-texts.sha256")
+        finally:
+            sys.argv = argv_bak
 
         # ORT's own LICENSE + ThirdPartyNotices come from exact canonical paths in
         # components.toml, not a directory marker: a co-location check can be satisfied by

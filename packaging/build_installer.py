@@ -18,6 +18,7 @@ profile that guessed at it would produce an artifact nobody had checked.
 import argparse
 import hashlib
 import re
+import runpy
 import shutil
 import subprocess
 import sys
@@ -196,10 +197,17 @@ def preflight(prof):
     # A file can be present and non-empty while still being truncated or copied from the
     # wrong upstream revision; verify the reviewed content before spending time on a build.
     print("==> Verifying checked-in licence texts")
-    # A subprocess rather than an import: the file name has a hyphen, so it is not
-    # importable, and sys.executable keeps it the same interpreter either way.
-    run([sys.executable, HERE / "verify-license-texts.py"],
-        what="checked-in licence-text verification FAILED (see above).")
+    # Run it in THIS process rather than forking a second interpreter just to run our own
+    # script. verify-license-texts.py parses sys.argv, so hand it its own (no args = the repo
+    # root); it raises SystemExit on a mismatch.
+    argv_bak, sys.argv = sys.argv, [str(HERE / "verify-license-texts.py")]
+    try:
+        runpy.run_path(str(HERE / "verify-license-texts.py"), run_name="__main__")
+    except SystemExit as exc:
+        if exc.code:
+            raise Fail("checked-in licence-text verification FAILED (see above).")
+    finally:
+        sys.argv = argv_bak
 
     makensis = check_packager(prof)
 
