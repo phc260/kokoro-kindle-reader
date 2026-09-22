@@ -74,8 +74,13 @@ Load the detail on demand:
 # not Python, because it must work on a machine with no Python - the one prerequisite a
 # Python script can never report, since it needs one to start. It does NOT check whether
 # this checkout is provisioned; that stays in build_installer.py's preflight, which owns
-# the markers and digests it turns on. WINDOWS ONLY - no Linux twin yet.
+# the markers and digests it turns on.
 .\packaging\doctor.ps1 -For installer     # or app / source / extension / all
+# The Linux twin (POSIX shell, same shape) covers the two tiers Linux has - the host and the
+# extension; there is no installer/source tier off Windows, and it adds a CMake + C-toolchain
+# check because espeak is built from source. Its provisioned-state owner is fetch-deps.py +
+# build.rs, not build_installer.py.
+./packaging/doctor.sh                      # or app / extension
 
 # One-time: provision the synth runtime deps (Dawn ORT runtime DLLs + espeak-ng x64
 # import lib/DLL + espeak-ng-data). Must run before building kokoro-host.
