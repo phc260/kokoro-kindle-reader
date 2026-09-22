@@ -17,9 +17,9 @@
 # SAPI shim, hook or injector. There is therefore no x86 target to check (those three x86
 # artifacts do not exist here), and no NSIS installer or release source archive (both are
 # Windows-only), so the 'installer' and 'source' tiers are gone. What Linux adds instead is a
-# CMake + C-toolchain check: espeak-ng is BUILT FROM SOURCE by native-deps/fetch-deps.py
+# CMake + C/C++-toolchain check: espeak-ng is BUILT FROM SOURCE by native-deps/fetch-deps.py
 # (a distribution's own libespeak-ng is unmodified and changes the phonemes, so it is not a
-# substitute), and cargo drives the system C compiler as its linker.
+# substitute), its cmake enables C++, and cargo drives the system C compiler as its linker.
 #
 # WHAT THIS REPORTS, AND WHAT IT DOES NOT. Presence and versions only - is there a thing
 # called X, and what does it say its version is. It deliberately does NOT check the state of
@@ -188,7 +188,7 @@ pm_install() {
     for t in "$@"; do
         case "$pm:$t" in
             apt:buildtools)               names+=("build-essential") ;;
-            dnf:buildtools|zypper:buildtools) names+=("gcc" "make") ;;
+            dnf:buildtools|zypper:buildtools) names+=("gcc" "gcc-c++" "make") ;;
             pacman:buildtools)            names+=("base-devel") ;;
             *:buildtools)                 names+=("a C toolchain (gcc/clang) and make") ;;
             pacman:python3)               names+=("python") ;;
@@ -273,7 +273,7 @@ else
         "Install it, then enable it: $(pm_install git-lfs) && git lfs install && git lfs pull"
 fi
 
-# --- C toolchain (Linux only) ---------------------------------------------------------------
+# --- C/C++ toolchain (Linux only) ---------------------------------------------------------------
 # espeak-ng is built FROM SOURCE by native-deps/fetch-deps.py -> build-espeak.py, so a C
 # compiler + make are a real build prerequisite here in a way they are not on Windows (where
 # MSVC comes with the Rust install). cargo also drives the system C compiler as its linker, so
@@ -282,21 +282,29 @@ cc_bin=""
 for cand in cc gcc clang; do
     command -v "$cand" >/dev/null 2>&1 && { cc_bin="$cand"; break; }
 done
+# espeak-ng's top-level CMakeLists enables CXX, so a C++ compiler is a real prerequisite - a
+# box with gcc but no g++ configures fine right up to the "No CMAKE_CXX_COMPILER" it fails on.
+# That is not hypothetical: it is the exact wall a first provision of this tree hit.
+cxx_bin=""
+for cand in c++ g++ clang++; do
+    command -v "$cand" >/dev/null 2>&1 && { cxx_bin="$cand"; break; }
+done
 have_make=0
 command -v make >/dev/null 2>&1 && have_make=1
-if [ -n "$cc_bin" ] && [ "$have_make" = 1 ]; then
+if [ -n "$cc_bin" ] && [ -n "$cxx_bin" ] && [ "$have_make" = 1 ]; then
     ccver=$(tool_version "$cc_bin" --version)
-    report app ok "C toolchain" "builds espeak-ng from source, and links the Rust host" \
-        "$cc_bin $(short_version "$ccver"), make"
+    report app ok "C/C++ toolchain" "builds espeak-ng from source, and links the Rust host" \
+        "$cc_bin $(short_version "$ccver"), $cxx_bin, make"
 else
     lack=()
     [ -z "$cc_bin" ] && lack+=("a C compiler (gcc/clang)")
+    [ -z "$cxx_bin" ] && lack+=("a C++ compiler (g++/clang++)")
     [ "$have_make" != 1 ] && lack+=("make")
-    report app FAIL "C toolchain" "builds espeak-ng from source, and links the Rust host" "" \
+    report app FAIL "C/C++ toolchain" "builds espeak-ng from source, and links the Rust host" "" \
         "Missing: $(join_comma "${lack[@]}")." \
-        "native-deps/build-espeak.py builds the modified espeak-ng 1.52.0 from source - a" \
-        "distribution's own libespeak-ng is unmodified and changes the phonemes, so it is not" \
-        "a substitute - and cargo uses the C compiler as its linker driver." \
+        "native-deps/build-espeak.py builds the modified espeak-ng 1.52.0 from source - its" \
+        "cmake enables C++, and a distribution's own libespeak-ng is unmodified and changes" \
+        "the phonemes, so it is not a substitute; cargo also uses the C compiler to link." \
         "Install it: $(pm_install buildtools)"
 fi
 

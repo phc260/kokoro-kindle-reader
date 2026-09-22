@@ -53,6 +53,30 @@ them by running them, never by what they look like on disk.
 
 Both, by a second script: the **Cloud Reader OCR models** (`ocr/`).
 
+### The two runtime trees are asymmetric — Windows at the root, Linux nested (future work)
+
+Windows provisions into `native-deps/runtime/`; Linux into `native-deps/linux/runtime/`.
+There is **no `native-deps/windows/`** — the Windows tree is the root-level one. This is not a
+principled split, just history: the root `runtime/` predates the Linux port, and Linux was
+added underneath `linux/` so a machine that cross-builds both never mixes the two sets of
+libraries (see this dir's `.gitignore`). The **symmetric** shape — `native-deps/windows/runtime/`
+beside `native-deps/linux/runtime/`, the root left holding only the shared `espeak-ng-src/` —
+is the tidier one and is deliberately **deferred**, not rejected.
+
+If you pick it up, the move touches every place that names the Windows tree by its current
+path, and each must change together or the build silently reads the wrong tree:
+
+- `layout()` here (the `WINDOWS` branch's `"runtime"`), and this README's two path references
+- `native-deps/.gitignore` (the bare `runtime/` entry)
+- `kokoro-host/build.rs` — `windows_deps` reads `native-deps/runtime`; `linux_deps` already
+  reads `native-deps/linux/runtime`, so only the Windows side moves
+- `packaging/build_installer.py`, which stages the marked runtime files from that Windows path
+  directly (not from a copy left in a target dir — see the marker rule below)
+
+`doctor.sh` / `doctor.ps1` are **not** on that list: they report tools, never the provisioned
+tree, so the layout is invisible to them. The espeak build dirs (`build-x64` / `build-linux`)
+already carry the platform in their name and need no change.
+
 ### Verified layout facts (Linux)
 
 Read from the pinned wheel and the pinned espeak tree, not assumed — the scripts depend on
