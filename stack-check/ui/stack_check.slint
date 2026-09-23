@@ -1,0 +1,271 @@
+// Kokoro stack-check window. Same toolkit, version (1.17.1) and style (Fluent) as the production
+// settings panel, kokoro-panel/ui/panel.slint, and the same split: this file only draws state;
+// stack_check.py sets the `in` properties and handles every callback.
+import { Button, CheckBox, ComboBox, LineEdit, Palette, ProgressIndicator, ScrollView, Slider,
+         SpinBox, TabWidget, TextEdit } from "std-widgets.slint";
+
+// One row of the Environment table. `status` is ok | warn | fail | info.
+export struct EnvRow { status: string, component: string, detail: string }
+// A Speed-test configuration checkbox.
+export struct BenchConfig { label: string, checked: bool }
+// One Speed-test result row, pre-formatted in Python.
+export struct BenchRow { config: string, runs: string, median: string, p90: string, min: string, rtf: string, rel: string }
+
+// The panel's status-card surface: a faint foreground tint that works in light and dark.
+component Card inherits Rectangle {
+    background: Palette.foreground.transparentize(0.94);
+    border-radius: 2px;
+    border-width: 1px;
+    border-color: Palette.border;
+}
+
+component Heading inherits Text {
+    font-size: 16px;
+    font-weight: 600;
+}
+
+component Muted inherits Text {
+    color: Palette.foreground.transparentize(0.35);
+    wrap: word-wrap;
+}
+
+// A right-aligned numeric cell for the results table.
+component Num inherits Text {
+    width: 90px;
+    horizontal-alignment: right;
+}
+
+export component AppWindow inherits Window {
+    title: "Kokoro Kindle Reader — Stack Check";
+    default-font-size: 14px;
+    preferred-width: 880px;
+    preferred-height: 780px;
+    min-width: 760px;
+    min-height: 620px;
+
+    // --- state (set from Python) ---
+    in property <bool> busy;
+    in property <string> status;
+    in property <bool> wrap-available;
+    in-out property <bool> wrap-phase;
+    in property <[EnvRow]> env-rows;
+    in property <[string]> providers;
+    in-out property <int> provider-index;
+    in-out property <string> synth-text;
+    in-out property <float> speed: 1.0;
+    in property <string> synth-stats: "—";
+    in property <string> phonemes;
+    in property <bool> playing;
+    in property <bool> has-audio;
+    in-out property <string> save-path;
+    in property <[BenchConfig]> bench-configs;
+    in-out property <int> runs: 5;
+    in-out property <int> warmup: 1;
+    in property <[BenchRow]> bench-rows;
+    in property <string> log-text;
+    in-out property <int> current-tab;    // 0 Environment, 1 Synthesize, 2 Speed test
+
+    // --- events (handled in Python) ---
+    callback recheck();
+    callback synthesize();
+    callback stop();
+    callback save-wav();
+    callback run-bench();
+    callback bench-config-toggled(int, bool);
+
+    pure function status-color(s: string) -> color {
+        s == "ok" ? #2e9e4f : s == "warn" ? #d18b16 : s == "fail" ? #c0392b : #4a6da7
+    }
+
+    VerticalLayout {
+        padding: 16px;
+        spacing: 12px;
+
+        // Applies to Synthesize AND Speed test, so it sits above the tabs.
+        CheckBox {
+            text: "Wrap sine phase before Sin  (fixes WebGPU muffling on utterances > ~3.6 s)";
+            enabled: root.wrap-available && !root.busy;
+            checked <=> root.wrap-phase;
+        }
+
+        TabWidget {
+            vertical-stretch: 1;
+            current-index <=> root.current-tab;
+
+            Tab {
+                title: "Environment";
+                VerticalLayout {
+                    padding: 12px;
+                    spacing: 10px;
+                    HorizontalLayout {
+                        Heading { text: "Tech stack on this machine"; vertical-alignment: center; }
+                        Rectangle { horizontal-stretch: 1; }
+                        Button { text: "Re-check"; enabled: !root.busy; clicked => { root.recheck(); } }
+                    }
+                    Card {
+                        vertical-stretch: 1;
+                        ScrollView {
+                            VerticalLayout {
+                                padding: 10px;
+                                spacing: 6px;
+                                alignment: start;
+                                for row in root.env-rows: HorizontalLayout {
+                                    spacing: 10px;
+                                    Text { text: "●"; color: root.status-color(row.status); width: 14px; }
+                                    Text {
+                                        text: row.component;
+                                        width: 170px;
+                                        color: row.status == "warn" || row.status == "fail"
+                                            ? root.status-color(row.status) : Palette.foreground;
+                                    }
+                                    // One line, elided: Slint won't grow a layout row for a wrapped
+                                    // second line, so wrapping here would silently clip it instead.
+                                    Text { text: row.detail; overflow: elide; horizontal-stretch: 1; }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Tab {
+                title: "Synthesize";
+                VerticalLayout {
+                    padding: 12px;
+                    spacing: 10px;
+                    Heading { text: "End-to-end synthesis"; }
+                    Text { text: "Text to speak:"; }
+                    TextEdit {
+                        text <=> root.synth-text;
+                        wrap: word-wrap;
+                        height: 90px;
+                    }
+                    HorizontalLayout {
+                        spacing: 10px;
+                        Text { text: "Provider:"; vertical-alignment: center; }
+                        ComboBox {
+                            model: root.providers;
+                            current-index <=> root.provider-index;
+                            width: 160px;
+                            enabled: !root.busy;
+                        }
+                        Rectangle { width: 12px; }
+                        Text { text: "Speed:"; vertical-alignment: center; }
+                        Slider {
+                            minimum: 0.5;
+                            maximum: 2.0;
+                            step: 0.05;
+                            value <=> root.speed;
+                            horizontal-stretch: 1;
+                        }
+                        Text {
+                            text: root.speed.to-fixed(2) + "x";
+                            width: 48px;
+                            vertical-alignment: center;
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Button {
+                            text: "Synthesize & play";
+                            primary: true;
+                            enabled: !root.busy;
+                            clicked => { root.synthesize(); }
+                        }
+                        Button { text: "Stop"; enabled: root.playing; clicked => { root.stop(); } }
+                        Rectangle { width: 16px; }
+                        LineEdit { text <=> root.save-path; horizontal-stretch: 1; enabled: root.has-audio; }
+                        Button { text: "Save WAV"; enabled: root.has-audio; clicked => { root.save-wav(); } }
+                    }
+                    Card {
+                        vertical-stretch: 1;
+                        VerticalLayout {
+                            padding: 12px;
+                            spacing: 8px;
+                            Text { text: root.synth-stats; wrap: word-wrap; }
+                            Muted { text: "Phonemes (espeak-ng 1.52.0, IPA):"; }
+                            TextEdit { text: root.phonemes; read-only: true; wrap: word-wrap; font-size: 16px; }
+                        }
+                    }
+                }
+            }
+
+            Tab {
+                title: "Speed test";
+                VerticalLayout {
+                    padding: 12px;
+                    spacing: 10px;
+                    Heading { text: "CPU / GPU speed test"; }
+                    Muted {
+                        text: "Times full-page synthesis of the Synthesize tab's text. Only model inference is timed; phonemization runs once.";
+                    }
+                    Card {
+                        HorizontalLayout {
+                            padding: 10px;
+                            spacing: 14px;
+                            for cfg[i] in root.bench-configs: CheckBox {
+                                text: cfg.label;
+                                checked: cfg.checked;
+                                enabled: !root.busy;
+                                toggled => { root.bench-config-toggled(i, self.checked); }
+                            }
+                            Rectangle { horizontal-stretch: 1; }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 10px;
+                        Text { text: "Runs:"; vertical-alignment: center; }
+                        SpinBox { minimum: 1; maximum: 50; value <=> root.runs; width: 110px; enabled: !root.busy; }
+                        Text { text: "Warm-up:"; vertical-alignment: center; }
+                        SpinBox { minimum: 0; maximum: 5; value <=> root.warmup; width: 110px; enabled: !root.busy; }
+                        Button {
+                            text: "Run benchmark";
+                            primary: true;
+                            enabled: !root.busy;
+                            clicked => { root.run-bench(); }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                    Card {
+                        vertical-stretch: 1;
+                        VerticalLayout {
+                            padding: 10px;
+                            spacing: 6px;
+                            alignment: start;
+                            HorizontalLayout {
+                                spacing: 8px;
+                                Text { text: "Configuration"; font-weight: 600; horizontal-stretch: 1; }
+                                Num { text: "Runs"; width: 50px; font-weight: 600; }
+                                Num { text: "median ms"; font-weight: 600; }
+                                Num { text: "p90 ms"; font-weight: 600; }
+                                Num { text: "min ms"; font-weight: 600; }
+                                Num { text: "RTF"; width: 70px; font-weight: 600; }
+                                Num { text: "rel. speed"; font-weight: 600; }
+                            }
+                            Rectangle { height: 1px; background: Palette.border; }
+                            for row in root.bench-rows: HorizontalLayout {
+                                spacing: 8px;
+                                Text { text: row.config; horizontal-stretch: 1; }
+                                Num { text: row.runs; width: 50px; }
+                                Num { text: row.median; }
+                                Num { text: row.p90; }
+                                Num { text: row.min; }
+                                Num { text: row.rtf; width: 70px; }
+                                Num { text: row.rel; }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 12px;
+            Text { text: root.status; vertical-alignment: center; horizontal-stretch: 1; }
+            ProgressIndicator { indeterminate: root.busy; progress: 0; width: 180px; height: 6px; y: (parent.height - self.height) / 2; }
+        }
+
+        Muted { text: "Log (newest first)"; }
+        TextEdit { text: root.log-text; read-only: true; height: 130px; }
+    }
+}
