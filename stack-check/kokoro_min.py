@@ -26,7 +26,7 @@ from __future__ import annotations
 import ctypes
 import json
 import os
-import struct
+import tempfile
 import time
 import wave
 from dataclasses import dataclass, field
@@ -42,11 +42,25 @@ MAX_CONTENT_TOKENS = 500  # Kokoro's BERT Expand node fails past ~510 tokens
 BOS = 0
 EOS = 0
 
-HOME = Path.home()
-DEFAULT_MODEL_DIR = HOME / ".local/share/kokoro-kindle-reader/onnx-community/Kokoro-82M-v1.0-ONNX"
+WINDOWS = os.name == "nt"
+
+
+def app_data_dir() -> Path:
+    """Mirrors native-deps/fetch-model.py's app_data_dir() (and so kokoro-host's): Windows
+    keeps the reverse-DNS identifier under %APPDATA%, Linux a plainly-named XDG data dir."""
+    if WINDOWS:
+        return Path(os.environ.get("APPDATA", "")) / "com.phc260.kokoro-kindle-reader"
+    xdg = os.environ.get("XDG_DATA_HOME")
+    return (Path(xdg) if xdg else Path.home() / ".local" / "share") / "kokoro-kindle-reader"
+
+
+DEFAULT_MODEL_DIR = app_data_dir() / "onnx-community" / "Kokoro-82M-v1.0-ONNX"
 # repo root = parent of this file's directory (stack-check/)
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_ESPEAK_RUNTIME = REPO_ROOT / "native-deps/linux/runtime"
+# fetch-deps.py keeps one runtime tree per platform: native-deps/windows/runtime/ holds
+# espeak-ng.dll, native-deps/linux/runtime/ libespeak-ng.so*; espeak-ng-data/ sits beside
+# the library in both.
+DEFAULT_ESPEAK_RUNTIME = REPO_ROOT / "native-deps" / ("windows" if WINDOWS else "linux") / "runtime"
 
 
 # --- espeak-ng over ctypes ---------------------------------------------------
@@ -67,10 +81,14 @@ class Espeak:
         runtime_dir = Path(runtime_dir)
         lib_path = _find_espeak_lib(runtime_dir)
         if lib_path is None:
-            raise FileNotFoundError(f"libespeak-ng not found under {runtime_dir}")
+            raise FileNotFoundError(f"{ESPEAK_LIB_NAME} not found under {runtime_dir}")
         self.lib_path = lib_path
         self.data_parent = str(runtime_dir)  # dir that CONTAINS espeak-ng-data/
 
+        if WINDOWS:
+            # A full path loads the DLL itself; this lets the loader find anything it
+            # depends on in the same folder, as it would beside kokoro-host.exe.
+            self._dll_dir = os.add_dll_directory(str(lib_path.parent))
         lib = ctypes.CDLL(str(lib_path))
         lib.espeak_ng_InitializePath.argtypes = [ctypes.c_char_p]
         lib.espeak_ng_InitializePath.restype = None
@@ -84,6 +102,8 @@ class Espeak:
             ctypes.POINTER(ctypes.c_void_p), ctypes.c_int, ctypes.c_int
         ]
         lib.espeak_TextToPhonemes.restype = ctypes.c_char_p
+        lib.espeak_Info.argtypes = [ctypes.c_void_p]
+        lib.espeak_Info.restype = ctypes.c_char_p
         self.lib = lib
 
         lib.espeak_ng_InitializePath(self.data_parent.encode("utf-8"))
@@ -96,10 +116,10 @@ class Espeak:
             raise RuntimeError("espeak_SetVoiceByName(en-us) failed")
 
     def version(self) -> str:
-        # libespeak-ng.so.1.52.0 -> "1.52.0"
-        name = self.lib_path.name
-        parts = name.split(".so.")
-        return parts[1] if len(parts) == 2 else name
+        """The library's own version string. Asked of espeak rather than read off the file
+        name, which carries it on Linux (libespeak-ng.so.1.52.0) but not on Windows."""
+        v = self.lib.espeak_Info(None)
+        return v.decode("utf-8", "replace") if v else "unknown"
 
     def phonemize(self, text: str) -> str:
         """espeak IPA phonemes for `text`, clauses joined with a single space.
@@ -121,7 +141,13 @@ class Espeak:
         return " ".join(c.strip() for c in clauses if c.strip())
 
 
+ESPEAK_LIB_NAME = "espeak-ng.dll" if WINDOWS else "libespeak-ng"
+
+
 def _find_espeak_lib(runtime_dir: Path) -> Path | None:
+    if WINDOWS:
+        p = runtime_dir / "espeak-ng.dll"
+        return p if p.is_file() else None
     # Prefer the concrete versioned file, fall back to the symlink/soname.
     cands = sorted(runtime_dir.glob("libespeak-ng.so.*.*.*"))
     for c in cands:
@@ -443,9 +469,9 @@ def available_provider_specs() -> list[ProviderSpec]:
 
     avail = ort.get_available_providers()
     specs: list[ProviderSpec] = []
-    # Production's GPU path is the WebGPU EP (Dawn; Vulkan on Linux). It shows up only with
-    # the onnxruntime-webgpu wheel -- the plain onnxruntime wheel does not ship it. GPU specs
-    # list CPU second so any node the GPU EP can't run falls back instead of failing the build.
+    # Production's GPU path is the WebGPU EP (Dawn; D3D12 on Windows, Vulkan on Linux). It
+    # shows up only with the onnxruntime-webgpu wheel -- the plain onnxruntime wheel does not
+    # ship it. GPU specs list CPU second so any node the GPU EP can't run falls back instead of failing the build.
     if "WebGpuExecutionProvider" in avail:
         specs.append(ProviderSpec("WebGPU", ["WebGpuExecutionProvider", "CPUExecutionProvider"]))
     if "CUDAExecutionProvider" in avail:
@@ -477,6 +503,6 @@ if __name__ == "__main__":
     print(f"tokens     : {r.n_tokens} content ({r.n_windows} window(s))")
     print(f"audio      : {r.audio_seconds:.2f}s  synth {r.synth_seconds:.3f}s  "
           f"RTF {r.realtime_factor:.2f}x  peak {float(np.max(np.abs(r.pcm))):.3f}")
-    out = Path(sys.argv[2]) if len(sys.argv) > 2 else Path("/tmp/kokoro_stack_check.wav")
+    out = Path(sys.argv[2]) if len(sys.argv) > 2 else Path(tempfile.gettempdir()) / "kokoro_stack_check.wav"
     write_wav(out, r.pcm, r.sample_rate)
     print("wav        :", out)

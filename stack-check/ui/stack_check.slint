@@ -4,8 +4,11 @@
 import { Button, CheckBox, ComboBox, LineEdit, Palette, ProgressIndicator, ScrollView, Slider,
          SpinBox, TabWidget, TextEdit } from "std-widgets.slint";
 
-// One row of the Environment table. `status` is ok | warn | fail | info.
-export struct EnvRow { status: string, component: string, detail: string }
+// One line under an expandable Environment row. `status` is ok | warn | fail | info.
+export struct EnvSub { status: string, component: string, detail: string }
+// One row of the Environment table. A row with `sub` lines gets a disclosure arrow that shows
+// them underneath; `detail` is then the one-line summary.
+export struct EnvRow { status: string, component: string, detail: string, sub: [EnvSub] }
 // A Speed-test configuration checkbox.
 export struct BenchConfig { label: string, checked: bool }
 // One Speed-test result row, pre-formatted in Python.
@@ -17,6 +20,95 @@ component Card inherits Rectangle {
     border-radius: 2px;
     border-width: 1px;
     border-color: Palette.border;
+}
+
+// Status marks follow packaging/doctor.sh: a coloured [+] / [X] / [!] / [–] before a plain
+// name and a grey detail, and under an entry, bullets + / X / ! / – in the same colours.
+// "info" (CPU, GPU: facts, not verdicts) takes the doctor's skip mark. Two glyphs differ from
+// the doctor's ASCII on purpose: an en dash and a capital X read better in a proportional font.
+global Status {
+    // ok is CSS lawngreen, closest to how the doctor's green renders in the terminal; warn is
+    // pure yellow; fail is pure red; info is CSS skyblue.
+    pure public function color(s: string) -> color {
+        s == "ok" ? #7cfc00 : s == "warn" ? #ffff00 : s == "fail" ? #ff0000 : #87ceeb
+    }
+    pure public function marker(s: string) -> string {
+        s == "ok" ? "[+]" : s == "warn" ? "[!]" : s == "fail" ? "[X]" : "[–]"
+    }
+    pure public function bullet(s: string) -> string {
+        s == "ok" ? "+" : s == "warn" ? "!" : s == "fail" ? "X" : "–"
+    }
+}
+
+// Chevron slot, mark, name, detail. A top-level line (`sub` false) has the chevron slot --
+// holding a chevron on a row that folds out, empty otherwise so every name starts in one
+// column -- and a [+]-style marker. A sub-line is indented and has a bullet instead. The name
+// widths are set so every detail starts in the same column too.
+component EnvLine inherits HorizontalLayout {
+    in property <string> status;
+    in property <string> component;
+    in property <string> detail;
+    in property <bool> sub;
+    in property <bool> expandable;
+    in property <bool> open;
+    spacing: 10px;
+    if root.sub: Rectangle { width: 44px; }
+    if !root.sub: Rectangle {
+        width: 14px;
+        // Drawn, not a glyph: the fonts Slint falls back to on Windows have no ▸/▾, so a
+        // Text arrow rendered as a missing-glyph box. Right when closed, down when open.
+        if root.expandable: Path {
+            width: 10px;
+            height: 10px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            viewbox-width: 10;
+            viewbox-height: 10;
+            commands: root.open ? "M 1 3 L 5 7 L 9 3" : "M 3 1 L 7 5 L 3 9";
+            stroke: Palette.foreground.transparentize(0.35);
+            stroke-width: 1.75px;
+        }
+    }
+    Text {
+        text: root.sub ? Status.bullet(root.status) : Status.marker(root.status);
+        width: root.sub ? 14px : 28px;
+        color: Status.color(root.status);
+    }
+    Text { text: root.component; width: root.sub ? 154px : 170px; }
+    // One line, elided: Slint won't grow a layout row for a wrapped second line, so
+    // wrapping here would silently clip it instead.
+    Text {
+        text: root.detail;
+        overflow: elide;
+        horizontal-stretch: 1;
+        color: Palette.foreground.transparentize(0.35);
+    }
+}
+
+// An Environment row, plus its sub-lines when it has any and the chevron has opened them.
+// The whole row is the click target, not just the chevron.
+component EnvEntry inherits VerticalLayout {
+    // Not `row`: layouts already have a property by that name.
+    in property <EnvRow> entry;
+    property <bool> open;
+    property <bool> expandable: root.entry.sub.length > 0;
+    spacing: 6px;
+    TouchArea {
+        enabled: root.expandable;
+        mouse-cursor: root.expandable ? pointer : default;
+        clicked => { root.open = !root.open; }
+        EnvLine {
+            status: root.entry.status; component: root.entry.component; detail: root.entry.detail;
+            expandable: root.expandable;
+            open: root.open;
+        }
+    }
+    if root.open: VerticalLayout {
+        spacing: 6px;
+        for s in root.entry.sub: EnvLine {
+            status: s.status; component: s.component; detail: s.detail; sub: true;
+        }
+    }
 }
 
 component Heading inherits Text {
@@ -39,9 +131,9 @@ export component AppWindow inherits Window {
     title: "Kokoro Kindle Reader — Stack Check";
     default-font-size: 14px;
     preferred-width: 880px;
-    preferred-height: 780px;
+    preferred-height: 610px;
     min-width: 760px;
-    min-height: 620px;
+    min-height: 450px;
 
     // --- state (set from Python) ---
     in property <bool> busy;
@@ -62,7 +154,6 @@ export component AppWindow inherits Window {
     in-out property <int> runs: 5;
     in-out property <int> warmup: 1;
     in property <[BenchRow]> bench-rows;
-    in property <string> log-text;
     in-out property <int> current-tab;    // 0 Environment, 1 Synthesize, 2 Speed test
 
     // --- events (handled in Python) ---
@@ -72,10 +163,6 @@ export component AppWindow inherits Window {
     callback save-wav();
     callback run-bench();
     callback bench-config-toggled(int, bool);
-
-    pure function status-color(s: string) -> color {
-        s == "ok" ? #2e9e4f : s == "warn" ? #d18b16 : s == "fail" ? #c0392b : #4a6da7
-    }
 
     VerticalLayout {
         padding: 16px;
@@ -109,19 +196,7 @@ export component AppWindow inherits Window {
                                 padding: 10px;
                                 spacing: 6px;
                                 alignment: start;
-                                for row in root.env-rows: HorizontalLayout {
-                                    spacing: 10px;
-                                    Text { text: "●"; color: root.status-color(row.status); width: 14px; }
-                                    Text {
-                                        text: row.component;
-                                        width: 170px;
-                                        color: row.status == "warn" || row.status == "fail"
-                                            ? root.status-color(row.status) : Palette.foreground;
-                                    }
-                                    // One line, elided: Slint won't grow a layout row for a wrapped
-                                    // second line, so wrapping here would silently clip it instead.
-                                    Text { text: row.detail; overflow: elide; horizontal-stretch: 1; }
-                                }
+                                for row in root.env-rows: EnvEntry { entry: row; }
                             }
                         }
                     }
@@ -264,8 +339,5 @@ export component AppWindow inherits Window {
             Text { text: root.status; vertical-alignment: center; horizontal-stretch: 1; }
             ProgressIndicator { indeterminate: root.busy; progress: 0; width: 180px; height: 6px; y: (parent.height - self.height) / 2; }
         }
-
-        Muted { text: "Log (newest first)"; }
-        TextEdit { text: root.log-text; read-only: true; height: 130px; }
     }
 }

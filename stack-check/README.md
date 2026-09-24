@@ -9,8 +9,8 @@ whatever machine it runs on:
    CPU thread counts.
 
 It reuses the real assets the host uses — the provisioned espeak in
-`../native-deps/linux/runtime/` and the Kokoro model under
-`~/.local/share/kokoro-kindle-reader/…` — but the synthesis core here
+`../native-deps/<windows|linux>/runtime/` and the Kokoro model in the host's app-data dir —
+but the synthesis core here
 (`kokoro_min.py`) is a *deliberately minimal* stand-in, not a port of `native_synth.rs`.
 It keeps the model I/O and the vocab-critical phoneme substitutions; it skips number
 normalization, punctuation segmentation and the word-timing machinery.
@@ -29,87 +29,102 @@ handles the callbacks.
 
 ---
 
-## Developer setup (Linux)
+## Developer setup
 
-Written against a fresh machine. It has three moving parts: **(A)** the project's native
-deps (the modified espeak 1.52.0), **(B)** the Kokoro model files, and **(C)** this app's
-own Python environment. `run.sh` handles (C) automatically; (A) and (B) are shared project
-assets you provision once with the repo's existing scripts.
+Runs on **Windows and Linux** from the same files. It has three moving parts: **(A)** the
+project's native deps (the modified espeak 1.52.0), **(B)** the Kokoro model files, and
+**(C)** this app's own Python environment. `main.py` handles (C) automatically;
+(A) and (B) are shared project assets you provision once with the repo's existing scripts.
 
 ### 0. Prerequisites
 
-| Tool | Why | Install |
-|---|---|---|
-| `python3` (3.9+) | drives the provisioning scripts | usually preinstalled |
-| `git`, `cmake`, a C toolchain (`gcc`/`clang` + `make`) | **espeak-ng 1.52.0 is built from source** by `fetch-deps.py` (a distro's own libespeak is unmodified and changes the phonemes) | `sudo apt install git cmake build-essential` |
-| an audio player: `pw-play` (PipeWire) or `aplay` (ALSA) | the GUI's Play button shells out to it | usually preinstalled; else `sudo apt install pipewire-bin` or `alsa-utils` |
-| `curl` | to fetch the uv installer | usually preinstalled |
-| *(optional, for WebGPU)* the Vulkan loader + a Vulkan driver | the WebGPU EP runs on Dawn, which uses **Vulkan** on Linux; without it only CPU works | `sudo apt install libvulkan1 mesa-vulkan-drivers` (Intel/AMD); check with `ls /usr/share/vulkan/icd.d/` |
+| Tool | Why | Windows | Linux |
+|---|---|---|---|
+| Python 3 on `PATH` | drives the provisioning scripts | python.org or the Store | usually preinstalled |
+| Git, CMake, a C toolchain | **espeak-ng 1.52.0 is built from source** by `fetch-deps.py` (a distro's or installer's own espeak is unmodified and changes the phonemes) | Visual Studio Build Tools (C++) + CMake | `sudo apt install git cmake build-essential` |
+| an audio player | the GUI's Play button | nothing: Python's `winsound` | `pw-play` (PipeWire) or `aplay` (ALSA); else `sudo apt install pipewire-bin` or `alsa-utils` |
+| *(for WebGPU)* a GPU driver Dawn can use | the WebGPU EP runs on Dawn; without it only CPU works | **D3D12**: any current GPU driver | **Vulkan**: `sudo apt install libvulkan1 mesa-vulkan-drivers` (Intel/AMD); check `ls /usr/share/vulkan/icd.d/` |
 
-Note: the app itself needs **no** `sudo` and **no** system Python packages — uv provides a
-self-contained CPython. `sudo` above is only for the one-time build toolchain and (maybe) an
-audio player. Run the repo's toolchain doctor to see what's missing in one pass:
+The app itself needs **no** admin/`sudo` and **no** system Python packages — uv provides a
+self-contained CPython. Run the repo's toolchain doctor to see what's missing in one pass:
+
+```powershell
+.\packaging\doctor.cmd -For app     # Windows, from the repo root
+```
 
 ```bash
-./packaging/doctor.sh          # from the repo root; checks python3/cmake/C-toolchain/etc.
+./packaging/doctor.sh               # Linux, from the repo root
 ```
 
 ### A. Provision the modified espeak-ng 1.52.0
 
-This app loads `../native-deps/linux/runtime/libespeak-ng.so.1.52.0` + its
-`espeak-ng-data/` directly. Build them from source (needs cmake + C toolchain from step 0):
+This app loads espeak straight out of the platform's provisioned runtime tree, next to its
+`espeak-ng-data/`:
+
+| | Library | Tree |
+|---|---|---|
+| Windows | `espeak-ng.dll` | `native-deps/windows/runtime/` |
+| Linux | `libespeak-ng.so.1.52.0` | `native-deps/linux/runtime/` |
+
+Build them from source (needs the toolchain from step 0) — the same script on both:
 
 ```bash
-python3 native-deps/fetch-deps.py     # from the repo root
+python native-deps/fetch-deps.py      # from the repo root (python3 on Linux)
 ```
 
-This populates `native-deps/linux/runtime/` (it also fetches the CPU onnxruntime `.so`,
-which this app doesn't use — the `onnxruntime-webgpu` wheel provides ONNX Runtime for the
-Python side — but it's harmless and part of the same recipe).
+It also fetches the ONNX Runtime library the host links against (the WebGPU DLLs on Windows,
+the CPU `.so` on Linux), which this app doesn't use — the `onnxruntime-webgpu` wheel
+provides ONNX Runtime for the Python side — but it's harmless and part of the same recipe.
 
 ### B. Provision the Kokoro model + voice
 
-The app reads the model from the host's app-data dir. Fetch it with the repo's script
-(verifies SHA-256 against `model-manifest.json`):
+The app reads the model from the host's app-data dir:
+
+| | Model dir |
+|---|---|
+| Windows | `%APPDATA%\com.phc260.kokoro-kindle-reader\onnx-community\Kokoro-82M-v1.0-ONNX\` |
+| Linux | `~/.local/share/kokoro-kindle-reader/onnx-community/Kokoro-82M-v1.0-ONNX/` (or under `$XDG_DATA_HOME`) |
+
+On a Windows machine where the panel has run, it's already there (the panel downloads it at
+first run). Otherwise fetch it with the repo's script, which verifies SHA-256 against
+`model-manifest.json` and picks the same dir:
 
 ```bash
-python3 native-deps/fetch-model.py            # -> ~/.local/share/kokoro-kindle-reader/onnx-community/Kokoro-82M-v1.0-ONNX/
-python3 native-deps/fetch-model.py --verify-only   # re-check an existing copy
-python3 native-deps/fetch-model.py --dest DIR      # provision somewhere else
+python native-deps/fetch-model.py                  # -> the model dir above
+python native-deps/fetch-model.py --verify-only    # re-check an existing copy
+python native-deps/fetch-model.py --dest DIR       # provision somewhere else
 ```
 
 You need `config.json`, `tokenizer.json`, `onnx/model.onnx`, and `voices/af_heart.bin`.
 
 ### C. Set up this app's environment (uv)
 
-The dependencies (`onnxruntime-webgpu==1.27.0`, `numpy`, `onnx`), the Python version
+The dependencies (`onnxruntime-webgpu==1.27.0`, `numpy`, `onnx`, `slint`), the Python version
 (`.python-version`), and the managed-CPython / copy-link-mode settings are all declared in
-**`pyproject.toml`** and locked in **`uv.lock`** — so `uv run` reproduces the exact
-environment. `onnxruntime-webgpu` is the same `onnxruntime` Python module plus the WebGPU
-EP (and the CPU EP), pinned to the version the project's Windows build uses; `numpy` is
-imported directly and is also required by ONNX Runtime's Python API; `onnx` is used only to
-patch the graph for the **Wrap sine phase** toggle (see below). Install **uv** if you
-don't have it, then run:
+**`pyproject.toml`** and locked in **`uv.lock`** (which carries both the Windows and the Linux
+wheels) — so `uv run` reproduces the exact environment. `onnxruntime-webgpu` is the same
+`onnxruntime` Python module plus the WebGPU EP (and the CPU EP), pinned to the version the
+project's Windows build uses; `numpy` is imported directly and is also required by ONNX
+Runtime's Python API; `onnx` is used only to patch the graph for the **Wrap sine phase**
+toggle (see below).
+
+The launcher is one Python file for both platforms. Run it with any Python 3 (the system one
+is fine; it uses only the standard library). It installs **uv** into `~/.local/bin`
+(`%USERPROFILE%\.local\bin`) if it isn't on `PATH`, then hands over to `uv run stack_check.py`:
 
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-source "$HOME/.local/bin/env"      # or restart your shell; puts uv on PATH
+python stack-check/main.py         # from the repo root (python3 on Linux)
 ```
 
-```bash
-cd stack-check
-./run.sh
-```
-
-`run.sh` is a one-liner around `uv run stack_check.py`. On first use, `uv run` fetches a
-managed **CPython 3.12**, creates the local venv **`stack-check/.venv`**, and syncs the locked
+On first use, `uv run` fetches a managed **CPython 3.12**, creates the local venv **`stack-check/.venv`**, and syncs the locked
 dependencies into it. Subsequent launches reuse it. Why these settings live in
-`pyproject.toml` rather than flags: the system Python here ships without pip/ensurepip, and a
-uv-managed interpreter is the same everywhere (`python-preference = "only-managed"`). The
-venv sits on the project's fuse mount, a different device from uv's wheel cache, so wheels are
-copied not hardlinked (`link-mode = "copy"`).
+`pyproject.toml` rather than flags: the Linux laptop's system Python ships without
+pip/ensurepip, and a uv-managed interpreter is the same everywhere
+(`python-preference = "only-managed"`). The venv usually sits on a different volume from
+uv's wheel cache (a fuse mount on Linux, `D:` against a `C:` cache on Windows), so wheels
+are copied, not hardlinked (`link-mode = "copy"`).
 
-#### Without run.sh
+#### Without the launcher
 
 ```bash
 cd stack-check
@@ -122,10 +137,11 @@ uv run stack_check.py      # the GUI
 Sanity-check the whole pipeline from a terminal — same core the GUI drives:
 
 ```bash
-uv run kokoro_min.py "Some text to speak." /tmp/out.wav
+uv run kokoro_min.py "Some text to speak." out.wav
 ```
 
-It prints the espeak lib + version, the phonemes, token/timing stats, and writes a WAV.
+It prints the espeak lib + version, the phonemes, token/timing stats, and writes a WAV (to
+the system temp dir if no path is given).
 
 ---
 
@@ -133,7 +149,10 @@ It prints the espeak lib + version, the phonemes, token/timing stats, and writes
 
 - **Fonts:** Slint renders its own anti-aliased text with the system fonts, so IPA phonemes
   (ð, ɹ, ˈ, ɪ …) display correctly with no font setup. The earlier tkinter version couldn't
-  do either: the uv-managed Tk has no Xft.
+  do either on Linux: the uv-managed Tk has no Xft.
+- **Playback** hands a temp WAV to a player process — `pw-play`/`paplay`/`aplay`/`ffplay` on
+  Linux, and on Windows a child Python running `winsound.PlaySound`. Same shape either way:
+  Stop terminates the process, and its exit marks the end of the clip.
 - **Threading:** Slint objects may only be touched on the UI thread, and the Python bindings
   have no `invoke_from_event_loop`. Worker threads post closures to a queue, and a repeating
   `slint.Timer` drains it on the UI thread.
@@ -197,8 +216,10 @@ is the GPU/driver `sin`, and that's what this measures. Reference result on the 
 
 ## The three tabs
 
-- **Environment** — Python/slint/numpy/onnxruntime versions, the available execution
-  providers, detected CPU & GPU, espeak-ng, model and voice files, and an audio player.
+- **Environment** — Python/onnxruntime/onnx versions, the available execution providers,
+  detected CPU & GPU, espeak-ng, the Kokoro model + voice, and the Cloud Reader OCR models
+  (checked against `ocr-manifest.json`'s SHA-256s, in the dir the host reads). The model and
+  OCR rows fold their per-file lines behind a ▾ arrow.
 - **Synthesize** — type text, pick a provider, set speed, hear it; shows the IPA phonemes,
   token count, audio length, synth time and real-time factor (RTF).
 - **Speed test** — benchmarks the chosen configurations (each available EP, plus CPU at
@@ -233,32 +254,33 @@ is the GPU/driver `sin`, and that's what this measures. Reference result on the 
 
 | Symptom | Cause / fix |
 |---|---|
-| `FileNotFoundError: libespeak-ng not found under …/native-deps/linux/runtime` | Step A not done — run `python3 native-deps/fetch-deps.py`. |
-| `fetch-deps.py` fails on cmake / a compiler | Missing build toolchain — `sudo apt install git cmake build-essential`, or see `./packaging/doctor.sh`. |
-| model / voice errors, or `model.onnx` missing | Step B not done — run `python3 native-deps/fetch-model.py`. |
-| `uv: command not found` after install | uv is at `~/.local/bin`; `source "$HOME/.local/bin/env"` or add it to PATH. |
+| `FileNotFoundError: espeak-ng.dll not found under …\native-deps\windows\runtime` (Linux: `libespeak-ng not found under …/native-deps/linux/runtime`) | Step A not done — run `python native-deps/fetch-deps.py`. |
+| `fetch-deps.py` fails on cmake / a compiler | Missing build toolchain — see `packaging\doctor.cmd -For app` / `./packaging/doctor.sh`. |
+| model / voice errors, or `model.onnx` missing | Step B not done — run `python native-deps/fetch-model.py`. |
+| `uv: command not found` after install | uv is at `~/.local/bin` (`%USERPROFILE%\.local\bin`); open a new shell, or add it to PATH. |
 | Environment tab shows only `CPUExecutionProvider` (+Azure) | The venv has plain `onnxruntime` instead of `onnxruntime-webgpu` — run `uv sync` in `stack-check/`. |
-| WebGPU listed, but its session fails or Synthesize errors on WebGPU | No usable Vulkan driver — install `libvulkan1 mesa-vulkan-drivers`; check `/usr/share/vulkan/icd.d/`. CPU still works. |
+| WebGPU listed, but its session fails or Synthesize errors on WebGPU | No GPU driver Dawn can use. Windows: update the GPU driver (D3D12). Linux: install `libvulkan1 mesa-vulkan-drivers`; check `/usr/share/vulkan/icd.d/`. CPU still works. |
 | `uv sync` times out downloading `onnxruntime-webgpu` (24 MiB) | Slow link to `files.pythonhosted.org` — retry with `UV_HTTP_TIMEOUT=900 uv sync`. |
 | Dawn prints `maxDynamic…BuffersPerPipelineLayout artificially reduced` | Harmless Dawn warning on startup. |
 | WebGPU speech sounds muffled/breathy toward the end of longer sentences | The known WebGPU `Sin` range bug — tick **Wrap sine phase**. |
 | The **Wrap sine phase** checkbox is greyed out | `onnx` isn't installed in the venv (the Environment tab says so) — run `uv sync`. |
-| No sound on Play | No `pw-play`/`aplay` on PATH — install one; test with `pw-play /tmp/out.wav`. |
+| No sound on Play (Linux) | No `pw-play`/`aplay` on PATH — install one; test with `pw-play out.wav`. Windows needs none. |
 | Process aborts with `PyStruct is unsendable, but sent to another thread` | Something re-enabled automatic GC, or a worker touched a Slint object. See GUI notes above. |
-| The window doesn't appear | No display — set `DISPLAY` (e.g. `DISPLAY=:0 ./run.sh`) on a machine with an X session. |
+| The window doesn't appear (Linux) | No display — set `DISPLAY` (e.g. `DISPLAY=:0 python3 stack-check/main.py`) on a machine with an X session. |
 
 ## Paths & layout reference
 
-| What | Location | Provisioned by |
-|---|---|---|
-| App source | `stack-check/` | (this repo) |
-| Python venv (packages) | `stack-check/.venv/` (gitignored) | `uv run` / `uv sync` |
-| uv-managed CPython 3.12 | `~/.local/share/uv/python/` | `uv python install` |
-| Modified espeak-ng 1.52.0 lib + data | `native-deps/linux/runtime/` | `native-deps/fetch-deps.py` |
-| Kokoro model + `af_heart` voice | `~/.local/share/kokoro-kindle-reader/onnx-community/Kokoro-82M-v1.0-ONNX/` | `native-deps/fetch-model.py` |
+| What | Windows | Linux | Provisioned by |
+|---|---|---|---|
+| App source | `stack-check\` | `stack-check/` | (this repo) |
+| Python venv (packages) | `stack-check\.venv\` | `stack-check/.venv/` | `uv run` / `uv sync` (gitignored) |
+| uv-managed CPython 3.12 | `%APPDATA%\uv\python\` | `~/.local/share/uv/python/` | `uv python install` |
+| Modified espeak-ng 1.52.0 lib + data | `native-deps\windows\runtime\` | `native-deps/linux/runtime/` | `native-deps/fetch-deps.py` |
+| Kokoro model + `af_heart` voice | `%APPDATA%\com.phc260.kokoro-kindle-reader\onnx-community\Kokoro-82M-v1.0-ONNX\` | `~/.local/share/kokoro-kindle-reader/onnx-community/Kokoro-82M-v1.0-ONNX/` | the panel (Windows) or `native-deps/fetch-model.py` |
 
-Defaults are set in `kokoro_min.py` (`DEFAULT_MODEL_DIR`, `DEFAULT_ESPEAK_RUNTIME`); the
-repo root is inferred as the parent of `stack-check/`.
+Defaults are set in `kokoro_min.py` (`DEFAULT_MODEL_DIR` via `app_data_dir()`, mirroring
+`fetch-model.py`, and `DEFAULT_ESPEAK_RUNTIME`); the repo root is inferred as the parent of
+`stack-check/`.
 
 ## Files
 
@@ -269,4 +291,4 @@ repo root is inferred as the parent of `stack-check/`.
 - `pyproject.toml` — project metadata + dependencies + uv settings (managed python, copy link-mode).
 - `uv.lock` — pinned dependency versions (committed, for reproducible installs).
 - `.python-version` — pins the interpreter to CPython 3.12.
-- `run.sh` — installs uv if needed, then `uv run stack_check.py`.
+- `main.py` — the launcher, on both platforms: installs uv if needed, then `uv run stack_check.py`.

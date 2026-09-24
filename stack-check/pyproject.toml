@@ -6,8 +6,9 @@ requires-python = ">=3.12"
 dependencies = [
     "numpy>=2",
     # onnxruntime-webgpu bundles the same `onnxruntime` module PLUS the WebGPU EP (Dawn ->
-    # Vulkan) and the CPU EP. Pinned to 1.27.0 to match the project's Windows build. On an
-    # integrated GPU the WebGPU EP runs but is slower than CPU; the Speed test measures it.
+    # D3D12 on Windows, Vulkan on Linux) and the CPU EP. Pinned to 1.27.0 to match the
+    # project's Windows build. On an integrated GPU the WebGPU EP runs but is slower than CPU;
+    # the Speed test measures it.
     "onnxruntime-webgpu==1.27.0",
     # Only for the "wrap sine phase" toggle: inserts four nodes before the harmonic source's
     # Sin so WebGPU's Sin never sees an argument outside [0, 2*pi). See wrap_sine_phase().
@@ -21,9 +22,10 @@ dependencies = [
 [tool.uv]
 # Not an installable package -- two flat modules plus ui/stack_check.slint, driven by uv run.
 package = false
-# A reproducible interpreter regardless of the distro: the system Python here ships without
-# pip/ensurepip, and uv's managed CPython is the same everywhere this runs.
+# A reproducible interpreter regardless of the OS or distro: the Linux laptop's system Python
+# ships without pip/ensurepip, and uv's managed CPython is the same everywhere this runs.
 python-preference = "only-managed"
-# The venv lives on the project's fuse mount, a different device from uv's wheel cache, so
-# hardlinking the cached wheels across devices fails -- copy them instead.
+# The venv usually sits on a different volume from uv's wheel cache (a fuse mount on the Linux
+# laptop, D: against a C: cache on the Windows box), and hardlinks can't cross volumes -- so
+# copy the cached wheels instead.
 link-mode = "copy"

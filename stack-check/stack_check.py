@@ -23,6 +23,8 @@ everything acyclic immediately; only cycles wait for the next collection.
 from __future__ import annotations
 
 import gc
+import hashlib
+import json
 import os
 import platform
 import queue
@@ -34,7 +36,6 @@ import threading
 import time
 from dataclasses import replace
 from datetime import timedelta
-from importlib.metadata import version as pkg_version
 from pathlib import Path
 
 import numpy as np
@@ -46,7 +47,6 @@ UI_FILE = Path(__file__).resolve().parent / "ui" / "stack_check.slint"
 OK, WARN, FAIL, INFO = "ok", "warn", "fail", "info"
 DEFAULT_TEXT = ("The quick brown fox jumps over the lazy dog. "
                 "Kokoro runs on the ONNX Runtime, natively on this machine.")
-MAX_LOG_LINES = 500
 GC_INTERVAL = timedelta(seconds=5)     # UI-thread collection period (see module docstring)
 
 
@@ -78,7 +78,6 @@ class App:
         self.cfg_specs: list[km.ProviderSpec] = []          # parallel to the bench-configs model
         self.cfg_checked: list[bool] = []
         self.cfg_model = slint.ListModel([])
-        self.log_lines: list[str] = []
 
         w = self.w
         w.synth_text = DEFAULT_TEXT
@@ -122,9 +121,14 @@ class App:
                 self.logline(f"[ui error] {e!r}")
 
     def logline(self, msg: str):
-        self.log_lines.insert(0, f"{time.strftime('%H:%M:%S')}  {msg}")
-        del self.log_lines[MAX_LOG_LINES:]
-        self.w.log_text = "\n".join(self.log_lines)
+        """A progress note, to the console that launched the app -- the window has no log.
+        Anything the user must see goes to the status line instead (`tell`)."""
+        print(f"{time.strftime('%H:%M:%S')}  {msg}", flush=True)
+
+    def tell(self, msg: str):
+        """Put `msg` on the status line, and on the console too."""
+        self.w.status = msg
+        self.logline(msg)
 
     def set_busy(self, busy: bool, status: str = ""):
         self.busy = busy
@@ -153,15 +157,16 @@ class App:
 
     def _check_environment(self):
         rows: list[tuple[str, str, str]] = []
+        subs: dict[str, list[tuple[str, str, str]]] = {}   # component -> its expandable lines
         rows.append((OK, "Python", f"{platform.python_version()}  ({_tilde(os.path.realpath(sys.executable))})"))
-        rows.append((OK, "slint", f"{pkg_version('slint')}  ·  Fluent style, as in kokoro-panel"))
-        rows.append((OK, "numpy", np.__version__))
 
+        # Shown as: Execution providers, onnx, onnxruntime -- so the rows are built first and
+        # appended in that order.
         specs: list[km.ProviderSpec] = []
         try:
             import onnxruntime as ort
             avail = ort.get_available_providers()
-            rows.append((OK, "onnxruntime", ort.__version__))
+            ort_row = (OK, "onnxruntime", ort.__version__)
             has_gpu_ep = any(p in avail for p in
                              ("WebGpuExecutionProvider", "CUDAExecutionProvider", "DmlExecutionProvider"))
             note = "" if "WebGpuExecutionProvider" in avail else \
@@ -169,7 +174,7 @@ class App:
             rows.append((OK if has_gpu_ep else WARN, "Execution providers", ", ".join(avail) + note))
             specs = km.available_provider_specs()
         except Exception as e:
-            rows.append((FAIL, "onnxruntime", f"import failed: {e!r}"))
+            ort_row = (FAIL, "onnxruntime", f"import failed: {e!r}")
 
         # onnx -- only needed to patch the graph for the sine-phase wrap toggle
         wrap_ok = km.wrap_available()
@@ -178,6 +183,7 @@ class App:
             rows.append((OK, "onnx", f"{onnx.__version__}  ·  enables the sine-phase wrap toggle"))
         else:
             rows.append((WARN, "onnx", "not installed — sine-phase wrap toggle disabled (uv sync)"))
+        rows.append(ort_row)
 
         rows.append((INFO, "CPU", f"{_cpu_name()}  ·  {os.cpu_count()} logical cores"))
         rows.append((INFO, "GPU (hardware)", _gpu_name() or "unknown"))
@@ -188,28 +194,39 @@ class App:
         except Exception as e:
             rows.append((FAIL, "espeak-ng", f"{e}"))
 
-        # The model dir gets its own row so the file rows below stay short enough for one line.
+        # One row for the whole model, with the dir and each file it needs behind the arrow.
         md = km.DEFAULT_MODEL_DIR
-        rows.append((OK if md.is_dir() else FAIL, "Model dir",
-                     _tilde(md) if md.is_dir() else f"missing: {_tilde(md)}"))
-        mp = md / "onnx" / "model.onnx"
-        if mp.exists():
-            rows.append((OK, "Kokoro model", f"{mp.stat().st_size/1e6:.0f} MB  ·  onnx/model.onnx"))
+        needed = ["tokenizer.json", "onnx/model.onnx", "voices/af_heart.bin"]
+        missing = [n for n in needed if not (md / n).is_file()]
+        lines = [(OK if md.is_dir() else FAIL, "Folder",
+                  _tilde(md) if md.is_dir() else f"missing: {_tilde(md)}")]
+        for n in needed:
+            f = md / n
+            lines.append((OK, n, f"{f.stat().st_size/1e6:.1f} MB") if f.is_file()
+                         else (FAIL, n, "missing"))
+        if not md.is_dir():
+            summary = (FAIL, "Kokoro model", "not provisioned  ·  python native-deps/fetch-model.py")
+        elif missing:
+            summary = (FAIL, "Kokoro model", f"{len(missing)} of {len(needed)} files missing")
         else:
-            rows.append((FAIL, "Kokoro model", "missing: onnx/model.onnx"))
-        vp = md / "voices" / "af_heart.bin"
-        rows.append((OK if vp.exists() else FAIL, "Voice (af_heart)",
-                     "voices/af_heart.bin" if vp.exists() else "missing: voices/af_heart.bin"))
+            size = (md / "onnx" / "model.onnx").stat().st_size / 1e6
+            summary = (OK, "Kokoro model", f"{size:.0f} MB  ·  af_heart voice")
+        rows.append(summary)
+        subs["Kokoro model"] = lines
 
-        player = _find_player()
-        rows.append((OK if player else WARN, "Audio player",
-                     player or "none found (pw-play / aplay) — playback disabled"))
+        summary, lines = _check_ocr()
+        rows.append(summary)
+        subs["OCR models"] = lines
 
-        self.post(lambda: self._render_env(rows, specs, wrap_ok))
+        self.post(lambda: self._render_env(rows, subs, specs, wrap_ok))
 
-    def _render_env(self, rows, specs, wrap_ok):
+    def _render_env(self, rows, subs, specs, wrap_ok):
         w = self.w
-        w.env_rows = slint.ListModel([{"status": s, "component": c, "detail": d} for s, c, d in rows])
+        w.env_rows = slint.ListModel([{
+            "status": s, "component": c, "detail": d,
+            "sub": slint.ListModel([{"status": ss, "component": sc, "detail": sd}
+                                    for ss, sc, sd in subs.get(c, [])]),
+        } for s, c, d in rows])
         self.specs = specs
         w.providers = slint.ListModel([s.label for s in specs])
         w.provider_index = 0 if specs else -1
@@ -220,17 +237,20 @@ class App:
         self.set_busy(False, "Ready.")
         self.logline("Environment check complete: " +
                      ", ".join(f"{c}={'ok' if s in (OK, INFO) else s}"
-                               for s, c, _ in rows if c in ("onnxruntime", "espeak-ng", "Kokoro model")))
+                               for s, c, _ in rows if c in ("onnxruntime", "espeak-ng", "Kokoro model", "OCR models")))
 
     def _populate_bench_configs(self, specs):
         # Every available EP, then CPU at 1 / 2 / half / all logical cores (x-half and x-all
         # bracket the physical-core count, which is where the hyperthreading penalty shows).
+        # None of the pinned counts starts ticked: plain "CPU" is ORT's default, already one
+        # thread per physical core, so the default run is just the EPs as production builds
+        # them. The pinned counts are there to tick for a scaling curve.
         ncpu = os.cpu_count() or 8
         half = max(1, ncpu // 2)
         entries = [(s, True) for s in specs]
         for n in sorted({1, 2, half, ncpu}):
             entries.append((km.ProviderSpec(f"CPU x{n}", ["CPUExecutionProvider"], intra_op=n),
-                            n in (1, half, ncpu)))
+                            False))
         self.cfg_specs = [s for s, _ in entries]
         self.cfg_checked = [c for _, c in entries]
         self.cfg_model = slint.ListModel([{"label": s.label, "checked": c} for s, c in entries])
@@ -248,7 +268,7 @@ class App:
         w = self.w
         text = w.synth_text.strip()
         if not text:
-            self.logline("Nothing to synthesize.")
+            self.tell("Nothing to synthesize.")
             return
         idx = w.provider_index
         label = self.specs[idx].label if 0 <= idx < len(self.specs) else "CPU"
@@ -277,8 +297,7 @@ class App:
             self._play(r.pcm, r.sample_rate)
         except Exception as e:
             err = e
-            self.post(lambda: (self.logline(f"[synth error] {err!r}"),
-                               self.set_busy(False, "Error — see log.")))
+            self.post(lambda: (self.set_busy(False), self.tell(f"Synthesis failed: {err}")))
 
     def _show_synth(self, r: km.SynthResult):
         peak = float(np.max(np.abs(r.pcm))) if r.pcm.size else 0.0
@@ -299,7 +318,7 @@ class App:
         w = self.w
         chosen = [s for s, c in zip(self.cfg_specs, self.cfg_checked) if c]
         if not chosen:
-            self.logline("Select at least one configuration.")
+            self.tell("Select at least one configuration.")
             return
         text = w.synth_text.strip() or DEFAULT_TEXT
         runs, warmup = int(w.runs), int(w.warmup)
@@ -329,8 +348,7 @@ class App:
             self.post(lambda: self._show_bench(results))
         except Exception as e:
             err = e
-            self.post(lambda: (self.logline(f"[bench error] {err!r}"),
-                               self.set_busy(False, "Error — see log.")))
+            self.post(lambda: (self.set_busy(False), self.tell(f"Benchmark failed: {err}")))
 
     def _show_bench(self, results):
         baseline = max(b["median"] for b in results)        # slowest = 1.00x
@@ -354,7 +372,8 @@ class App:
         path = os.path.join(tempfile.gettempdir(), "kokoro_stack_check_play.wav")
         km.write_wav(path, pcm, sr)
         self._stop_player()
-        proc = subprocess.Popen([player, path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        proc = subprocess.Popen(player[1] + [path], stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL, creationflags=NO_WINDOW)
         self.player = proc
 
         def started():
@@ -391,15 +410,15 @@ class App:
             return
         p = Path(self.w.save_path.strip()).expanduser()
         if not p.parent.is_dir():
-            self.logline(f"Save failed: no such folder {p.parent}")
+            self.tell(f"Save failed: no such folder {p.parent}")
             return
         try:
             km.write_wav(p, self.last_pcm, km.SAMPLE_RATE)
         except OSError as e:
-            self.logline(f"Save failed: {e}")
+            self.tell(f"Save failed: {e}")
             return
         self.w.save_path = str(p)
-        self.logline(f"Saved {p}")
+        self.tell(f"Saved {p}")
 
 
 def _collect_garbage():
@@ -408,8 +427,22 @@ def _collect_garbage():
 
 
 # ---- environment helpers ----------------------------------------------------
+# A console child of a GUI would flash a window on Windows; the flag is 0 (no-op) elsewhere.
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+LINUX_PLAYERS = ("pw-play", "paplay", "aplay", "ffplay")
+# Windows has no command-line player to rely on, but Python ships winsound. Run in a child
+# process so playback has the same shape as a Linux player: Stop terminates it, and its exit
+# is the end of the clip. (In-process SND_ASYNC can be stopped but never says when it ends.)
+WINSOUND_PLAY = "import sys, winsound; winsound.PlaySound(sys.argv[1], winsound.SND_FILENAME)"
+
+
 def _cpu_name() -> str:
     try:
+        if km.WINDOWS:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                                r"HARDWARE\DESCRIPTION\System\CentralProcessor\0") as k:
+                return str(winreg.QueryValueEx(k, "ProcessorNameString")[0]).strip()
         for line in open("/proc/cpuinfo"):
             if line.startswith("model name"):
                 return line.split(":", 1)[1].strip()
@@ -419,10 +452,17 @@ def _cpu_name() -> str:
 
 
 def _gpu_name() -> str | None:
-    lspci = shutil.which("lspci")
-    if not lspci:
-        return None
     try:
+        if km.WINDOWS:
+            out = subprocess.run(
+                ["powershell", "-NoProfile", "-Command",
+                 "Get-CimInstance Win32_VideoController | ForEach-Object "
+                 "{ \"$($_.Name) (driver $($_.DriverVersion))\" }"],
+                capture_output=True, text=True, timeout=20, creationflags=NO_WINDOW).stdout
+            return "; ".join(l.strip() for l in out.splitlines() if l.strip()) or None
+        lspci = shutil.which("lspci")
+        if not lspci:
+            return None
         out = subprocess.run([lspci], capture_output=True, text=True, timeout=4).stdout
         for line in out.splitlines():
             if any(k in line.lower() for k in ("vga", "3d", "display")):
@@ -432,11 +472,63 @@ def _gpu_name() -> str | None:
     return None
 
 
-def _find_player() -> str | None:
-    for p in ("pw-play", "paplay", "aplay", "ffplay"):
+OCR_MANIFEST = km.REPO_ROOT / "ocr-manifest.json"
+
+
+def _ocr_dir(subdir: str) -> tuple[Path, str]:
+    """Where the host reads the OCR models (webserve::ocr_assets): the panel's download in the
+    app-data dir, else -- for a debug host only -- native-deps/ocr. Returns (dir, which)."""
+    downloaded = km.app_data_dir() / subdir
+    if downloaded.exists():
+        return downloaded, "app data"
+    dev = km.REPO_ROOT / "native-deps" / subdir
+    if dev.exists():
+        return dev, "native-deps (debug host only)"
+    return downloaded, "app data"
+
+
+def _check_ocr() -> tuple[tuple[str, str, str], list[tuple[str, str, str]]]:
+    """The Cloud Reader OCR models against ocr-manifest.json: presence, size and SHA-256 --
+    the digests the host also gates the load on, so a file that fails here is one it refuses."""
+    try:
+        manifest = json.loads(OCR_MANIFEST.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        return (FAIL, "OCR models", f"cannot read ocr-manifest.json: {e}"), []
+    d, which = _ocr_dir(manifest["dir"])
+    lines = [(OK if d.is_dir() else FAIL, "Folder",
+              f"{_tilde(d)}  ·  {which}" if d.is_dir() else f"missing: {_tilde(d)}")]
+    bad = 0
+    for entry in manifest["files"]:
+        f = d / entry["path"]
+        if not f.is_file():
+            lines.append((FAIL, entry["path"], "missing"))
+        elif f.stat().st_size != entry["size"]:
+            lines.append((FAIL, entry["path"], f"{f.stat().st_size} bytes, expected {entry['size']}"))
+        elif hashlib.sha256(f.read_bytes()).hexdigest() != entry["sha256"]:
+            lines.append((FAIL, entry["path"], "SHA-256 mismatch (the host will refuse it)"))
+        else:
+            lines.append((OK, entry["path"], f"{entry['size']/1e6:.2f} MB  ·  SHA-256 ok"))
+            continue
+        bad += 1
+    n = len(manifest["files"])
+    if not d.is_dir():
+        summary = (FAIL, "OCR models", "not provisioned  ·  open the panel, or "
+                                       "python native-deps/fetch-ocr-models.py")
+    elif bad:
+        summary = (FAIL, "OCR models", f"{bad} of {n} files missing or corrupt")
+    else:
+        summary = (OK, "OCR models", f"{n} files, digests match  ·  {which}")
+    return summary, lines
+
+
+def _find_player() -> tuple[str, list[str]] | None:
+    """(what the Environment tab shows, the argv the WAV path is appended to), or None."""
+    if km.WINDOWS:
+        return "winsound (Python standard library)", [sys.executable, "-c", WINSOUND_PLAY]
+    for p in LINUX_PLAYERS:
         path = shutil.which(p)
         if path:
-            return path
+            return path, [path]
     return None
 
 
