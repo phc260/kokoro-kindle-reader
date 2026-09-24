@@ -110,7 +110,8 @@ Releases are built by CI from a tag, so the flow below needs nothing installed l
 tool is enforced rather than assumed — a missing one fails the build rather than quietly
 producing an artifact that describes a toolchain it wasn't built with:
 
-`.\packaging\doctor.ps1 -For installer` answers "do I have all of this?" in one pass,
+`.\packaging\doctor.cmd -For installer` (a shim that runs `doctor.ps1` past Windows' default
+Restricted execution policy, for that one process) answers "do I have all of this?" in one pass,
 reporting every missing tool together rather than one failed build apart. It builds and
 installs nothing. It is shell rather than Python so it still runs on a machine with no
 Python - the one prerequisite a Python script can never report. It is Windows only; the

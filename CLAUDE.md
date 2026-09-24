@@ -75,7 +75,9 @@ Load the detail on demand:
 # Python script can never report, since it needs one to start. It does NOT check whether
 # this checkout is provisioned; that stays in build_installer.py's preflight, which owns
 # the markers and digests it turns on.
-.\packaging\doctor.ps1 -For installer     # or app / source / extension / all
+.\packaging\doctor.cmd -For installer     # or app / source / extension / all
+# doctor.cmd runs doctor.ps1 with -ExecutionPolicy Bypass for that one process: a fresh
+# Windows refuses every .ps1 (Restricted), which is exactly the machine a doctor is for.
 # The Linux twin (POSIX shell, same shape) covers the two tiers Linux has - the host and the
 # extension; there is no installer/source tier off Windows, and it adds a CMake + C-toolchain
 # check because espeak is built from source. Its provisioned-state owner is fetch-deps.py +
@@ -127,7 +129,7 @@ python3 native-deps/fetch-ocr-models.py   # dev only; the release downloads per 
 cargo test --manifest-path kokoro-ocr\Cargo.toml   # needs no models: bounds, DB post, CTC decode
 # The real graphs over one PNG, no browser and no host — the only thing that catches a tensor
 # layout or class-count mistake, which otherwise reads out as fluent, confident, wrong text.
-$env:ORT_DYLIB_PATH = "native-deps\runtime\onnxruntime.dll"
+$env:ORT_DYLIB_PATH = "native-deps\windows\runtime\onnxruntime.dll"
 cargo run --manifest-path kokoro-ocr\Cargo.toml --example ocr-check -- page.png native-deps\ocr
 
 # Kindle 18632 hook + injector — both x86 (Kindle is 32-bit; the host spawns the injector).
@@ -947,7 +949,7 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   against. **Don't reintroduce a second recipe** — platform differences belong in the `WHEELS`
   table and `layout()`, which is where they can be read side by side.
 - **Linux provisions the CPU wheel, Windows the WebGPU one**, into separate trees
-  (`native-deps/linux/` vs `native-deps/runtime/`). **A distribution's own libespeak-ng is
+  (`native-deps/linux/` vs `native-deps/windows/`). **A distribution's own libespeak-ng is
   not a substitute** for the built one: unmodified, probably not 1.52.0, and either
   difference changes the phonemes.
 - **Do not write `printf '\uXXXX'` in a provisioning script.** It needs bash >= 4.2 and was
@@ -1057,7 +1059,7 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   field as an error, and that field was simply missing everywhere before.
 - **ONNX Runtime's notices are PROVISIONED, not tracked** — `fetch-deps.py` keeps the
   wheel's own `LICENSE`/`Privacy.md`/`ThirdPartyNotices.txt` into
-  `native-deps/runtime/notices/` and `build_installer.py` stages them to
+  `native-deps/windows/runtime/notices/` and `build_installer.py` stages them to
   `licenses/onnxruntime/`. The exact cp312 win_amd64 wheel is pinned by filename plus its PyPI
   SHA-256; selecting by the machine's Python is forbidden because the 1.27.0 cp311-cp314
   wheels contain different native DLL bytes. That keeps notices matched to the exact wheel; a

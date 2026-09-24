@@ -208,7 +208,7 @@ cargo test --manifest-path kokoro-ocr\Cargo.toml
 python3 native-deps/fetch-ocr-models.py
 
 # End to end on one page, with no browser and no host.
-$env:ORT_DYLIB_PATH = "native-deps\runtime\onnxruntime.dll"
+$env:ORT_DYLIB_PATH = "native-deps\windows\runtime\onnxruntime.dll"
 cargo run --manifest-path kokoro-ocr\Cargo.toml --example ocr-check -- page.png native-deps\ocr
 ```
 

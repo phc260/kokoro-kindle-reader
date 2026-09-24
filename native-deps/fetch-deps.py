@@ -13,11 +13,11 @@ Populates, per platform:
 
   Windows                                   Linux
   -------                                   -----
-  runtime/onnxruntime.dll (+3)              linux/runtime/libonnxruntime.so (+2)
-  runtime/espeak-ng.dll                     linux/runtime/libespeak-ng.so*
-  runtime/espeak-ng-data/                   linux/runtime/espeak-ng-data/
-  runtime/notices/                          linux/runtime/notices/
-  runtime/*-PROVISION.txt                   linux/runtime/*-PROVISION.txt
+  windows/runtime/onnxruntime.dll (+3)      linux/runtime/libonnxruntime.so (+2)
+  windows/runtime/espeak-ng.dll             linux/runtime/libespeak-ng.so*
+  windows/runtime/espeak-ng-data/           linux/runtime/espeak-ng-data/
+  windows/runtime/notices/                  linux/runtime/notices/
+  windows/runtime/*-PROVISION.txt           linux/runtime/*-PROVISION.txt
   espeak-ng-src/  (shared clone)            espeak-ng-src/  (shared clone)
   espeak-ng-notices/  (shared)              espeak-ng-notices/  (shared)
 
@@ -121,7 +121,7 @@ def layout():
     """Where this platform's provision lives, and which build dir espeak uses."""
     if WINDOWS:
         return {
-            "runtime": HERE / "runtime",
+            "runtime": HERE / "windows" / "runtime",
             "espeak_build": HERE / "espeak-ng-src" / "build-x64",
             # The DLL is redirected up to src/ on Windows by a RUNTIME_OUTPUT_DIRECTORY
             # inside `if (MINGW OR WIN32 OR MSVC)`; the import lib stays in src/libespeak-ng.
@@ -469,6 +469,24 @@ def provision_espeak_notices(src, force):
 
 # ----------------------------------------------------------------- entry point
 
+def adopt_legacy_windows_tree(paths):
+    """The Windows tree used to be native-deps/runtime/, before it moved beside linux/ as
+    windows/runtime/. Move an existing one across rather than re-provisioning: its markers
+    record the recipe, never a path, so they vouch for it just as well at the new location,
+    and the alternative is a wheel download plus an espeak rebuild for no change at all."""
+    legacy = HERE / "runtime"
+    target = paths["runtime"]
+    if not WINDOWS or not legacy.is_dir():
+        return
+    if target.exists():
+        print("==> native-deps/runtime/ is the old Windows location and %s already exists; "
+              "the old tree is unused - delete it by hand." % target)
+        return
+    target.parent.mkdir(parents=True, exist_ok=True)
+    legacy.rename(target)
+    print("==> Moved native-deps/runtime/ -> %s (the Windows tree's new location)" % target)
+
+
 def main():
     ap = argparse.ArgumentParser(description="Provision native-deps/ for this platform.")
     ap.add_argument("--ort-version", default=ORT_VERSION)
@@ -481,6 +499,7 @@ def main():
              % args.ort_version)
 
     paths = layout()
+    adopt_legacy_windows_tree(paths)
     provision_ort(paths, args.force)
     provision_espeak(paths, args.force)
     provision_espeak_notices(HERE / "espeak-ng-src", force=False)

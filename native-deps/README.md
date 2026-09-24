@@ -1,8 +1,8 @@
 # native-deps — synth dependency provisioning
 
 **Not a crate** — just the scripts that provision the native runtime the synth needs.
-Populates the gitignored dep folders alongside them (`runtime/` or `linux/runtime/`, plus
-`espeak-ng-src/`; re-created by the scripts).
+Populates the gitignored dep folders alongside them (`windows/runtime/` or `linux/runtime/`,
+plus `espeak-ng-src/`; re-created by the scripts).
 
 ## One recipe, one language
 
@@ -33,7 +33,7 @@ any Python 3 will do. Note that `py`, `python` and `python3` under
 that run a real Python when one is installed and open the Store when it is not, so judge
 them by running them, never by what they look like on disk.
 
-**Windows** (`fetch-deps.py` -> `runtime/`):
+**Windows** (`fetch-deps.py` -> `windows/runtime/`):
 
 - the **Dawn/WebGPU runtime DLLs** from the exact SHA-256-pinned
   `onnxruntime-webgpu` CPython 3.12 Windows wheel
@@ -53,29 +53,27 @@ them by running them, never by what they look like on disk.
 
 Both, by a second script: the **Cloud Reader OCR models** (`ocr/`).
 
-### The two runtime trees are asymmetric — Windows at the root, Linux nested (future work)
+### One runtime tree per platform, side by side
 
-Windows provisions into `native-deps/runtime/`; Linux into `native-deps/linux/runtime/`.
-There is **no `native-deps/windows/`** — the Windows tree is the root-level one. This is not a
-principled split, just history: the root `runtime/` predates the Linux port, and Linux was
-added underneath `linux/` so a machine that cross-builds both never mixes the two sets of
-libraries (see this dir's `.gitignore`). The **symmetric** shape — `native-deps/windows/runtime/`
-beside `native-deps/linux/runtime/`, the root left holding only the shared `espeak-ng-src/` —
-is the tidier one and is deliberately **deferred**, not rejected.
+Windows provisions into `native-deps/windows/runtime/`, Linux into
+`native-deps/linux/runtime/`; the root holds only what both share (`espeak-ng-src/`,
+`espeak-ng-notices/`). They are separate trees so a machine that cross-builds both never mixes
+the two sets of libraries. The espeak build dirs (`build-x64` / `build-linux`) carry the
+platform in their name instead, since they live inside the shared clone.
 
-If you pick it up, the move touches every place that names the Windows tree by its current
-path, and each must change together or the build silently reads the wrong tree:
+The Windows tree used to be the root-level `native-deps/runtime/`, a leftover from before the
+Linux port. `fetch-deps.py` moves an existing one to `windows/runtime/` on its next run, since
+the provision markers record the recipe and not a path. Four places name the Windows tree,
+and they must move together:
 
-- `layout()` here (the `WINDOWS` branch's `"runtime"`), and this README's two path references
-- `native-deps/.gitignore` (the bare `runtime/` entry)
-- `kokoro-host/build.rs` — `windows_deps` reads `native-deps/runtime`; `linux_deps` already
-  reads `native-deps/linux/runtime`, so only the Windows side moves
-- `packaging/build_installer.py`, which stages the marked runtime files from that Windows path
+- `layout()` here (the `WINDOWS` branch's `"runtime"`)
+- `native-deps/.gitignore`
+- `kokoro-host/build.rs` (`windows_deps`)
+- `packaging/build_installer.py`, which stages the marked runtime files from that path
   directly (not from a copy left in a target dir — see the marker rule below)
 
 `doctor.sh` / `doctor.ps1` are **not** on that list: they report tools, never the provisioned
-tree, so the layout is invisible to them. The espeak build dirs (`build-x64` / `build-linux`)
-already carry the platform in their name and need no change.
+tree, so the layout is invisible to them.
 
 ### Verified layout facts (Linux)
 

@@ -42,7 +42,7 @@ fn windows_deps(tp: &Path, profile_dir: &Path) {
         .join("build-x64")
         .join("src")
         .join("libespeak-ng");
-    let runtime = tp.join("runtime");
+    let runtime = tp.join("windows").join("runtime");
     let espk_data = tp
         .join("espeak-ng-src")
         .join("build-x64")

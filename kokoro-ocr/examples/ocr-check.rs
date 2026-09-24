@@ -8,7 +8,7 @@
 //! thing that answers that question.
 //!
 //! ```powershell
-//! $env:ORT_DYLIB_PATH = "native-deps\runtime\onnxruntime.dll"   # the host stages this itself
+//! $env:ORT_DYLIB_PATH = "native-deps\windows\runtime\onnxruntime.dll"   # the host stages this itself
 //! $env:WORDS = "1"                                             # per-word boxes, not just text
 //! cargo run --manifest-path kokoro-ocr\Cargo.toml --example ocr-check -- page.png native-deps\ocr
 //! ```

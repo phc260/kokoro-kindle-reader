@@ -27,7 +27,7 @@ CLAUDE.md). kokoro-ocr and kokoro-protocol are path dependencies of kokoro-host 
 covered by ITS graph; kokoro-sapi-smoke is a dev/test tool and is not shipped, so it is not
 included here.
 
-Output is PROVISIONED, not tracked - same reasoning as native-deps/runtime/notices/ (see
+Output is PROVISIONED, not tracked - same reasoning as native-deps/windows/runtime/notices/ (see
 fetch-deps.py): committing a generated report invites it to go stale the moment a lockfile
 changes without anyone re-running this script. build_installer.py calls it on every build
 so the shipped notices always match what was just compiled.

@@ -74,7 +74,7 @@ modified = false
 notice = ["licenses/onnxruntime/ORT-LICENSE.txt", "licenses/onnxruntime/ORT-ThirdPartyNotices.txt", "THIRD_PARTY_NOTICES.md"]
 provisioned_by = "native-deps/fetch-deps.py"
 staged_by = "packaging/build_installer.py"
-sha256_note = "fixed by the exact wheel SHA-256; native-deps/runtime/ORT-PROVISION.txt records that wheel and prevents cache substitution"
+sha256_note = "fixed by the exact wheel SHA-256; native-deps/windows/runtime/ORT-PROVISION.txt records that wheel and prevents cache substitution"
 
 [[component]]
 name = "onnxruntime_providers_shared.dll"
@@ -86,7 +86,7 @@ modified = false
 notice = ["licenses/onnxruntime/ORT-LICENSE.txt", "licenses/onnxruntime/ORT-ThirdPartyNotices.txt", "THIRD_PARTY_NOTICES.md"]
 provisioned_by = "native-deps/fetch-deps.py"
 staged_by = "packaging/build_installer.py"
-sha256_note = "fixed by the exact wheel SHA-256; native-deps/runtime/ORT-PROVISION.txt records that wheel and prevents cache substitution"
+sha256_note = "fixed by the exact wheel SHA-256; native-deps/windows/runtime/ORT-PROVISION.txt records that wheel and prevents cache substitution"
 
 # Dawn / Tint are statically linked INSIDE onnxruntime.dll (no separate file), and implement
 # the WebGPU execution provider the synth runs on.
@@ -118,7 +118,7 @@ modified = false
 notice = ["licenses/dxcompiler-NCSA.txt", "THIRD_PARTY_NOTICES.md"]
 provisioned_by = "native-deps/fetch-deps.py"
 staged_by = "packaging/build_installer.py"
-sha256_note = "fixed by the exact wheel SHA-256; native-deps/runtime/ORT-PROVISION.txt records that wheel and prevents cache substitution"
+sha256_note = "fixed by the exact wheel SHA-256; native-deps/windows/runtime/ORT-PROVISION.txt records that wheel and prevents cache substitution"
 
 [[component]]
 name = "dxil.dll"
@@ -133,7 +133,7 @@ modified = false
 notice = ["licenses/dxcompiler-NCSA.txt", "THIRD_PARTY_NOTICES.md"]
 provisioned_by = "native-deps/fetch-deps.py"
 staged_by = "packaging/build_installer.py"
-sha256_note = "fixed by the exact wheel SHA-256; native-deps/runtime/ORT-PROVISION.txt records that wheel and prevents cache substitution"
+sha256_note = "fixed by the exact wheel SHA-256; native-deps/windows/runtime/ORT-PROVISION.txt records that wheel and prevents cache substitution"
 
 # --- espeak-ng: MODIFIED GPL component (the whole reason binaries are GPLv3) -------------
 [[component]]

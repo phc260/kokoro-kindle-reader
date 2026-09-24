@@ -34,7 +34,7 @@ import target_platform  # noqa: E402
 
 WINDOWS = {
     # Provisioned native runtime: where fetch-deps puts it, and what must be in it.
-    "runtime_dir": ROOT / "native-deps" / "runtime",
+    "runtime_dir": ROOT / "native-deps" / "windows" / "runtime",
     "runtime_libs": ["onnxruntime.dll", "onnxruntime_providers_shared.dll",
                      "dxcompiler.dll", "dxil.dll", "espeak-ng.dll"],
     # Kindle is a 32-bit process and loads the COM shim in-process, so these are x86 and

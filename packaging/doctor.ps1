@@ -3,11 +3,14 @@
 # cross glyphs (U+2713/U+2717), so the markers are [+] [!] [x] [-] - all three columns wide,
 # which is what keeps the names lined up.
 #
-#   .\packaging\doctor.ps1                 # everything
-#   .\packaging\doctor.ps1 -For app        # just build and run the host/panel
-#   .\packaging\doctor.ps1 -For installer  # + package it
-#   .\packaging\doctor.ps1 -For source     # + the source archive released with it
-#   .\packaging\doctor.ps1 -For extension  # the browser extension's suite
+#   .\packaging\doctor.cmd                 # everything
+#   .\packaging\doctor.cmd -For app        # just build and run the host/panel
+#   .\packaging\doctor.cmd -For installer  # + package it
+#   .\packaging\doctor.cmd -For source     # + the source archive released with it
+#   .\packaging\doctor.cmd -For extension  # the browser extension's suite
+#
+# Run it through doctor.cmd, not directly: Windows' default execution policy (Restricted)
+# refuses every .ps1, and the shim bypasses it for that one process without changing it.
 #
 # WHY THIS IS POWERSHELL AND NOT PYTHON, given that twelve .ps1 harnesses were deleted just
 # before it was written: a doctor has to run on a machine that has NOTHING installed. A Python

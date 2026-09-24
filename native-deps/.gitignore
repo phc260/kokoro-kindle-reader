@@ -2,10 +2,12 @@
 espeak-ng-src/
 espeak-ng-notices/
 onnxruntime/
-runtime/
-# The Linux provision (fetch-deps.py): its own runtime tree, kept apart from the Windows
-# one so a machine that cross-builds both never mixes the two sets of libraries.
+# One runtime tree per platform (fetch-deps.py), kept apart so a machine that cross-builds
+# both never mixes the two sets of libraries.
+windows/
 linux/
+# The Windows tree's old location; fetch-deps.py moves it to windows/runtime/ on its next run.
+/runtime/
 # The pinned OCR models, 9.80 MB, re-created by fetch-ocr-models.py. Their digests live in
 # kokoro-ocr/src/lib.rs and in that script, so what is committed is the pin, not the weights.
 ocr/
