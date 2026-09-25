@@ -29,13 +29,8 @@ version() { have "$1" && "$@" 2>/dev/null | grep -Eo '[0-9]+\.[0-9]+(\.[0-9]+)?'
 
 echo
 
+# Checks run in install order: on a fresh machine each one is needed before the next.
 # --- app ---
-py=$(version python3 --version)
-if [ -n "$py" ]; then ok app Python "$py"; else fail app "Python 3" "install python3"; fi
-
-cargo=$(version cargo --version)
-if [ -n "$cargo" ]; then ok app Rust "cargo $cargo"; else fail app Rust "install from https://rustup.rs"; fi
-
 git=$(version git --version)
 lfs=$(version git lfs version)
 if [ -z "$git" ]; then fail app Git "install git"
@@ -53,6 +48,12 @@ fi
 
 cmake=$(version cmake --version)
 if [ -n "$cmake" ]; then ok app CMake "$cmake"; else fail app CMake "install cmake"; fi
+
+py=$(version python3 --version)
+if [ -n "$py" ]; then ok app Python "$py"; else fail app "Python 3" "install python3"; fi
+
+cargo=$(version cargo --version)
+if [ -n "$cargo" ]; then ok app Rust "cargo $cargo"; else fail app Rust "install from https://rustup.rs"; fi
 
 # --- extension ---
 bun=$(version bun --version)

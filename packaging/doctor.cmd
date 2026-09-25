@@ -33,25 +33,10 @@ if not defined NO_COLOR for /f %%e in ('echo prompt $E^| cmd') do (
 set "PF86=%ProgramFiles(x86)%"
 echo.
 
+rem Checks run in install order: on a fresh machine each one is needed before the next
+rem (rustup-init itself asks for MSVC).
+
 rem --- app ---
-rem Runs each candidate rather than looking for the file: python/py/python3 are often 0-byte
-rem App Execution Aliases that work fine.
-set "PY="
-for %%p in (python py python3) do if not defined PY (
-    for /f "tokens=1,2" %%a in ('%%p --version 2^>nul') do if "%%a"=="Python" (
-        set "V=%%b"
-        if "!V:~0,2!"=="3." set "PY=%%b, via %%p"
-    )
-)
-if defined PY (call :ok app "Python" "!PY!") else call :fail app "Python 3" "install from https://www.python.org/downloads/ (tick 'Add to PATH')"
-
-set "CARGO="
-for /f "tokens=2" %%v in ('cargo --version 2^>nul') do set "CARGO=%%v"
-if defined CARGO (call :ok app "Rust" "cargo !CARGO!") else call :fail app "Rust" "install from https://rustup.rs"
-
-rustup target list --installed 2>nul | findstr /b /c:"i686-pc-windows-msvc" >nul
-if not errorlevel 1 (call :ok app "Rust x86 target" "i686-pc-windows-msvc") else call :fail app "Rust x86 target" "rustup target add i686-pc-windows-msvc"
-
 set "GIT=" & set "LFS="
 for /f "tokens=3" %%v in ('git --version 2^>nul') do set "GIT=%%v"
 for /f "tokens=1" %%v in ('git lfs version 2^>nul') do set "LFS=%%v"
@@ -79,6 +64,31 @@ if not defined CMAKE if defined VS (
 )
 if defined CMAKE (call :ok app "CMake" "!CMAKE!") else call :fail app "CMake" "winget install Kitware.CMake"
 
+rem Runs each candidate rather than looking for the file: python/py/python3 are often 0-byte
+rem App Execution Aliases that work fine.
+set "PY="
+for %%p in (python py python3) do if not defined PY (
+    for /f "tokens=1,2" %%a in ('%%p --version 2^>nul') do if "%%a"=="Python" (
+        set "V=%%b"
+        if "!V:~0,2!"=="3." set "PY=%%b, via %%p"
+    )
+)
+if defined PY (call :ok app "Python" "!PY!") else call :fail app "Python 3" "install from https://www.python.org/downloads/ (tick 'Add to PATH')"
+
+set "CARGO="
+for /f "tokens=2" %%v in ('cargo --version 2^>nul') do set "CARGO=%%v"
+if defined CARGO (call :ok app "Rust" "cargo !CARGO!") else call :fail app "Rust" "install from https://rustup.rs"
+
+rustup target list --installed 2>nul | findstr /b /c:"i686-pc-windows-msvc" >nul
+if not errorlevel 1 (call :ok app "Rust x86 target" "i686-pc-windows-msvc") else call :fail app "Rust x86 target" "rustup target add i686-pc-windows-msvc"
+
+rem --- source ---
+set "SYSROOT="
+for /f "delims=" %%s in ('rustc --print sysroot 2^>nul') do set "SYSROOT=%%s"
+set "RUSTSRC="
+if defined SYSROOT if exist "!SYSROOT!\lib\rustlib\src\rust\library\std\Cargo.toml" set "RUSTSRC=1"
+if defined RUSTSRC (call :ok source "rust-src" "installed") else call :fail source "rust-src" "rustup component add rust-src"
+
 rem --- installer ---
 set "NSIS="
 set "MAKENSIS=%PF86%\NSIS\makensis.exe"
@@ -104,13 +114,6 @@ for %%e in (7z.exe 7za.exe) do if not defined SEVENZIP if not "%%~$PATH:e"=="" s
 if not defined SEVENZIP if exist "%ProgramFiles%\7-Zip\7z.exe" set "SEVENZIP=%ProgramFiles%\7-Zip\7z.exe"
 if not defined SEVENZIP if exist "%PF86%\7-Zip\7z.exe" set "SEVENZIP=%PF86%\7-Zip\7z.exe"
 if defined SEVENZIP (call :ok installer "7-Zip" "!SEVENZIP!") else call :warn installer "7-Zip" "choco install 7zip -y (only needed to verify a built installer)"
-
-rem --- source ---
-set "SYSROOT="
-for /f "delims=" %%s in ('rustc --print sysroot 2^>nul') do set "SYSROOT=%%s"
-set "RUSTSRC="
-if defined SYSROOT if exist "!SYSROOT!\lib\rustlib\src\rust\library\std\Cargo.toml" set "RUSTSRC=1"
-if defined RUSTSRC (call :ok source "rust-src" "installed") else call :fail source "rust-src" "rustup component add rust-src"
 
 rem --- extension ---
 set "BUN="
