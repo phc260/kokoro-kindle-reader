@@ -69,20 +69,11 @@ Load the detail on demand:
 ## Commands
 
 ```powershell
-# Are the TOOLS installed? flutter-doctor style: reports every missing one in a single
-# pass rather than one failed build at a time, and builds nothing itself. It is SHELL,
-# not Python, because it must work on a machine with no Python - the one prerequisite a
-# Python script can never report, since it needs one to start. It does NOT check whether
-# this checkout is provisioned; that stays in build_installer.py's preflight, which owns
-# the markers and digests it turns on.
+# Developer check: lists every missing build tool in one pass. Tools only, not whether this
+# checkout is provisioned. Plain batch / shell (not Python, not .ps1), so it runs on a bare
+# machine under any execution policy.
 .\packaging\doctor.cmd -For installer     # or app / source / extension / all
-# doctor.cmd runs doctor.ps1 with -ExecutionPolicy Bypass for that one process: a fresh
-# Windows refuses every .ps1 (Restricted), which is exactly the machine a doctor is for.
-# The Linux twin (POSIX shell, same shape) covers the two tiers Linux has - the host and the
-# extension; there is no installer/source tier off Windows, and it adds a CMake + C-toolchain
-# check because espeak is built from source. Its provisioned-state owner is fetch-deps.py +
-# build.rs, not build_installer.py.
-./packaging/doctor.sh                      # or app / extension
+./packaging/doctor.sh                      # Linux: app / extension
 
 # One-time: provision the synth runtime deps (Dawn ORT runtime DLLs + espeak-ng x64
 # import lib/DLL + espeak-ng-data). Must run before building kokoro-host.

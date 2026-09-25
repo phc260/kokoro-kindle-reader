@@ -72,7 +72,7 @@ and they must move together:
 - `packaging/build_installer.py`, which stages the marked runtime files from that path
   directly (not from a copy left in a target dir — see the marker rule below)
 
-`doctor.sh` / `doctor.ps1` are **not** on that list: they report tools, never the provisioned
+`doctor.sh` / `doctor.cmd` are **not** on that list: they report tools, never the provisioned
 tree, so the layout is invisible to them.
 
 ### Verified layout facts (Linux)

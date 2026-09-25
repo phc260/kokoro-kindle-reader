@@ -21,3 +21,5 @@ kokoro-panel/ui/*.svg text eol=lf
 # The reverse for batch files: cmd.exe parses LF-only scripts unreliably (labels and
 # lines straddling its 512-byte read buffer), so they keep CRLF on every checkout.
 *.cmd text eol=crlf
+# Batch files need CRLF: with LF-only lines cmd.exe can fail to find a :label it jumps to.
+*.cmd text eol=crlf

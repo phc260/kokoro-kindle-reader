@@ -110,14 +110,10 @@ Releases are built by CI from a tag, so the flow below needs nothing installed l
 tool is enforced rather than assumed — a missing one fails the build rather than quietly
 producing an artifact that describes a toolchain it wasn't built with:
 
-`.\packaging\doctor.cmd -For installer` (a shim that runs `doctor.ps1` past Windows' default
-Restricted execution policy, for that one process) answers "do I have all of this?" in one pass,
-reporting every missing tool together rather than one failed build apart. It builds and
-installs nothing. It is shell rather than Python so it still runs on a machine with no
-Python - the one prerequisite a Python script can never report. It is Windows only; the
-Linux twin is not written yet. It covers the table below and nothing more: whether this
-checkout is actually provisioned is enforced by `build_installer.py`'s preflight, which
-owns those pins.
+`.\packaging\doctor.cmd -For installer` (a plain batch file, so no execution policy applies)
+answers "do I have all of this?" in one pass, listing every missing tool together. It builds and
+installs nothing, and covers tools only: whether this checkout is actually provisioned is
+enforced by `build_installer.py`'s preflight. `./packaging/doctor.sh` is the Linux version.
 
 | Tool | Needed by | Enforced by |
 |---|---|---|
