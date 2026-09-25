@@ -110,11 +110,11 @@ Releases are built by CI from a tag, so the flow below needs nothing installed l
 tool is enforced rather than assumed — a missing one fails the build rather than quietly
 producing an artifact that describes a toolchain it wasn't built with:
 
-`.\packaging\doctor.cmd` (a plain batch file, so no execution policy applies) checks every
+`.\doctors\doctor.cmd` (a plain batch file, so no execution policy applies) checks every
 development tool in one pass — the app's and the extension's as well as the release tools
 below — and lists every missing one together. It builds and installs nothing, and covers tools
 only: whether this checkout is actually provisioned is enforced by `build_installer.py`'s
-preflight. Its Linux counterpart, `./packaging/doctor.sh`, checks only what the Linux host and
+preflight. Its Linux counterpart, `./doctors/doctor.sh`, checks only what the Linux host and
 the extension need, since there is no Linux installer.
 
 | Tool | Needed by | Enforced by |

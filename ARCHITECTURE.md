@@ -213,6 +213,7 @@ against the engine the user actually has installed.
 | `model-manifest.json` | Files the model downloads from HF (paths + sizes + SHA-256); embedded in `kokoro-panel` (the narrator list is derived from it). |
 | `ocr-manifest.json` | The same, for the Cloud Reader OCR models the panel downloads into `<app_data>\ocr\`; also embedded in `kokoro-panel`. Its digests are one of **three** copies that must agree — with `kokoro-ocr`'s own consts and `native-deps/fetch-ocr-models.py`. |
 | `icons/` | Shared app icons (LFS); embedded in the exes' version resource and the installer. |
+| `doctors/` | `doctor.cmd` (Windows) and `doctor.sh` (Linux): list every missing development tool in one pass, from the shared list in `tools.conf`. Tools only, not the provisioned state. See [`doctors/README.md`](doctors/README.md). |
 | `packaging/` | `installer.nsi` + `build_installer.py` (standalone NSIS build) — per-user install with self-elevating voice registration. See [`packaging/README.md`](packaging/README.md). |
 | `THIRD_PARTY_NOTICES.md` + `licenses/` | Bundle licensing: the repository source is MIT except for the files ported from `kokoro-js` and PaddleOCR and the Google Material Symbols SVGs (Apache-2.0, attributed there file by file), but the shipped binaries link espeak-ng (GPL-3.0-or-later, **modified** by `build-espeak.py`) and Slint-under-GPL, so a release is conveyed under GPLv3. `build_installer.py` stages these notices plus the active Rust toolchain's generated Standard Library report — they must ship *with* the binaries, not just live here. |
 

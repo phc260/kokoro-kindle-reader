@@ -16,8 +16,6 @@ drafts a GitHub Release with both attached — see [`../DEVELOPMENT.md`](../DEVE
 | File | What |
 |---|---|
 | `build_installer.py` | Release-builds both x64 crates, builds the three x86 artifacts, records source/toolchain provenance, stages everything into `staging\`, then runs `makensis`. `--skip-build` accepts only matching recorded outputs. |
-| `doctor.cmd` | Developer check that lists which build tools are missing (Python, Rust + x86 target, git-lfs, MSVC, CMake, NSIS, cargo-about, 7-Zip, rust-src, bun). Plain batch, so no execution policy applies. Tools only; provisioned state is `build_installer.py`'s job. |
-| `doctor.sh` | Linux version: git-lfs, C/C++ toolchain, CMake, Python, Rust, bun. |
 | `installer.nsi` | The NSIS script: install/uninstall sections, the elevation hooks, the Run value, the model-deletion prompt. Carries the product `VERSION`. |
 | `generate_dependency_licenses.py` | Runs `cargo about --locked` against each shipped crate's `Cargo.lock` and appends exact packaged licence files and source copyright headers; called automatically by `build_installer.py`. Needs `cargo install cargo-about --locked --features cli` once. |
 | `about.toml`, `about.hbs` | `cargo-about`'s config (the accepted-licence list; `GPL-3.0-only` granted per-crate to Slint only) and output template. |

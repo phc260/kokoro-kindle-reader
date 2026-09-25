@@ -72,8 +72,8 @@ Load the detail on demand:
 # Developer check: lists every missing build tool in one pass. Tools only, not whether this
 # checkout is provisioned. Plain batch / shell (not Python, not .ps1), so it runs on a bare
 # machine under any execution policy.
-.\packaging\doctor.cmd                    # Windows
-./packaging/doctor.sh                      # Linux
+.\doctors\doctor.cmd                       # Windows
+./doctors/doctor.sh                        # Linux
 
 # One-time: provision the synth runtime deps (Dawn ORT runtime DLLs + espeak-ng x64
 # import lib/DLL + espeak-ng-data). Must run before building kokoro-host.
