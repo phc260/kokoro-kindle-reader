@@ -49,7 +49,7 @@ The app itself needs **no** admin/`sudo` and **no** system Python packages — u
 self-contained CPython. Run the repo's toolchain doctor to see what's missing in one pass:
 
 ```powershell
-.\packaging\doctor.cmd -For app     # Windows, from the repo root
+.\packaging\doctor.cmd              # Windows, from the repo root
 ```
 
 ```bash
@@ -255,7 +255,7 @@ is the GPU/driver `sin`, and that's what this measures. Reference result on the 
 | Symptom | Cause / fix |
 |---|---|
 | `FileNotFoundError: espeak-ng.dll not found under …\native-deps\windows\runtime` (Linux: `libespeak-ng not found under …/native-deps/linux/runtime`) | Step A not done — run `python native-deps/fetch-deps.py`. |
-| `fetch-deps.py` fails on cmake / a compiler | Missing build toolchain — see `packaging\doctor.cmd -For app` / `./packaging/doctor.sh`. |
+| `fetch-deps.py` fails on cmake / a compiler | Missing build toolchain — see `packaging\doctor.cmd` / `./packaging/doctor.sh`. |
 | model / voice errors, or `model.onnx` missing | Step B not done — run `python native-deps/fetch-model.py`. |
 | `uv: command not found` after install | uv is at `~/.local/bin` (`%USERPROFILE%\.local\bin`); open a new shell, or add it to PATH. |
 | Environment tab shows only `CPUExecutionProvider` (+Azure) | The venv has plain `onnxruntime` instead of `onnxruntime-webgpu` — run `uv sync` in `stack-check/`. |

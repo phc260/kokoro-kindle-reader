@@ -110,7 +110,7 @@ Releases are built by CI from a tag, so the flow below needs nothing installed l
 tool is enforced rather than assumed — a missing one fails the build rather than quietly
 producing an artifact that describes a toolchain it wasn't built with:
 
-`.\packaging\doctor.cmd -For installer` (a plain batch file, so no execution policy applies)
+`.\packaging\doctor.cmd` (a plain batch file, so no execution policy applies)
 answers "do I have all of this?" in one pass, listing every missing tool together. It builds and
 installs nothing, and covers tools only: whether this checkout is actually provisioned is
 enforced by `build_installer.py`'s preflight. `./packaging/doctor.sh` is the Linux version.
