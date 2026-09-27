@@ -19,6 +19,8 @@ if not defined NO_COLOR for /f %%e in ('echo prompt $E^| cmd') do (
     set "G=%%e[32m" & set "R=%%e[31m" & set "Y=%%e[33m" & set "N=%%e[0m"
 )
 set "PF86=%ProgramFiles(x86)%"
+rem The repo root, taken here: inside a called label %~dp0 no longer names this script.
+for %%r in ("%~dp0..") do set "ROOT=%%~fr"
 echo.
 
 for /f "usebackq eol=# tokens=1-5 delims=|" %%a in ("%~dp0tools.conf") do (
@@ -97,6 +99,14 @@ exit /b 0
 :detect_git_lfs
 for /f "tokens=1" %%v in ('git lfs version 2^>nul') do (set "FOUND=1" & set "VER=%%v")
 if defined VER set "VER=!VER:git-lfs/=!"
+exit /b 0
+
+rem Git LFS installed is not the files downloaded: ls-files marks a file still checked out as
+rem a pointer with '-' (and '*' once it is real), which is what broke the icon in the installer.
+:detect_lfs_files
+git -C "%ROOT%" lfs ls-files >nul 2>nul || exit /b 0
+git -C "%ROOT%" lfs ls-files 2>nul | findstr /c:" - " >nul
+if errorlevel 1 set "FOUND=1"
 exit /b 0
 
 rem MSVC is found the same way build-espeak.py finds it: vswhere, then vcvarsall.bat.

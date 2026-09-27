@@ -36,6 +36,13 @@ ver_ok() {
 # and DETAIL.
 detect_git()     { VER=$(version git --version);     [ -n "$VER" ] && FOUND=1; }
 detect_git_lfs() { VER=$(version git lfs version);   [ -n "$VER" ] && FOUND=1; }
+# Git LFS installed is not the files downloaded: ls-files marks a file still checked out as a
+# pointer with '-' (and '*' once it is real).
+detect_lfs_files() {
+    local out
+    out=$(git -C "$here/.." lfs ls-files 2>/dev/null) || return 0
+    printf '%s\n' "$out" | grep -q ' - ' || FOUND=1
+}
 detect_cmake()   { VER=$(version cmake --version);   [ -n "$VER" ] && FOUND=1; }
 detect_python()  { VER=$(version python3 --version); [ -n "$VER" ] && FOUND=1; }
 detect_rust()    { VER=$(version cargo --version);   [ -n "$VER" ] && FOUND=1; }

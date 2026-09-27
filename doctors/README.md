@@ -48,6 +48,7 @@ because batch's `for /f` merges empty fields.
 | Tool | Windows | Linux | Why |
 |---|:-:|:-:|---|
 | Git + Git LFS | ✓ | ✓ | `icons/` are in LFS |
+| LFS files downloaded | ✓ | ✓ | with Git LFS installed but the files never pulled, `icons/` are ~130-byte pointers, and `makensis` then rejects `icon.ico` late in the installer build |
 | MSVC | ✓ | | builds espeak-ng; links every Rust binary |
 | C/C++ compiler + make | | ✓ | the same role as MSVC on Windows |
 | CMake | ✓ | ✓ | configures the espeak-ng build (on Windows, Visual Studio's own copy counts) |
@@ -65,8 +66,8 @@ it checks less.
 
 ## What is not checked
 
-Only whether the tools are installed, not whether this checkout is ready to build. Provisioned
-native deps, markers, digests and LFS pointers are checked by the build itself:
+Beyond the LFS check above, only whether the tools are installed, not whether this checkout is
+ready to build. Provisioned native deps, markers and digests are checked by the build itself:
 `native-deps/fetch-deps.py` and `kokoro-host`'s `build.rs`, plus `packaging/build_installer.py`'s
 preflight for a release. So an all-green report does not guarantee a build will get past
 provisioning.

@@ -24,6 +24,9 @@ fn embed_version_info() {
         .unwrap()
         .join("icons")
         .join("icon.ico");
+    // Outside this package, so cargo won't re-run the script for it unless told - and a stale
+    // run would keep an exe built from an LFS pointer iconless after `git lfs pull`.
+    println!("cargo:rerun-if-changed={}", icon.display());
     let mut res = winresource::WindowsResource::new();
     if icon.exists() {
         res.set_icon(icon.to_str().unwrap());
