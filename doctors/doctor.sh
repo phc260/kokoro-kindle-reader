@@ -47,6 +47,9 @@ detect_cmake()   { VER=$(version cmake --version);   [ -n "$VER" ] && FOUND=1; }
 detect_python()  { VER=$(version python3 --version); [ -n "$VER" ] && FOUND=1; }
 detect_rust()    { VER=$(version cargo --version);   [ -n "$VER" ] && FOUND=1; }
 detect_bun()     { VER=$(version bun --version);     [ -n "$VER" ] && FOUND=1; }
+detect_cargo_about() { VER=$(version cargo about --version); [ -n "$VER" ] && FOUND=1; }
+# The .deb: dpkg-deb builds it, dpkg-shlibdeps derives its Depends. Both come from dpkg-dev.
+detect_dpkg_dev() { have dpkg-deb && have dpkg-shlibdeps && FOUND=1; }
 # espeak-ng is built from source (its cmake enables C++), and cargo links with the C compiler.
 detect_cc() {
     local cc="" cxx="" c

@@ -56,13 +56,15 @@ because batch's `for /f` merges empty fields.
 | Rust (cargo) | ✓ | ✓ | every binary |
 | Rust `i686-pc-windows-msvc` target | ✓ | | the x86 SAPI shim, hook and injector |
 | `rust-src` component | ✓ | | the corresponding-source archive |
+| Smart App Control off | ✓ | | not a tool: when it is on, Windows refuses to start the unsigned `makensis.exe`, so the installer cannot be built locally (CI can). Turning it off cannot be undone, so the fix offers CI first |
 | NSIS 3.12 exactly | ✓ | | the installer; `build_installer.py` rejects any other version |
-| cargo-about ≥ 0.9.0 | ✓ | | the dependency licence notices (CI pins 0.9.1) |
+| cargo-about ≥ 0.9.0 | ✓ | ✓ | the dependency licence notices (CI pins 0.9.1) |
+| dpkg-dev | | ✓ | the `.deb`: `dpkg-deb` builds it, `dpkg-shlibdeps` derives its `Depends:` |
 | 7-Zip | optional | | only `verify_installer_notices.py` uses it, after the build |
 | bun ≥ 1.4.0 | ✓ | ✓ | the browser extension and its tests |
 
-Linux builds only the host and the extension, with no installer and no x86 artifacts, so
-it checks less.
+Linux builds only the host, its `.deb` and the extension, with no NSIS and no x86 artifacts,
+so it checks less. `verify_installer_notices.py` opens a `.deb` itself, so it needs no 7-Zip.
 
 ## What is not checked
 

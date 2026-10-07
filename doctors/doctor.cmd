@@ -38,8 +38,8 @@ if %FAILED% gtr 0 (
 exit /b 0
 
 rem --- reporting -------------------------------------------------------------------------------
-rem :check runs :detect_<ID>, which sets FOUND, and optionally VER and DETAIL, then prints one
-rem line. Text is echoed through delayed expansion so parentheses and paths are printed, not
+rem :check runs :detect_<ID>, which sets FOUND, and optionally VER and DETAIL (or replaces FIX
+rem when it knows better than the row), then prints one line. Text is echoed through delayed expansion so parentheses and paths are printed, not
 rem parsed.
 :check
 set "FOUND=" & set "VER=" & set "DETAIL="
@@ -152,10 +152,26 @@ for /f "delims=" %%s in ('rustc --print sysroot 2^>nul') do set "SYSROOT=%%s"
 if defined SYSROOT if exist "!SYSROOT!\lib\rustlib\src\rust\library\std\Cargo.toml" set "FOUND=1"
 exit /b 0
 
+rem Smart App Control refuses to start any unsigned executable, and makensis.exe is one. The
+rem state is 0 off, 1 on, 2 evaluation (still learning, blocks nothing yet); no value at all is
+rem a Windows without it. SAC_STATE is read again by :detect_nsis, which runs after this.
+:detect_sac
+set "SAC_STATE=0x0"
+for /f "tokens=3" %%v in ('reg query "HKLM\SYSTEM\CurrentControlSet\Control\CI\Policy" /v VerifiedAndReputablePolicyState 2^>nul') do set "SAC_STATE=%%v"
+if "!SAC_STATE!"=="0x1" exit /b 0
+set "FOUND=1"
+if "!SAC_STATE!"=="0x2" (set "DETAIL=evaluation mode, may switch itself on") else set "DETAIL=off"
+exit /b 0
+
+rem An installed makensis that will not run gets its own fix line: the row's install command
+rem would send someone to reinstall what is already there.
 :detect_nsis
 set "MAKENSIS=%PF86%\NSIS\makensis.exe"
 if exist "%MAKENSIS%" for /f %%v in ('call "%MAKENSIS%" /VERSION 2^>nul') do (set "FOUND=1" & set "VER=%%v")
 if defined VER if "!VER:~0,1!"=="v" set "VER=!VER:~1!"
+if exist "%MAKENSIS%" if not defined VER (
+    if "!SAC_STATE!"=="0x1" (set "FIX=installed, but Smart App Control blocks it - see above") else set "FIX=installed, but makensis /VERSION failed - reinstall: !FIX!"
+)
 exit /b 0
 
 :detect_cargo_about
