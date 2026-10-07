@@ -1,33 +1,37 @@
 #!/usr/bin/env python3
-r"""Provision the Kokoro voice model into the host's app-data dir (dev).
+r"""Provision the Kokoro voice model and the Cloud Reader OCR models into the host's
+app-data dir: the panel's first-run download, without the panel.
 
 Fetches the 31 files pinned by model-manifest.json - config, tokenizer, the 325 MB
-onnx/model.onnx and 27 voices/*.bin, 324 MiB in all - into
+onnx/model.onnx and 27 voices/*.bin, 324 MiB in all - and the 3 pinned by
+ocr-manifest.json (9.8 MiB) into
 
     <app_data>/onnx-community/Kokoro-82M-v1.0-ONNX/<path>
+    <app_data>/ocr/<path>
 
-which is exactly where kokoro-host looks for them (`boot` in main.rs). Every file is
-SHA-256-verified against the manifest before it is committed.
+which is exactly where a RELEASE kokoro-host looks for them (`boot` in main.rs,
+`ocr_assets` in webserve.rs). Every file is SHA-256-verified against its manifest before it
+is committed.
 
-WHY THIS EXISTS when the panel already downloads the model: the panel is the only
+WHY THIS EXISTS when the panel already downloads both: the panel is the only other
 downloader in the tree and it does not build for Linux yet (that is the port plan's
-desktop-integration step). Without this, a freshly provisioned Ubuntu host starts, logs
-"model.onnx not found" and synthesizes nothing - so the Linux milestone of recognizing a
-page and speaking it is unreachable on the machine it is about. On Windows the panel stays
-the normal route; this works there too, and --verify-only is the panel's "Verify & repair"
-on a machine with no GUI.
+desktop-integration step). Without this, a Linux host starts, logs "model.onnx not found"
+and synthesizes nothing, and answers /ocr with `missing` - so the Linux package would
+install a narrator with nothing to narrate with. The .deb therefore ships this script as
+`kokoro-fetch-models`, laid out as it is here (this file in tools/, the two manifests one
+level up), so the same path arithmetic finds them in both places. On Windows the panel
+stays the normal route; this works there too, and --verify-only is the panel's
+"Verify & repair" on a machine with no GUI.
 
-THE MANIFEST IS THE PIN. This reads the same model-manifest.json the panel embeds
-(kokoro-panel/src/download.rs) rather than carrying its own copy of 31 digests - one more
-copy is one more thing to keep in sync, and the failure mode is a dev provisioning
-different weights from the ones a release installs. `base_url` names an immutable
-HuggingFace revision, so a retry can only ever produce the same bytes.
+THE MANIFESTS ARE THE PIN. This reads the same model-manifest.json and ocr-manifest.json
+the panel embeds (kokoro-panel/src/download.rs) rather than carrying its own copy of 34
+digests - one more copy is one more thing to keep in sync, and the failure mode is a
+machine provisioning different weights from the ones a release installs. Every URL names an
+immutable revision, so a retry can only ever produce the same bytes.
 
-This does NOT fetch the Cloud Reader OCR models: that is native-deps/fetch-ocr-models.py,
-which fills native-deps/ocr/ - the tree webserve.rs falls back to when <app_data>/ocr is
-absent. They stay separate because only synthesis needs these 324 MiB.
-
-DEV ONLY. A release install never runs this; the panel does it, with a progress bar.
+native-deps/fetch-ocr-models.py is a different thing: it fills native-deps/ocr/, the tree
+a DEBUG build falls back to, so a `cargo run` needs no app-data provisioning. A release
+build never reads that tree, which is why the OCR files are fetched here too.
 """
 
 import argparse
@@ -44,6 +48,11 @@ sys.path.insert(0, str(HERE))
 from provision_util import download, fail, sha256_file  # noqa: E402 - needs the path above
 
 MANIFEST = REPO / "model-manifest.json"
+OCR_MANIFEST = REPO / "ocr-manifest.json"
+# `<app_data>/ocr`. Named here, not read from the manifest's own `dir`, for the same reason
+# the panel names it: it has to be the directory webserve.rs's `OCR_DIR` reads, and a
+# manifest edit must not be able to move the download somewhere the host never looks.
+OCR_DIR = "ocr"
 
 
 def app_data_dir():
@@ -104,20 +113,16 @@ def human(n):
     return "%d bytes" % n
 
 
-def main():
-    ap = argparse.ArgumentParser(description="Provision the Kokoro voice model (dev).")
-    ap.add_argument("--dest", metavar="DIR",
-                    help="app-data dir to provision into (default: the host's own)")
-    ap.add_argument("--force", action="store_true",
-                    help="re-fetch every file even if it already matches its pin")
-    ap.add_argument("--verify-only", action="store_true",
-                    help="check what is on disk against the manifest; never touch the network")
-    args = ap.parse_args()
+def planned_files(app_data):
+    """Every file to provision, as (label, dest, url, size, sha256): the voice model first,
+    then the OCR models - the order the panel downloads them in.
 
+    One list rather than two loops, so "already present", `.part`-then-rename, the
+    digest-then-size checks and --verify-only are written once for both manifests.
+    """
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     base_url = manifest["base_url"].rstrip("/")
     model_id = manifest["model_id"]
-    files = manifest["files"]
 
     # `model_id` is a two-segment repo id that becomes two directories; it comes from the
     # same manifest as the paths below and gets the same guard.
@@ -125,23 +130,49 @@ def main():
     if model_rel is None:
         fail("model-manifest.json: unsafe model_id %r" % model_id)
 
-    base = (Path(args.dest) if args.dest else app_data_dir()) / model_rel
-    total = sum(f["size"] for f in files)
+    planned = []
+    for f in manifest["files"]:
+        safe = safe_relpath(f["path"])
+        if safe is None:
+            fail("model-manifest.json: unsafe path %r" % f["path"])
+        planned.append((f["path"], app_data / model_rel / safe,
+                        "%s/%s" % (base_url, f["path"]), f["size"], f["sha256"]))
+
+    # Each OCR file carries its own URL: the recognizer is Git LFS and comes from a
+    # different host than the detector and the dictionary (see ocr-manifest.json).
+    for f in json.loads(OCR_MANIFEST.read_text(encoding="utf-8"))["files"]:
+        safe = safe_relpath(f["path"])
+        if safe is None:
+            fail("ocr-manifest.json: unsafe path %r" % f["path"])
+        planned.append(("%s/%s" % (OCR_DIR, f["path"]), app_data / OCR_DIR / safe,
+                        f["url"], f["size"], f["sha256"]))
+    return model_id, planned
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description="Provision the Kokoro voice model and the Cloud Reader OCR models.")
+    ap.add_argument("--dest", metavar="DIR",
+                    help="app-data dir to provision into (default: the host's own)")
+    ap.add_argument("--force", action="store_true",
+                    help="re-fetch every file even if it already matches its pin")
+    ap.add_argument("--verify-only", action="store_true",
+                    help="check what is on disk against the manifests; never touch the network")
+    args = ap.parse_args()
+
+    app_data = Path(args.dest) if args.dest else app_data_dir()
+    model_id, files = planned_files(app_data)
+    total = sum(f[3] for f in files)
     width = len(str(len(files)))
 
-    print("==> model %s" % model_id)
-    print("==> into  %s" % base)
+    print("==> model %s + the Cloud Reader OCR models" % model_id)
+    print("==> into  %s" % app_data)
     print("==> %d files, %s" % (len(files), human(total)))
 
     problems = []
     fetched = kept = 0
 
-    for i, f in enumerate(files, 1):
-        rel, size, want = f["path"], f["size"], f["sha256"]
-        safe = safe_relpath(rel)
-        if safe is None:
-            fail("model-manifest.json: unsafe path %r" % rel)
-        dest = base / safe
+    for i, (rel, dest, url, size, want) in enumerate(files, 1):
         tag = "[%*d/%d] %-24s" % (width, i, len(files), rel)
 
         if args.verify_only:
@@ -180,7 +211,7 @@ def main():
         # where the host would load it. Same name the panel's own partial takes
         # (Rust's `with_extension`), so the two cannot litter the dir differently.
         part = dest.with_suffix(".part")
-        download("%s/%s" % (base_url, rel), part)
+        download(url, part)
 
         have = sha256_file(part)
         if have != want:
@@ -196,8 +227,8 @@ def main():
             # present-check is size-only, so it would re-download forever a file this
             # script had just called good.
             part.unlink()
-            fail("%s is %d bytes but model-manifest.json says %d - the manifest is wrong, "
-                 "not the download (the SHA-256 matched)" % (rel, got, size))
+            fail("%s is %d bytes but its manifest says %d - the manifest is wrong, not the "
+                 "download (the SHA-256 matched)" % (rel, got, size))
         os.replace(part, dest)
         fetched += 1
 
@@ -207,14 +238,14 @@ def main():
             for p in problems:
                 print("    %s" % p, file=sys.stderr)
             fail("==> %d of %d file(s) failed verification in %s"
-                 % (len(problems), len(files), base))
-        print("==> all %d files match model-manifest.json" % len(files))
+                 % (len(problems), len(files), app_data))
+        print("==> all %d files match their manifests" % len(files))
         return
 
-    voices = sorted(p.stem for p in (base / "voices").glob("*.bin"))
-    print("==> voice model provisioned in %s" % base)
+    model_rel = safe_relpath(model_id)
+    voices = sorted(p.stem for p in (app_data / model_rel / "voices").glob("*.bin"))
+    print("==> voice + OCR models provisioned in %s" % app_data)
     print("    %d fetched, %d already present; %d narrators" % (fetched, kept, len(voices)))
-    print("    the Cloud Reader OCR models are separate: native-deps/fetch-ocr-models.py")
 
 
 if __name__ == "__main__":

@@ -127,7 +127,7 @@ On Linux:
 ```bash
 python3 native-deps/fetch-deps.py            # same, for linux/runtime/
 python3 native-deps/fetch-deps.py --force    # re-provision from scratch
-python3 native-deps/fetch-model.py           # the voice model - see below; Linux has no panel yet
+python3 native-deps/fetch-model.py           # the voice + OCR models - see below; Linux has no panel yet
 ```
 
 `kokoro-host`'s `build.rs` panics if the dep folders for the target being built are missing,
@@ -176,22 +176,27 @@ Two things it does that are worth knowing:
 
 ## fetch-model.py
 
-The ~324 MiB Kokoro voice model, into the host's own app-data dir
-(`<app_data>/onnx-community/Kokoro-82M-v1.0-ONNX/`) rather than anywhere under `native-deps/`
-— that is where `kokoro-host` looks (`boot` in `main.rs`), and there is no dev fallback for
-the model as there is for the OCR pair.
+The panel's first-run download without the panel: the ~324 MiB Kokoro voice model and the
+~10 MiB OCR models, into the host's own app-data dir —
+`<app_data>/onnx-community/Kokoro-82M-v1.0-ONNX/` and `<app_data>/ocr/` — rather than anywhere
+under `native-deps/`. That is where a **release** `kokoro-host` looks (`boot` in `main.rs`,
+`ocr_assets` in `webserve.rs`); only a debug build falls back to `native-deps/ocr/`.
 
-**It exists for Linux.** On Windows the settings panel downloads the model at first run and
+**It exists for Linux.** On Windows the settings panel downloads both at first run and
 remains the normal route. The panel does not build for Linux yet (the port plan's
-desktop-integration step), so without this a freshly provisioned Ubuntu host starts, logs
-`model.onnx not found` and synthesizes nothing — which makes the Linux narration milestone
-unreachable on the machine it is about. It works on Windows too, and its `--verify-only` is
-the panel's **Verify & repair** without a GUI.
+desktop-integration step), so without this a Linux host starts, logs `model.onnx not found`,
+synthesizes nothing and answers `/ocr` with `missing`. That is why the Linux `.deb` **ships
+this script** as `kokoro-fetch-models`, with the two manifests beside it in the same relative
+layout, so it is no longer dev-only. It works on Windows too, and its `--verify-only` is the
+panel's **Verify & repair** without a GUI.
 
-It reads [`model-manifest.json`](../model-manifest.json) — **the same file the panel embeds**,
-not a copy of the digests. One more copy is one more thing to keep in sync, and the failure it
-would cause is a dev provisioning different weights from the ones a release installs. The
-`base_url` there pins an immutable HuggingFace revision.
+It reads [`model-manifest.json`](../model-manifest.json) and
+[`ocr-manifest.json`](../ocr-manifest.json) — **the same files the panel embeds**, not copies
+of the digests. One more copy is one more thing to keep in sync, and the failure it would
+cause is a machine provisioning different weights from the ones a release installs. Every URL
+there pins an immutable revision. The OCR files go to `ocr/` by a name fixed in the script,
+not the manifest's own `dir` field, as in the panel — it has to be the directory the host
+reads.
 
 ```bash
 python3 native-deps/fetch-model.py                 # idempotent; re-run to repair
@@ -204,5 +209,5 @@ panel skips on size because it has a progress bar and a repair button, and this 
 repair. A fetched file lands as `.part` and is renamed only once its digest matches, so an
 interrupted run never leaves a short file where the host would load it.
 
-**DEV only**, like `fetch-ocr-models.py`: a release install never runs it, and the installer
-stages no model.
+Neither package bundles a model. The Windows installer's panel downloads them; the Linux
+package's user runs `kokoro-fetch-models` once.
