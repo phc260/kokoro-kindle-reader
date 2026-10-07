@@ -54,16 +54,29 @@ from dotnet_compat import (  # noqa: E402 - needs the path above
     html_encode, ordinal_key, read_all_text, sha256_text, write_all_text,
 )
 import source_notices  # noqa: E402
+import target_platform  # noqa: E402
 
-# (crate directory name, target triple it's actually built for - see packaging/README.md
-# and CLAUDE.md's bitness invariants).
-TARGETS = [
-    ("kokoro-host", "x86_64-pc-windows-msvc"),
-    ("kokoro-panel", "x86_64-pc-windows-msvc"),
-    ("kokoro-sapi", "i686-pc-windows-msvc"),
-    ("kokoro-hook", "i686-pc-windows-msvc"),
-    ("kokoro-inject", "i686-pc-windows-msvc"),
-]
+# Per package platform: (crate directory name, target triple it's actually built for - see
+# packaging/README.md and CLAUDE.md's bitness invariants). The Linux package ships the host
+# alone - no panel yet, and the Kindle clients are Windows's by nature - and its graph is
+# resolved for the Linux triple, which drops every `cfg(windows)` dependency.
+TARGETS = {
+    "windows": [
+        ("kokoro-host", "x86_64-pc-windows-msvc"),
+        ("kokoro-panel", "x86_64-pc-windows-msvc"),
+        ("kokoro-sapi", "i686-pc-windows-msvc"),
+        ("kokoro-hook", "i686-pc-windows-msvc"),
+        ("kokoro-inject", "i686-pc-windows-msvc"),
+    ],
+    "linux": [
+        ("kokoro-host", "x86_64-unknown-linux-gnu"),
+    ],
+}
+
+
+def reports(os_name):
+    """The report file names a package for `os_name` must carry - one per shipped crate."""
+    return ["%s.html" % crate for crate, _triple in TARGETS[os_name]]
 
 INTRO = ('Licence files and copyright/licence comments copied verbatim from the dependency '
          'packages resolved by Cargo.lock. Source-comment excerpts are labelled separately; '
@@ -281,6 +294,8 @@ def main(argv=None):
     ap.add_argument("--skip-check", action="store_true",
                     help="do not probe for cargo-about first")
     ap.add_argument("--output-dir", help="where to write the reports")
+    ap.add_argument("--platform", choices=sorted(TARGETS),
+                    help="the package whose crates to report on (default: this OS's)")
     args = ap.parse_args(argv)
 
     import verify_dependency_licenses
@@ -310,7 +325,7 @@ def main(argv=None):
     write_all_text(effective, read_all_text(config).replace(
         'path = "@project/', 'path = "' + str(ROOT).replace("\\", "/") + "/"))
 
-    for crate, triple in TARGETS:
+    for crate, triple in TARGETS[args.platform or target_platform.current_os()]:
         manifest = ROOT / crate / "Cargo.toml"
         out = out_dir / ("%s.html" % crate)
         print("==> cargo about generate: %s (%s)" % (crate, triple))

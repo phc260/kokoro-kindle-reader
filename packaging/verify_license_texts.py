@@ -11,8 +11,14 @@ licenses/, plus root LICENSE, THIRD_PARTY_NOTICES.md and legal.html. --allow-add
 used against an extracted installer, whose licenses/ directory also contains provisioned and
 generated notice trees.
 
-    python3 packaging/verify-license-texts.py
-    python3 packaging/verify-license-texts.py --root <extracted-tree> --allow-additional
+    python3 packaging/verify_license_texts.py
+    python3 packaging/verify_license_texts.py --root <extracted-tree> --allow-additional
+    python3 packaging/verify_license_texts.py --root <tree> --allow-additional --omit legal.html
+
+--omit names a pinned text a package deliberately does not ship (the Linux package has no
+tray to open legal.html, whose links name Windows-only files). It is only accepted with
+--root, so the repository itself can never be let off, and it must name a pinned path, so a
+typo cannot silently skip nothing while looking like it skipped something.
 """
 
 import argparse
@@ -40,13 +46,18 @@ def normalized_sha256(data):
     ).hexdigest()
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog="verify_license_texts.py",
+                                 description=__doc__.splitlines()[0])
     ap.add_argument("--root", default=None,
                     help="tree to verify (default: the repository root)")
     ap.add_argument("--allow-additional", action="store_true",
                     help="do not require the manifest to inventory the tree exactly")
-    args = ap.parse_args()
+    ap.add_argument("--omit", action="append", default=[], metavar="PATH",
+                    help="a pinned text this package deliberately does not ship (with --root)")
+    args = ap.parse_args(argv)
+    if args.omit and not args.root:
+        ap.error("--omit applies to a package tree (--root), never to the repository")
 
     root = Path(args.root).resolve() if args.root else REPO_ROOT
     entries = {}
@@ -70,6 +81,8 @@ def main():
             errors.append("Duplicate checksum path: %s" % relative)
             continue
         entries[relative] = expected
+        if relative in args.omit:
+            continue
 
         path = (root / relative).resolve()
         # Refuse anything that resolves outside the tree being verified, however it got
@@ -106,6 +119,9 @@ def main():
 
     if not entries:
         errors.append("license-texts.sha256 contains no entries.")
+    for relative in args.omit:
+        if relative not in entries:
+            errors.append("--omit %s names no pinned licence text." % relative)
 
     if not args.allow_additional:
         actual_paths = list(ROOT_TEXTS)

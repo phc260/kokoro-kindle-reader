@@ -1,0 +1,16 @@
+Kokoro Kindle Reader
+Copyright (c) 2026 Alan P.H. Chiu
+Source: https://github.com/phc260/kokoro-kindle-reader
+
+The project's own code is MIT-licensed, and parts of it are ported from Apache-2.0 code.
+The kokoro-host binary links a modified espeak-ng (GPL-3.0-or-later), so this package's
+binaries are conveyed under the GNU General Public License, version 3.
+
+The complete licence and notice set ships with the program, in
+/usr/lib/kokoro-kindle-reader/:
+
+  LICENSE                  the project's MIT licence
+  THIRD_PARTY_NOTICES.md   every third-party component and its terms
+  licenses/                the full licence texts, including GPL-3.0.txt, the notices of
+                           ONNX Runtime and espeak-ng, the Rust standard library's report,
+                           and the generated report for every Rust dependency

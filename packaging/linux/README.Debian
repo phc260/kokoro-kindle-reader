@@ -1,0 +1,35 @@
+Kokoro Kindle Reader for Linux
+==============================
+
+This package installs the synthesis host and the model fetcher. On Linux the host serves one
+client: the browser extension reading Kindle Cloud Reader (Chrome or Edge), over
+http://127.0.0.1:8787. There is no settings panel, tray or Kindle for PC support here.
+
+1. Download the voice and OCR models (about 334 MiB, SHA-256 verified) into
+   ~/.local/share/kokoro-kindle-reader/. Run it as yourself, not with sudo:
+
+       kokoro-fetch-models
+
+   Check them later without downloading anything:
+
+       kokoro-fetch-models --verify-only
+
+2. Start the host at login and now:
+
+       systemctl --user enable --now kokoro-host
+
+   Or run it in a terminal to watch its log:
+
+       kokoro-host
+
+3. Pair the browser extension once per browser. The pairing code is the "pairing" value in:
+
+       ~/.local/share/kokoro-kindle-reader/web-endpoint.json
+
+   The host creates that file on its first start, readable only by you.
+
+Settings live in ~/.local/share/kokoro-kindle-reader/controls.json. Removing the package
+leaves that directory and the downloaded models in place.
+
+Licences: the binaries are conveyed under GPLv3. The notices are in
+/usr/lib/kokoro-kindle-reader/ (LICENSE, THIRD_PARTY_NOTICES.md, licenses/).

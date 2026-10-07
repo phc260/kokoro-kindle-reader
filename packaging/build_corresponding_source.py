@@ -15,7 +15,7 @@ native runtime pulled in dynamically. The archive is therefore not fully self-co
 design; the README spells out where each off-archive piece is obtained, so a section 6
 recipient never depends on a mutable tag.
 
-    python3 packaging/build_corresponding_source.py                    # version from installer.nsi
+    python3 packaging/build_corresponding_source.py                    # version from windows/installer.nsi
     python3 packaging/build_corresponding_source.py --version 0.4.0    # explicit
 
 Run AFTER the installer build (needs its staged provenance and Rust toolchain record).
@@ -42,7 +42,7 @@ sys.path.insert(0, str(HERE))
 
 import target_platform  # noqa: E402
 from build_installer import (  # noqa: E402
-    Fail, RECORD_EOL, capture, nonempty, normalized_text_sha256,
+    NSIS_SCRIPT, Fail, RECORD_EOL, capture, nonempty, normalized_text_sha256,
     project_source_manifest, read_record, records_match, sha256_file, write_record,
 )
 
@@ -118,9 +118,9 @@ def copy_children(src, dest, exclude=()):
 def resolve_version(explicit):
     if explicit:
         return explicit
-    # Derive from installer.nsi's !define VERSION, so this matches what the installer ships.
+    # Derive from windows/installer.nsi's !define VERSION, so this matches what the installer ships.
     from dotnet_compat import read_all_text
-    m = re.search(r'!define\s+VERSION\s+"([^"]+)"', read_all_text(HERE / "installer.nsi"))
+    m = re.search(r'!define\s+VERSION\s+"([^"]+)"', read_all_text(NSIS_SCRIPT))
     if not m:
         raise Fail("Could not read VERSION from installer.nsi; pass --version explicitly.")
     return m.group(1)
@@ -180,7 +180,7 @@ def check_rust_toolchain():
         raise Fail("Could not read the immutable Rust commit from rustc --version --verbose.")
     commit = m.group(1)
 
-    recorded = HERE / "staging" / "licenses" / "rust" / "TOOLCHAIN.txt"
+    recorded = target_platform.staging_dir("windows") / "licenses" / "rust" / "TOOLCHAIN.txt"
     if not recorded.is_file():
         raise Fail("The installer build toolchain record is missing. Run the installer build "
                    "before creating its corresponding-source archive.")
@@ -202,7 +202,7 @@ def check_rust_toolchain():
 
 def check_installer_provenance():
     """The installer must have been built from this tree, and still be the one staged."""
-    staging = HERE / "staging"
+    staging = target_platform.staging_dir("windows")
     provenance = staging / "provenance"
     project_record = provenance / "kkr-project-source.SHA256SUMS.txt"
     if not project_record.is_file():
@@ -226,10 +226,18 @@ def check_installer_provenance():
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Build the GPLv3 corresponding-source archive.")
-    ap.add_argument("--version", help="release version (default: from installer.nsi)")
+    ap.add_argument("--version", help="release version (default: from windows/installer.nsi)")
     ap.add_argument("--allow-uncommitted", action="store_true",
                     help="local dry run; stamps the README as NON-RELEASE")
     args = ap.parse_args(argv)
+
+    # This archive describes the WINDOWS installer: both exes, the NSIS source, a rebuild
+    # README for MSVC. Run after a Linux package build it would describe a different staging
+    # tree - or, worse, pass by pairing with a stale Windows one. A .deb has no archive yet
+    # (see THIRD_PARTY_NOTICES.md), and saying so beats producing the wrong one.
+    if target_platform.current_os() != "windows":
+        raise Fail("The corresponding-source archive is built for the Windows installer only. "
+                   "The Linux package has none yet; see packaging/README.md.")
 
     version = resolve_version(args.version)
     print("==> Corresponding source for v%s" % version)
@@ -242,7 +250,8 @@ def main(argv=None):
     provenance = check_installer_provenance()
 
     stage = HERE / ("corresponding-source-%s" % version)
-    out = HERE / ("corresponding-source-%s.zip" % version)
+    out = target_platform.DIST_DIR / ("corresponding-source-%s.zip" % version)
+    out.parent.mkdir(exist_ok=True)
     shutil.rmtree(stage, ignore_errors=True)
     out.unlink(missing_ok=True)
     stage.mkdir(parents=True)

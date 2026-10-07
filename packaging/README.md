@@ -1,32 +1,42 @@
-# packaging — the standalone NSIS installer
+# packaging — the NSIS installer and the Linux .deb
 
-Builds `kokoro-kindle-reader-X.Y.Z-setup.exe`. **Standalone NSIS** via `makensis` — *not*
-a Tauri bundler.
+One script, two packages. On Windows it builds `kokoro-kindle-reader-X.Y.Z-setup.exe`
+(**standalone NSIS** via `makensis` — *not* a Tauri bundler); on Linux,
+`kokoro-kindle-reader_X.Y.Z_amd64.deb` (`dpkg-deb`). The platform facts live in the `PROFILES`
+table in `build_installer.py`; everything else is the same code — see
+[The Linux package](#the-linux-package-deb) for what differs. The directory says the same
+thing: files only one platform's package uses live under `windows/` and `linux/`, and
+everything at the root is shared.
 
 ```powershell
-python packaging\build_installer.py
+python packaging\build_installer.py          # Windows
+python3 packaging/build_installer.py          # Linux
 ```
 
-CI runs this on a `v*` tag or manual dispatch (`.github/workflows/installer.yml`). Its Actions
-artifact always carries the setup.exe and corresponding-source archive together; a tag also
-drafts a GitHub Release with both attached — see [`../DEVELOPMENT.md`](../DEVELOPMENT.md).
+CI runs this on a `v*` tag or manual dispatch (`.github/workflows/installer.yml`), on Windows
+only. Its Actions artifact always carries the setup.exe and corresponding-source archive
+together; a tag also drafts a GitHub Release with both attached — see
+[`../DEVELOPMENT.md`](../DEVELOPMENT.md). The `.deb` is built locally and is not a release
+artifact yet.
 
 ## Layout
 
 | File | What |
 |---|---|
-| `build_installer.py` | Release-builds both x64 crates, builds the three x86 artifacts, records source/toolchain provenance, stages everything into `staging\`, then runs `makensis`. `--skip-build` accepts only matching recorded outputs. |
-| `installer.nsi` | The NSIS script: install/uninstall sections, the elevation hooks, the Run value, the model-deletion prompt. Carries the product `VERSION`. |
+| `build_installer.py` | Release-builds the profile's crates (both x64 exes and the three x86 artifacts on Windows; the host alone on Linux), records source/toolchain provenance, stages everything into `staging\<os>\`, then runs the profile's packager: `makensis`, or `dpkg-deb`. `--skip-build` accepts only matching recorded outputs. |
+| `windows/installer.nsi` | The NSIS script: install/uninstall sections, the elevation hooks, the Run value, the model-deletion prompt. Carries the product `VERSION`. Its paths are relative to `windows/` (`..\staging\windows`, and the `-setup.exe` written to `..\dist`), because `makensis` compiles from the script's own directory. |
+| `linux/` | Data files only the `.deb` carries: the systemd user unit, `README.Debian`, and the Debian `copyright` pointer. `build_installer.py` renders them with LF whatever the checkout did. |
 | `generate_dependency_licenses.py` | Runs `cargo about --locked` against each shipped crate's `Cargo.lock` and appends exact packaged licence files and source copyright headers; called automatically by `build_installer.py`. Needs `cargo install cargo-about --locked --features cli` once. |
 | `about.toml`, `about.hbs` | `cargo-about`'s config (the accepted-licence list; `GPL-3.0-only` granted per-crate to Slint only) and output template. |
 | `verify_dependency_licenses.py`, `test_dependency_licenses.py` | Verify every appendix text hash and block count, plus clarification/embedded-source hashes per crate/version (also inside the extracted installer); 27 offline regression fixtures, run in CI by `license-check.yml`. |
 | `source-notices.json`, `source_notices.py` | Reviewed versions, source paths, line ranges and complete-notice hashes for additional embedded terms; generation rejects changed source or unreviewed versions. |
 | `components.toml` | Checked-in inventory of every **non-Cargo** component (the toolchain-supplied Rust Standard Library, shipped native DLLs, compiled-in SVGs, NSIS stub, plus the not-shipped downloaded assets — OCR + voice models — for attribution): origin, version/revision, SHA-256, SPDX, notice files, modification status. |
 | `verify_component_hashes.py` | Re-hashes the in-repo assets `components.toml` pins by SHA-256 (the five Material Symbols SVGs compiled into `kokoro-panel.exe`) and fails if any drifted — the in-repo half of provenance; `verify_installer_notices.py` covers the shipped side. Those digests are byte-exact against LF, which `kokoro-panel/ui/*.svg text eol=lf` in `.gitattributes` is what makes reproducible off this machine. Run by `license-check.yml`. |
-| `license-texts.sha256`, `verify-license-texts.py` | Reviewed SHA-256s for the shipped checked-in notice/licence files, normalized across CRLF/LF, plus the fail-closed verifier used by CI, the installer build, and the extraction test. |
-| `verify_installer_notices.py` | Extracts the built `-setup.exe`, derives exact component notice paths from `components.toml`, and fails if any is missing or empty. A CI step in `installer.yml` runs it after the build; run manually anytime (needs 7-Zip). |
-| `build_corresponding_source.py` | Builds `corresponding-source-<version>.zip` (GPLv3 §6 plus NSIS/LZMA CPL source) for attaching to a release. |
-| `staging\` | Build output — everything that goes into the installer. Regenerated by `build_installer.py`. |
+| `license-texts.sha256`, `verify_license_texts.py` | Reviewed SHA-256s for the shipped checked-in notice/licence files, normalized across CRLF/LF, plus the fail-closed verifier used by CI, the installer build, and the extraction test. |
+| `verify_installer_notices.py` | Extracts the built package — a `-setup.exe` with 7-Zip, a `.deb` in pure Python — derives exact component notice paths from `components.toml` for the platform that package is for (a component's `platforms` field), and fails if any is missing or empty. A CI step in `installer.yml` runs it after the build; run manually anytime. |
+| `build_corresponding_source.py` | Builds `corresponding-source-<version>.zip` (GPLv3 §6 plus NSIS/LZMA CPL source) for attaching to a Windows release. Refuses to run on Linux: there is no archive for the `.deb` yet. |
+| `staging\windows\`, `staging/linux/` | Build output — everything that goes into that platform's package, plus the `provenance/` the source archive is built from. One tree per OS, so building on one never wipes the other's (this checkout can be built from both sides of a dual-boot). Regenerated by `build_installer.py`. |
+| `dist\` | The release artifacts and nothing else: the `-setup.exe` or `.deb`, and `corresponding-source-<version>.zip` beside it. Not tracked; CI uploads from here. |
 | `dependency-licenses\` | Output of `generate_dependency_licenses.py` — provisioned, not tracked (like `native-deps\windows\runtime\notices\`). |
 
 **The four licence-notice scripts above are Python now, and the coupling that made them one
@@ -155,7 +165,7 @@ The fixed texts tracked in `licenses\`, plus `LICENSE`, `THIRD_PARTY_NOTICES.md`
 `legal.html`, have a
 different drift risk: a stale, truncated, or wrong-revision copy still passes a presence
 check. `license-texts.sha256` pins their reviewed content after newline normalization.
-`verify-license-texts.py` also requires every tracked licence text to appear exactly once in
+`verify_license_texts.py` also requires every tracked licence text to appear exactly once in
 that manifest, and runs in pull requests and before the installer build.
 
 The Cargo dependency closure is the second, and for the same reason: hundreds of transitive
@@ -220,7 +230,7 @@ SHA-256 manifests, the hash-verified official NSIS 3.12 source for its CPL-cover
 module, and a rebuild README). It verifies the tracked project tree against the
 manifest recorded when the binaries were built; `--skip-build` also checks both executable
 hashes, since a standalone build can overwrite them without updating the records. The
-source packager uses the records frozen under `staging/provenance/`, including espeak's
+source packager uses the records frozen under `staging/windows/provenance/`, including espeak's
 source manifest, rather than a later provision or build's records. A tag requires a clean matching source tag; a
 manual run marks the archive non-release. `installer.yml` pairs it with the installer in the
 Actions artifact, and a tag also attaches both to the release. `components.toml` is the
@@ -237,6 +247,68 @@ Nor may any shipped artifact claim plain "MIT" in its version resource — that'
 `VIAddVersionKey` here, **and** the `LegalCopyright` set in `kokoro-host/build.rs` and
 `kokoro-panel/build.rs`, which is what Windows shows in each exe's Properties dialog. See
 [`../THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md).
+
+## The Linux package (.deb)
+
+```bash
+python3 native-deps/fetch-deps.py        # once: the Linux runtime tree
+python3 packaging/build_installer.py     # -> packaging/dist/kokoro-kindle-reader_X.Y.Z_amd64.deb
+python3 packaging/verify_installer_notices.py
+sudo apt install ./packaging/dist/kokoro-kindle-reader_X.Y.Z_amd64.deb
+```
+
+Needs `dpkg-dev` and `cargo-about` (`./doctors/doctor.sh` checks both). The staging tree,
+`staging/linux/`, has the same flat layout as the Windows installer's; `package_deb` lays it
+out as:
+
+| In the package | What |
+|---|---|
+| `/usr/lib/kokoro-kindle-reader/` | the staged tree verbatim: `kokoro-host`, the three libraries it opens (`libonnxruntime.so`, `libonnxruntime_providers_shared.so`, `libespeak-ng.so.1`), `espeak-ng-data/`, the licence tree, and `tools/` + the two manifests |
+| `/usr/bin/kokoro-host`, `/usr/bin/kokoro-fetch-models` | relative links into the app dir |
+| `/usr/lib/systemd/user/kokoro-host.service` | opt-in: `systemctl --user enable --now kokoro-host` |
+| `/usr/share/doc/kokoro-kindle-reader/` | `README.Debian` (first-run steps) and `copyright` |
+
+The libraries sit in a **private** directory, found through the `$ORIGIN` rpath `build.rs`
+sets, never on the system library path. Ubuntu may already have its own `libespeak-ng1`
+installed; it is unmodified and would change the phonemes with no error. A real `exec`
+resolves `$ORIGIN` through `/proc/self/exe`, so the `/usr/bin` link finds the bundled copy.
+**`ldd /usr/bin/kokoro-host` does not**: it takes `$ORIGIN` from the link's own directory and
+reports the system copy. That is `ldd` misleading you, not the loader — check
+`/proc/<pid>/maps` of a running host, or `ldd` the real path in the app dir.
+
+Differences from the Windows package, each deliberate:
+
+- **The host alone.** The panel does not build for Linux, and the Kindle clients are
+  Windows's by nature. So nothing downloads the models, and the package ships
+  `native-deps/fetch-model.py` as `kokoro-fetch-models`. It fetches the voice model and the
+  OCR models into `~/.local/share/kokoro-kindle-reader/` — the panel's first-run download,
+  without the panel.
+- **`Depends:` is derived, not written.** `dpkg-shlibdeps` reads every ELF in the package
+  (found by magic, not listed), plus `python3` for the fetcher.
+- **Modes are set, then re-read.** This checkout can live on NTFS, where every file reads
+  0777, and `dpkg-deb` records what it finds. So the tree is laid out in a temp dir, set to
+  0755/0644 explicitly and checked; a filesystem that ignored `chmod` fails the build.
+- **xz, not dpkg's zstd default**, so `verify_installer_notices.py` can open the package with
+  Python's `tarfile` on any machine.
+- **No `legal.html`.** It is the Windows tray's About page, its links name the panel, the x86
+  clients and the NSIS stub, and nothing on Linux opens it. It is pinned content, so it is
+  left out rather than edited. That is declared twice, so neither side can drift alone:
+  `legal_page` in the profile, and `OMITTED` in the verifier.
+- **No packager licence.** NSIS writes its own stub into every `-setup.exe`; `dpkg-deb`
+  contributes no code to a `.deb`.
+- **No corresponding-source archive yet.** `build_corresponding_source.py` describes the
+  Windows installer and refuses to run here. Until it has a Linux branch, a `.deb` must not be
+  conveyed to anyone without pairing it with source (see `THIRD_PARTY_NOTICES.md`).
+- **No maintainer scripts.** The package enables nothing and downloads nothing at install
+  time; the user runs both steps as themselves, because both are per-user.
+
+On a checkout built from both OSes (a dual-boot drive), nothing one platform's build writes
+is read by the other's. Each stages into its own `staging/<os>/`, so a Linux build leaves
+`staging/windows/provenance/`, and the source archive built from it, alone. Each also keeps
+its `--skip-build` records in its own `kokoro-host/target/release/kkr-provenance/<os>/`, so a
+Linux build no longer makes a Windows `--skip-build` refuse over binaries nobody touched.
+Only `target/release/` itself is shared, and the two platforms' executables have different
+names there (`kokoro-host.exe` and `kokoro-host`).
 
 ## Install mode and elevation
 
@@ -306,7 +378,12 @@ Two rules follow, and they are load-bearing:
 the entry-point `.ps1` are still user-writable, so first-install / entry-point tampering
 needs a signed installer to fully close.
 
-## Editing `installer.nsi`
+## Editing `windows/installer.nsi`
+
+**Paths are relative to `windows/`**, not to `packaging/`: `makensis` changes into the
+script's directory before compiling, so the staging tree is `..\staging\windows` and the
+`-setup.exe` is written to `..\dist` — beside the `.deb` and the corresponding-source zip, in
+`target_platform.DIST_DIR`, where the verifier and CI's artifact upload look for it. A new `File` line goes through `${STAGING}`.
 
 **Keep it ASCII.** `makensis` parses the script as **ACP** (see its `(ACP)` log line)
 because the file has no BOM; `Unicode true` only affects the *output* installer's strings.

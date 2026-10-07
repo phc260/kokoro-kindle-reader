@@ -25,13 +25,13 @@ on:
       - 'packaging/components.toml'
       - 'packaging/verify_component_hashes.py'
       - 'packaging/license-texts.sha256'
-      - 'packaging/verify-license-texts.py'
+      - 'packaging/verify_license_texts.py'
       # The installer/staging/notice-verifier/corresponding-source scripts control what ships;
       # touching them re-runs this gate at review time (the full extraction proof still runs on
       # the tag build in installer.yml, which needs the built -setup.exe).
       - 'packaging/build_installer.py'
       - 'packaging/build_corresponding_source.py'
-      - 'packaging/installer.nsi'
+      - 'packaging/windows/installer.nsi'
       - 'packaging/verify_installer_notices.py'
       - 'packaging/target_platform.py'
       - 'THIRD_PARTY_NOTICES.md'
@@ -101,4 +101,4 @@ jobs:
       # A present, non-empty licence file can still be truncated or copied from the wrong
       # upstream revision. Pin the fixed checked-in texts after normalizing CRLF/LF.
       - name: Verify checked-in licence texts
-        run: python packaging/verify-license-texts.py
+        run: python packaging/verify_license_texts.py

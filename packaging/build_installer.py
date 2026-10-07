@@ -5,23 +5,28 @@ then hand the staging tree to the platform's packager.
     python3 packaging/build_installer.py              # full: build + stage + package
     python3 packaging/build_installer.py --skip-build # reuse existing release binaries
 
-Output: packaging/kokoro-kindle-reader-<version>-setup.exe
+Output, per platform:
+    Windows: packaging/dist/kokoro-kindle-reader-<version>-setup.exe   (NSIS)
+    Linux:   packaging/dist/kokoro-kindle-reader_<version>_amd64.deb   (dpkg-deb)
 
 **The logic here is platform-agnostic; the platform-specific facts are the `PROFILES`
-table.** Which runtime libraries ship, what the extra client artifacts are, which packager
-turns a staging tree into an installable file - those differ. The order of operations, the
-provenance contract, the notice staging and every fail-closed check do not. Only the
-Windows profile is populated: the Linux package is the port plan's packaging step, and a
-profile that guessed at it would produce an artifact nobody had checked.
+table.** Which binaries and runtime libraries ship, what the extra client artifacts are,
+which packager turns a staging tree into an installable file - those differ. The order of
+operations, the provenance contract, the notice staging and every fail-closed check do not.
+Both platforms stage the same flat app directory, each into its own staging/<os>/; only
+the last step differs, and that is the `PACKAGERS` dispatch at the bottom.
 """
 
 import argparse
 import hashlib
+import os
 import re
 import runpy
 import shutil
+import stat
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -37,6 +42,9 @@ WINDOWS = {
     "runtime_dir": ROOT / "native-deps" / "windows" / "runtime",
     "runtime_libs": ["onnxruntime.dll", "onnxruntime_providers_shared.dll",
                      "dxcompiler.dll", "dxil.dll", "espeak-ng.dll"],
+    # The x64 crates release-built here (each is its crate's own binary, by the crate's
+    # name) - the expensive pair that --skip-build may reuse.
+    "binaries": ["kokoro-host", "kokoro-panel"],
     # Kindle is a 32-bit process and loads the COM shim in-process, so these are x86 and
     # exist only here. The hook + injector force the Kokoro voice in Kindle 18632.
     "client_crates": [
@@ -48,22 +56,56 @@ WINDOWS = {
     # icacls, reg load) and staying that way - see CLAUDE.md.
     "resource_scripts": [ROOT / "kokoro-sapi" / "kindle-voice-guard.ps1",
                          ROOT / "kokoro-sapi" / "voice-setup.ps1"],
+    # Other files placed in the app dir: staged path -> source.
+    "app_files": {"icon.ico": ROOT / "icons" / "icon.ico"},
+    # legal.html: the About page the tray and Settings open (legal.rs).
+    "legal_page": True,
     "packager": "nsis",
 }
 
-PROFILES = {"windows": WINDOWS}
+LINUX = {
+    "runtime_dir": ROOT / "native-deps" / "linux" / "runtime",
+    # What the host opens at run time, by exactly these names - which is not everything
+    # the provision holds. `native_synth::init_ort` opens `libonnxruntime.so` by path; ORT
+    # dlopens `libonnxruntime_providers_shared.so` by name; espeak IS linked, so the loader
+    # resolves it by its SONAME, `libespeak-ng.so.1`. All three are found beside the exe
+    # through the `$ORIGIN` rpath build.rs sets. The versioned ORT copy and espeak's bare
+    # link name are build-time files nothing loads, and together another 24 MB.
+    "runtime_libs": ["libonnxruntime.so", "libonnxruntime_providers_shared.so",
+                     "libespeak-ng.so.1"],
+    # The host alone. The panel does not build for Linux yet (the port plan's
+    # desktop-integration step), and the Kindle clients are Windows's by nature.
+    "binaries": ["kokoro-host"],
+    "client_crates": [],
+    "resource_scripts": [],
+    # Without the panel nothing on Linux downloads the voice and OCR models, so the package
+    # ships the headless downloader instead, laid out as it is in the repo (the script in a
+    # directory beside the two manifests) so its own path arithmetic finds them.
+    "app_files": {
+        "tools/fetch-model.py": ROOT / "native-deps" / "fetch-model.py",
+        "tools/provision_util.py": ROOT / "native-deps" / "provision_util.py",
+        "model-manifest.json": ROOT / "model-manifest.json",
+        "ocr-manifest.json": ROOT / "ocr-manifest.json",
+    },
+    # No tray or panel opens an About page here, and legal.html's links name the panel, the
+    # x86 clients and the NSIS stub - five dead links in this package. It is pinned
+    # content, so it is left out rather than edited; verify_installer_notices.OMITTED
+    # records the same decision on the checking side.
+    "legal_page": False,
+    "packager": "deb",
+}
 
-# The ONNX Runtime wheel this project is pinned to. The marker proves the cache was
-# produced by that exact recipe; see native-deps/fetch-deps.py.
-ORT_PROVISION_EXPECTED = (
-    "onnxruntime-webgpu=1.27.0\n"
-    "wheel=onnxruntime_webgpu-1.27.0-cp312-cp312-win_amd64.whl\n"
-    "wheel-sha256=7ef99275b13e8cb9584bd0db7a6f00ebf76095601eeccf7d34749b89ee991c19")
+PROFILES = {"windows": WINDOWS, "linux": LINUX}
+
 ESPEAK_BASE_COMMIT = "4870adfa25b1a32b4361592f1be8a40337c58d6c"
 ORT_NOTICES = ["ORT-LICENSE.txt", "ORT-ThirdPartyNotices.txt"]
 ESPEAK_NOTICES = ["COPYING", "COPYING.APACHE", "COPYING.BSD2", "COPYING.UCD"]
 NSIS_VERSION = "v3.12"
 NSIS_EXE = Path(r"C:\Program Files (x86)\NSIS\makensis.exe")
+# Each platform's packaging data lives in packaging/<os>/; everything at packaging/'s root is
+# shared. The script's paths are relative to its own directory, which makensis changes into.
+NSIS_SCRIPT = HERE / "windows" / "installer.nsi"
+DEB_DATA_DIR = HERE / "linux"
 
 # .NET's File.WriteAllLines uses Environment.NewLine and appends one after the last line.
 # The provenance records are build-local, never shipped and never compared across machines,
@@ -76,24 +118,51 @@ def profile():
     os_name = target_platform.current_os()
     p = PROFILES.get(os_name)
     if p is None:
-        raise Fail("No installer profile for %s. Building a package there is the port "
-                   "plan's packaging step; add a row to PROFILES rather than letting this "
-                   "fall through to the Windows one." % os_name)
-    return p
+        raise Fail("No installer profile for %s; add a row to PROFILES rather than letting "
+                   "this fall through to another platform's." % os_name)
+    return dict(p, os=os_name)
+
+
+def ort_provision_expected(os_name):
+    """The ORT-PROVISION.txt this build must find: produced by fetch-deps.py's own
+    `ort_marker`, so the wheel pin exists once. fetch-deps has a `__main__` guard, so
+    loading it runs nothing."""
+    fetch_deps = runpy.run_path(str(ROOT / "native-deps" / "fetch-deps.py"),
+                                run_name="fetch_deps")
+    return fetch_deps["ort_marker"](os_name)
 
 
 class Fail(RuntimeError):
     """A build-stopping condition. Every one of these means: do not ship."""
 
 
+# ERROR_SYSTEM_INTEGRITY_POLICY_VIOLATION: Windows refused to start the file at all. Smart App
+# Control does this to any unsigned executable, and makensis.exe is unsigned, so with it on the
+# build dies at the NSIS check - as a CreateProcess traceback unless it is caught here.
+BLOCKED_BY_POLICY = 4551
+
+
+def spawn(cmd, **kwargs):
+    try:
+        return subprocess.run([str(c) for c in cmd], **kwargs)
+    except OSError as e:
+        if getattr(e, "winerror", None) != BLOCKED_BY_POLICY:
+            raise
+        raise Fail("Windows blocked %s from running: an Application Control policy, usually "
+                   "Smart App Control, which blocks unsigned executables (doctors\\doctor.cmd "
+                   "reports it). Build the installer in CI (installer.yml) instead, or turn "
+                   "Smart App Control off in Windows Security - it cannot be turned back on."
+                   % cmd[0]) from None
+
+
 def run(cmd, cwd=None, what=None):
-    rc = subprocess.run([str(c) for c in cmd], cwd=str(cwd) if cwd else None).returncode
+    rc = spawn(cmd, cwd=str(cwd) if cwd else None).returncode
     if rc:
         raise Fail(what or ("%s failed" % cmd[0]))
 
 
 def capture(cmd, what=None):
-    proc = subprocess.run([str(c) for c in cmd], capture_output=True)
+    proc = spawn(cmd, capture_output=True)
     if proc.returncode:
         sys.stderr.write(proc.stderr.decode("utf-8", "replace"))
         raise Fail(what or ("%s failed" % cmd[0]))
@@ -197,26 +266,24 @@ def preflight(prof):
     # A file can be present and non-empty while still being truncated or copied from the
     # wrong upstream revision; verify the reviewed content before spending time on a build.
     print("==> Verifying checked-in licence texts")
-    # Run it in THIS process rather than forking a second interpreter just to run our own
-    # script. verify-license-texts.py parses sys.argv, so hand it its own (no args = the repo
-    # root); it raises SystemExit on a mismatch.
-    argv_bak, sys.argv = sys.argv, [str(HERE / "verify-license-texts.py")]
+    # In this process rather than a second interpreter. No arguments = the repository root;
+    # it raises SystemExit on a mismatch, as it would on the command line.
+    import verify_license_texts
     try:
-        runpy.run_path(str(HERE / "verify-license-texts.py"), run_name="__main__")
+        verify_license_texts.main([])
     except SystemExit as exc:
         if exc.code:
             raise Fail("checked-in licence-text verification FAILED (see above).")
-    finally:
-        sys.argv = argv_bak
 
-    makensis = check_packager(prof)
+    packager = PACKAGERS[prof["packager"]]["check"]()
 
     # Provisioned notices must be current too - checked before any cargo build so a stale
     # dependency cache costs seconds.
     runtime = prof["runtime_dir"]
-    if read_marker(runtime / "ORT-PROVISION.txt") != ORT_PROVISION_EXPECTED:
+    ort_expected = ort_provision_expected(prof["os"])
+    if read_marker(runtime / "ORT-PROVISION.txt") != ort_expected:
         raise Fail("ONNX Runtime provision is not %s - run native-deps/fetch-deps.py so the "
-                   "binaries and notices match components.toml." % ORT_PROVISION_EXPECTED)
+                   "binaries and notices match components.toml." % ort_expected)
 
     espeak_expected = ("espeak-ng=1.52.0+horse-hoarse-revert;base=%s\nbuild-script-sha256=%s"
                        % (ESPEAK_BASE_COMMIT,
@@ -242,14 +309,16 @@ def preflight(prof):
                    "native-deps/fetch-deps.py. It provisions the canonical files from the "
                    "same wheel as the runtime DLLs." % (notices, ", ".join(missing)))
 
-    return makensis, espeak_expected, source_manifest, espeak_data
+    return packager, espeak_expected, source_manifest, espeak_data
 
 
-def check_packager(prof):
+def check_nsis():
     """The packaging toolchain, pinned. Its stub, its COPYING and the corresponding-source
-    instructions must all describe one version."""
-    if prof["packager"] != "nsis":
-        raise Fail("No packager check for %r." % prof["packager"])
+    instructions must all describe one version.
+
+    Returns what the rest of the build needs from a packager: the tool, and the licence
+    files it puts INTO the package (staged path -> source). NSIS writes its own
+    LZMA-compressed stub into every -setup.exe, so its COPYING ships."""
     print("==> Checking NSIS toolchain (%s)" % NSIS_VERSION)
     if not NSIS_EXE.is_file():
         raise Fail("makensis not found at %s - install NSIS." % NSIS_EXE)
@@ -263,7 +332,26 @@ def check_packager(prof):
     if not nonempty(copying):
         raise Fail("NSIS COPYING not found at %s - the installed NSIS is missing its licence "
                    "file; the LZMA-compressed stub must ship NSIS's licence terms." % copying)
-    return NSIS_EXE
+    return {"tool": NSIS_EXE, "notices": {"licenses/nsis/NSIS-COPYING.txt": copying}}
+
+
+def check_deb():
+    """dpkg-deb builds the archive; dpkg-shlibdeps derives `Depends:` from the binaries
+    themselves (dpkg-dev on Debian/Ubuntu).
+
+    Neither is pinned the way NSIS is, because neither puts any of its own code into the
+    package: a .deb is an `ar` of two tarballs and a version string, where an NSIS
+    installer is an executable stub NSIS wrote. So there is no packager licence to ship
+    and no packager source to offer - the pin on NSIS exists for exactly those two reasons.
+    """
+    print("==> Checking the Debian packaging tools")
+    tools = {}
+    for name, pkg in (("dpkg-deb", "dpkg"), ("dpkg-shlibdeps", "dpkg-dev")):
+        found = shutil.which(name)
+        if not found:
+            raise Fail("%s not found - install %s (sudo apt install %s)." % (name, pkg, pkg))
+        tools[name] = found
+    return {"tool": tools, "notices": {}}
 
 
 # --- build ------------------------------------------------------------------------------------
@@ -291,18 +379,16 @@ def main(argv=None):
 
     prof = profile()
     print("==> Building on %s" % target_platform.describe())
-    makensis, espeak_expected, espeak_source_manifest, espeak_data = preflight(prof)
+    packager, espeak_expected, espeak_source_manifest, espeak_data = preflight(prof)
 
-    host_rel = ROOT / "kokoro-host" / "target" / "release"
-    panel_rel = ROOT / "kokoro-panel" / "target" / "release"
-    host_exe = host_rel / target_platform.exe_name("kokoro-host")
-    panel_exe = panel_rel / target_platform.exe_name("kokoro-panel")
+    binaries = [ROOT / crate / "target" / "release" / target_platform.exe_name(crate)
+                for crate in prof["binaries"]]
 
     clients = build_clients(prof)
 
-    # Release-build both Rust crates (each stages its own runtime next to the exe).
+    # Release-build the shipped Rust crates (each stages its own runtime next to the exe).
     if not args.skip_build:
-        for crate in ("kokoro-host", "kokoro-panel"):
+        for crate in prof["binaries"]:
             print("==> cargo build --release (%s)" % crate)
             run(["cargo", "build", "--release"], cwd=ROOT / crate,
                 what="%s build failed" % crate)
@@ -311,9 +397,16 @@ def main(argv=None):
     # exact tracked tree and Rust toolchain. Without these records, a clean release checkout
     # could pair old target/ binaries with newer corresponding source while every Git check
     # still passed.
-    project_record = host_rel / "kkr-project-source.SHA256SUMS.txt"
-    rustc_record = host_rel / "kkr-build-rustc.txt"
-    output_record = host_rel / "kkr-build-outputs.SHA256SUMS.txt"
+    #
+    # They live beside the host's output, in a folder per OS: target/ is shared by both
+    # platforms when one checkout is built from each side of a dual boot, and one set of
+    # names meant a Linux build overwrote the Windows records - so Windows's --skip-build
+    # refused over binaries nobody had touched. The file names stay fixed; the frozen copies
+    # in staging/<os>/provenance/ are read by those names.
+    records = ROOT / "kokoro-host" / "target" / "release" / "kkr-provenance" / prof["os"]
+    project_record = records / "kkr-project-source.SHA256SUMS.txt"
+    rustc_record = records / "kkr-build-rustc.txt"
+    output_record = records / "kkr-build-outputs.SHA256SUMS.txt"
 
     current_project = project_source_manifest()
     current_rustc = [ln for ln in
@@ -322,9 +415,9 @@ def main(argv=None):
                      if ln]
     if not current_rustc:
         raise Fail("rustc --version --verbose failed.")
-    # A standalone cargo build can replace either exe without touching the source/toolchain
+    # A standalone cargo build can replace any exe without touching the source/toolchain
     # records. Bind those records to the actual outputs before accepting --skip-build.
-    current_outputs = ["%s  %s" % (sha256_file(p), p.name) for p in (host_exe, panel_exe)]
+    current_outputs = ["%s  %s" % (sha256_file(p), p.name) for p in binaries]
 
     if args.skip_build:
         if not all(r.is_file() for r in (project_record, rustc_record, output_record)):
@@ -335,28 +428,32 @@ def main(argv=None):
             raise Fail("--skip-build provenance does not match this source tree/toolchain/"
                        "output; run a full build.")
     else:
+        records.mkdir(parents=True, exist_ok=True)
         write_record(project_record, current_project)
         write_record(rustc_record, current_rustc)
         write_record(output_record, current_outputs)
 
     # --- stage ---------------------------------------------------------------------------
-    stage = HERE / "staging"
+    # Per OS, so a build on one platform never wipes the other's tree or its provenance/.
+    stage = target_platform.staging_dir(prof["os"])
     shutil.rmtree(stage, ignore_errors=True)
-    (stage / "resources").mkdir(parents=True)
+    stage.mkdir(parents=True)
 
-    shutil.copy2(host_exe, stage)
-    shutil.copy2(panel_exe, stage)
+    for exe in binaries:
+        shutil.copy2(exe, stage)
     # Staging reads the provision directly, not the host target directory. With
     # --skip-build the latter can hold libraries copied by an older host build and would
     # therefore bypass the version markers checked above.
     for name in prof["runtime_libs"]:
         shutil.copy2(prof["runtime_dir"] / name, stage)
     shutil.copytree(espeak_data, stage / espeak_data.name)
-    shutil.copy2(ROOT / "icons" / "icon.ico", stage / "icon.ico")
+    for rel, src in prof["app_files"].items():
+        (stage / rel).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, stage / rel)
 
     # Freeze the build records beside this staging tree. Source packaging must describe this
     # installer even if another build or native provision replaces target/runtime in
-    # between. This directory is packaging metadata; installer.nsi does not install it.
+    # between. This directory is packaging metadata; no packager installs it.
     provenance = stage / "provenance"
     provenance.mkdir()
     for record in (project_record, output_record,
@@ -364,32 +461,31 @@ def main(argv=None):
         shutil.copy2(record, provenance)
 
     # The Cloud Reader OCR models are NOT bundled. Like the Kokoro voice model they are
-    # DOWNLOADED at first run by the panel into <app_data>/ocr/, per ocr-manifest.json and
-    # SHA-256-verified. So there is nothing to stage: a fresh install ships no ocr/ dir, the
-    # host answers /ocr with `missing` until the download lands, and the extension surfaces
-    # that state. fetch-ocr-models.py still provisions them for DEV.
+    # DOWNLOADED at first run into <app_data>/ocr/, per ocr-manifest.json and
+    # SHA-256-verified - by the panel on Windows, by the shipped fetch-model.py on Linux. So
+    # there is nothing to stage: a fresh install ships no ocr/ dir, the host answers /ocr
+    # with `missing` until the download lands, and the extension surfaces that state.
+    # fetch-ocr-models.py still provisions them for a DEBUG build.
 
-    stage_notices(stage, prof, makensis)
+    stage_notices(stage, prof, packager)
 
-    res = stage / "resources"
-    for artifact in clients.values():
-        shutil.copy2(artifact, res)
-    for script in prof["resource_scripts"]:
-        shutil.copy2(script, res)
+    if clients or prof["resource_scripts"]:
+        res = stage / "resources"
+        res.mkdir()
+        for artifact in clients.values():
+            shutil.copy2(artifact, res)
+        for script in prof["resource_scripts"]:
+            shutil.copy2(script, res)
 
     # --- package -------------------------------------------------------------------------
-    print("==> makensis")
-    run([makensis, HERE / "installer.nsi"], what="makensis failed")
-
-    built = sorted(HERE.glob("*-setup%s" % target_platform.package_suffix()),
-                   key=lambda p: p.stat().st_mtime, reverse=True)
-    if not built:
-        raise Fail("makensis produced no installer.")
-    out = built[0]
+    # Created here for both packagers: makensis does not create its OutFile's folder (it
+    # fails with "Can't open output file"), and a fresh checkout has no dist/.
+    target_platform.DIST_DIR.mkdir(exist_ok=True)
+    out = PACKAGERS[prof["packager"]]["package"](stage, packager)
     print("==> Installer: %s  (%.1f MB)" % (out, out.stat().st_size / (1024 * 1024)))
 
 
-def stage_notices(stage, prof, makensis):
+def stage_notices(stage, prof, packager):
     """The licence/notice tree that must accompany the binaries.
 
     The bundle links espeak-ng (GPL-3.0-or-later, and MODIFIED - see build-espeak.py) and
@@ -402,7 +498,8 @@ def stage_notices(stage, prof, makensis):
 
     shutil.copy2(ROOT / "LICENSE", stage)
     shutil.copy2(ROOT / "THIRD_PARTY_NOTICES.md", stage)
-    shutil.copy2(ROOT / "legal.html", stage)
+    if prof["legal_page"]:
+        shutil.copy2(ROOT / "legal.html", stage)
     shutil.copytree(ROOT / "licenses", stage / "licenses")
 
     # ONNX Runtime's own licence + notice set, staged from native-deps rather than kept in
@@ -435,7 +532,7 @@ def stage_notices(stage, prof, makensis):
     # `cargo update`s in a way the exact pinned wheel does not.
     print("==> Generating Rust dependency licence notices")
     import generate_dependency_licenses
-    generate_dependency_licenses.main([])
+    generate_dependency_licenses.main(["--platform", prof["os"]])
     dep_stage = stage / "licenses" / "dependencies"
     dep_stage.mkdir(parents=True, exist_ok=True)
     for html in sorted((HERE / "dependency-licenses").glob("*.html")):
@@ -468,13 +565,14 @@ def stage_notices(stage, prof, makensis):
     shutil.copy2(std_notice, rust_stage / "COPYRIGHT-library.html")
     write_record(rust_stage / "TOOLCHAIN.txt", toolchain)
 
-    # The packager's own licence. The NSIS stub is LZMA-compressed (installer.nsi:
-    # SetCompressor /SOLID lzma), so the shipped stub carries NSIS's zlib/libpng + bzip2 +
-    # CPL-1.0 (LZMA module, with its linking exception) terms. Ship its COPYING verbatim
-    # from the installed toolchain so it always matches the version this build used.
-    nsis_stage = stage / "licenses" / "nsis"
-    nsis_stage.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(makensis.parent / "COPYING", nsis_stage / "NSIS-COPYING.txt")
+    # The packager's own licence, where the packager puts code of its own into the package.
+    # The NSIS stub is LZMA-compressed (installer.nsi: SetCompressor /SOLID lzma), so the
+    # shipped stub carries NSIS's zlib/libpng + bzip2 + CPL-1.0 (LZMA module, with its
+    # linking exception) terms; its COPYING is shipped verbatim from the installed toolchain
+    # so it always matches the version this build used. dpkg-deb contributes none.
+    for rel, src in packager["notices"].items():
+        (stage / rel).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, stage / rel)
 
 
 def copy_tree_contents(src, dest):
@@ -485,6 +583,193 @@ def copy_tree_contents(src, dest):
             shutil.copytree(item, target, dirs_exist_ok=True)
         else:
             shutil.copy2(item, target)
+
+
+# --- packagers ---------------------------------------------------------------------------
+
+def package_nsis(stage, packager):
+    print("==> makensis")
+    run([packager["tool"], NSIS_SCRIPT], what="makensis failed")
+    built = sorted(target_platform.DIST_DIR.glob(target_platform.package_glob("windows")),
+                   key=lambda p: p.stat().st_mtime, reverse=True)
+    if not built:
+        raise Fail("makensis produced no installer.")
+    return built[0]
+
+
+DEB_PACKAGE = "kokoro-kindle-reader"
+# The app dir: the staged tree as-is, so the host finds its libraries through `$ORIGIN` and
+# espeak-ng-data beside `current_exe()` exactly as it does in target/release, and
+# legal.html's relative links resolve. /usr/lib/<package> is Debian's place for a
+# package's private executables and libraries - these must not be on the system library
+# path, where a distribution's own (unmodified) libespeak-ng would be told apart by nothing.
+DEB_APP_DIR = "usr/lib/%s" % DEB_PACKAGE
+# /usr/bin links -> their target inside the app dir. Both resolve to the real file before
+# they look for anything beside themselves (`current_exe()` reads /proc/self/exe; the
+# script resolves `__file__`), so the link is only a name on PATH.
+DEB_COMMANDS = {"kokoro-host": "kokoro-host", "kokoro-fetch-models": "tools/fetch-model.py"}
+# The only files that ship executable. Shared libraries are 0644 in a .deb; everything
+# else is data.
+DEB_EXECUTABLES = ["kokoro-host", "tools/fetch-model.py"]
+# Checked-in data files placed outside the app dir: source in DEB_DATA_DIR -> path in the
+# package. Rendered with LF whatever the checkout did to them - systemd reads a CR as part
+# of the value, and this tree is also checked out on Windows.
+DEB_DATA = {
+    "kokoro-host.service": "usr/lib/systemd/user/kokoro-host.service",
+    "README.Debian": "usr/share/doc/%s/README.Debian" % DEB_PACKAGE,
+    "copyright": "usr/share/doc/%s/copyright" % DEB_PACKAGE,
+}
+DEB_CONTROL = """\
+Package: %(package)s
+Version: %(version)s
+Architecture: %(arch)s
+Maintainer: Alan P.H. Chiu <phc260@nyu.edu>
+Installed-Size: %(installed_kib)d
+Depends: %(depends)s
+Section: sound
+Priority: optional
+Homepage: https://github.com/phc260/kokoro-kindle-reader
+Description: Local Kokoro-82M narrator for Kindle Cloud Reader
+ Runs the Kokoro-82M text-to-speech model and PP-OCR text recognition on this
+ machine and serves them on 127.0.0.1 to the Kokoro Kindle Reader browser
+ extension (Chrome or Edge).
+ .
+ After installing, run kokoro-fetch-models, then
+ systemctl --user enable --now kokoro-host. See
+ /usr/share/doc/kokoro-kindle-reader/README.Debian.
+"""
+
+
+def cargo_version(manifest):
+    """The `[package]` version: the first top-level `version =` line, which in these
+    manifests is the package's own (dependencies spell theirs inside `{ ... }`)."""
+    from dotnet_compat import read_all_text
+    m = re.search(r'^version\s*=\s*"([0-9][0-9A-Za-z.+~-]*)"\s*$', read_all_text(manifest), re.M)
+    if not m:
+        raise Fail("No package version found in %s." % manifest)
+    return m.group(1)
+
+
+def write_lf(src, dest):
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(src.read_bytes().replace(b"\r\n", b"\n"))
+
+
+def normalize_modes(root, executables):
+    """Set every mode explicitly - 0755 directories and executables, 0644 everything else -
+    and then prove the filesystem kept them.
+
+    Copied modes cannot be trusted here. This checkout lives on NTFS on a dual-boot
+    machine, where every file reads back 0777, and dpkg-deb records whatever it finds: the
+    package would install world-writable files into /usr/lib (and dpkg-deb refuses a
+    DEBIAN/ that is group- or world-writable). A filesystem that ignores chmod would make
+    that silent, so the result is re-read rather than assumed.
+    """
+    want = {}
+    for dirpath, _dirs, files in os.walk(root):
+        want[dirpath] = 0o755
+        for name in files:
+            path = os.path.join(dirpath, name)
+            if not os.path.islink(path):
+                want[path] = 0o644
+    for exe in executables:
+        if not os.path.isfile(exe):
+            raise Fail("%s should ship executable but is not in the package." % exe)
+        want[str(exe)] = 0o755
+    for path, mode in want.items():
+        os.chmod(path, mode)
+    wrong = [p for p, mode in want.items() if stat.S_IMODE(os.stat(p).st_mode) != mode]
+    if wrong:
+        raise Fail("The package tree did not keep its file modes (e.g. %s) - %s is on a "
+                   "filesystem that ignores chmod. Point TMPDIR at a Linux filesystem."
+                   % (wrong[0], tempfile.gettempdir()))
+
+
+def is_elf(path):
+    with open(path, "rb") as f:
+        return f.read(4) == b"\x7fELF"
+
+
+def deb_depends(work, root, shlibdeps):
+    """`Depends:` read off the binaries by dpkg-shlibdeps, not written by hand.
+
+    Every ELF in the package is asked, found by its magic rather than listed, so a library
+    added to the profile is covered without anyone remembering to. dpkg-shlibdeps needs a
+    `debian/control` in its working directory and the package tree at
+    `debian/<package>/DEBIAN` to recognize the libraries we ship ourselves (found through
+    `$ORIGIN`) as ours rather than as undeclared dependencies - which is why the tree is
+    laid out that way.
+    """
+    control = work / "debian" / "control"
+    control.write_text("Source: %s\n\nPackage: %s\nArchitecture: any\n"
+                       % (DEB_PACKAGE, DEB_PACKAGE), encoding="ascii")
+    elves = [p for p in sorted(root.rglob("*"))
+             if p.is_file() and not p.is_symlink() and is_elf(p)]
+    proc = subprocess.run([shlibdeps, "-O"] + ["-e%s" % p for p in elves],
+                          cwd=str(work), capture_output=True)
+    if proc.returncode:
+        sys.stderr.write(proc.stderr.decode("utf-8", "replace"))
+        raise Fail("dpkg-shlibdeps failed.")
+    control.unlink()
+    for line in proc.stdout.decode("utf-8", "replace").splitlines():
+        if line.startswith("shlibs:Depends="):
+            return [d.strip() for d in line.split("=", 1)[1].split(",") if d.strip()]
+    raise Fail("dpkg-shlibdeps reported no shared-library dependencies for %d binaries."
+               % len(elves))
+
+
+def package_deb(stage, packager):
+    version = cargo_version(ROOT / "kokoro-host" / "Cargo.toml")
+    out = target_platform.DIST_DIR / ("%s_%s_%s.deb" % (DEB_PACKAGE, version, target_platform.deb_arch()))
+    print("==> dpkg-deb (%s)" % out.name)
+
+    # Laid out in a temporary directory rather than under packaging/, for the modes: see
+    # normalize_modes.
+    work = Path(tempfile.mkdtemp(prefix="kkr-deb-"))
+    try:
+        root = work / "debian" / DEB_PACKAGE
+        app = root / DEB_APP_DIR
+        shutil.copytree(stage, app,
+                        ignore=lambda d, names: ["provenance"] if Path(d) == stage else [])
+        bindir = root / "usr" / "bin"
+        bindir.mkdir(parents=True)
+        for name, target in DEB_COMMANDS.items():
+            if not (app / target).is_file():
+                raise Fail("/usr/bin/%s would point at %s, which is not staged."
+                           % (name, target))
+            os.symlink(os.path.relpath(app / target, bindir), bindir / name)
+        for src, dest in DEB_DATA.items():
+            write_lf(DEB_DATA_DIR / src, root / dest)
+        (root / "DEBIAN").mkdir()
+        normalize_modes(root, [app / e for e in DEB_EXECUTABLES])
+
+        # python3 runs kokoro-fetch-models; nothing ELF-shaped says so.
+        depends = deb_depends(work, root, packager["tool"]["dpkg-shlibdeps"]) + ["python3"]
+        installed = sum(os.lstat(os.path.join(d, f)).st_size
+                        for d, _dirs, files in os.walk(root) for f in files)
+        control = root / "DEBIAN" / "control"
+        control.write_text(DEB_CONTROL % {
+            "package": DEB_PACKAGE, "version": version, "arch": target_platform.deb_arch(),
+            "installed_kib": (installed + 1023) // 1024, "depends": ", ".join(depends),
+        }, encoding="utf-8")
+        os.chmod(control, 0o644)
+
+        if out.exists():
+            out.unlink()
+        # xz, named rather than left to dpkg-deb's default, which is zstd on Ubuntu: xz is
+        # what every dpkg reads and what Python's tarfile opens without a third-party
+        # module, and verify_installer_notices.py unpacks this with nothing else.
+        run([packager["tool"]["dpkg-deb"], "--root-owner-group", "-Zxz", "--build",
+             root, out], what="dpkg-deb failed")
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    return out
+
+
+PACKAGERS = {
+    "nsis": {"check": check_nsis, "package": package_nsis},
+    "deb": {"check": check_deb, "package": package_deb},
+}
 
 
 if __name__ == "__main__":

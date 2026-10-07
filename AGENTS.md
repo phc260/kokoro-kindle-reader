@@ -115,6 +115,11 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
   `read_controls` falls back to `Controls::default()` for a missing file, unparseable JSON
   (a UTF-8 BOM does it silently) and a missing key alike. Flag any fix that writes an initial
   `controls.json` instead, and any silent GPU→CPU substitution: the fallback must log.
+- **The Linux `.deb` is a `PROFILES` row in `packaging/build_installer.py`, not a second
+  recipe.** Flag a shell build script or dpkg maintainer script carrying logic, a hand-written
+  `Depends:` (it comes from `dpkg-shlibdeps`), bundled libraries placed on the system library
+  path instead of the private `/usr/lib/kokoro-kindle-reader/`, or modes copied rather than
+  set (the checkout can be NTFS, where everything reads 0777).
 - **There is ONE provisioning recipe for both platforms: `native-deps/fetch-deps.py` (plus
   `build-espeak.py`).** Both platforms invoke it directly; there is no wrapper on either
   side. Flag any change that adds a platform-specific wrapper back, or a second
@@ -342,6 +347,8 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
   block count; checking only special clarifications misses changed or deleted notices.
   The tray and Settings must keep **About & licenses** available independently of narration;
   it opens installed `legal.html`, whose content and local links are checked in packaging.
+  The `.deb` omits `legal.html` on purpose (`legal_page` in the profile, `OMITTED` in the
+  verifier) - flag either side changing without the other.
 - **Provisioned notices that must ship, and the checks that prove they do.** Besides the ORT
   wheel notices, `fetch-deps.py` provisions espeak-ng's own `COPYING*` (incl. `COPYING.UCD`,
   which is NOT `licenses/Unicode-3.0.txt`) and `build_installer.py` stages NSIS's `COPYING`
@@ -355,7 +362,7 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
   component; `LICENSING.md` is the authoritative per-artifact map + §6 procedure.
 - **Checked-in licence texts are content-pinned.** `packaging/license-texts.sha256` covers
   `LICENSE`, `THIRD_PARTY_NOTICES.md`, and every file under `licenses/` after newline
-  normalization; `verify-license-texts.py` runs in PR CI, before an installer build, and
+  normalization; `verify_license_texts.py` runs in PR CI, before an installer build, and
   against the extracted installer. Update a hash only after comparing the complete replacement
   with the pinned upstream revision. Provisioned notices must be exact named, non-empty files.
 - **A digest over a text file must be normalized OR pinned by `.gitattributes`, never
@@ -373,9 +380,10 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
   `build-espeak.py` SHA-256; its build-time source manifest must match the corresponding-source
   tree exactly.
 - **`--skip-build` still proves source identity.** A full installer build records SHA-256s for
-  every tracked source file, both x64 executables, and the Rust toolchain beside the host output.
+  every tracked source file, both x64 executables, and the Rust toolchain beside the host output
+  (`target/release/kkr-provenance/<os>/`, one folder per platform).
   Reuse requires all to match; corresponding-source packaging uses the records frozen in
-  `staging/provenance/` (including espeak's source manifest) and checks the tracked tree again; never let
+  `staging/windows/provenance/` (including espeak's source manifest) and checks the tracked tree again; never let
   a clean tag bless arbitrary stale binaries from `target/`.
 - **NSIS is pinned in code as well as CI.** `build_installer.py` rejects `makensis` unless
   `/VERSION` reports 3.12, keeping the stub, its staged `COPYING`, `components.toml`, and the
@@ -386,14 +394,16 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
   plus the hash-verified official NSIS 3.12 source for its CPL-covered LZMA module)
   and `installer.yml` pairs it with the installer in both Actions artifacts and tagged
   releases. `sapi.yml` build-tests its intermediate DLL but does not upload it bare. Never
-  ship an installer or intermediate binary alone.
+  ship an installer or intermediate binary alone. The Linux `.deb` has no archive yet and the
+  packager refuses to run on Linux, so flag anything that publishes a `.deb` as a release
+  artifact before that exists.
 
 ## Encoding rules (real bugs, not style)
 
 - **`.ps1` files must be ASCII.** PowerShell 5.1 misreads a UTF-8-no-BOM em-dash. Use `-`
   and `...`, never `—` or `…`. Only the four shipped/by-hand scripts under `kokoro-sapi/`
   and `kokoro-sapi-smoke/` are left; the build and provisioning scripts are Python.
-- **`packaging/installer.nsi` must be ASCII.** `makensis` parses it as ACP, so non-ASCII in
+- **`packaging/windows/installer.nsi` must be ASCII.** `makensis` parses it as ACP, so non-ASCII in
   a user-visible `DetailPrint`/`MessageBox` renders as mojibake in the install UI.
 - Rust and `.slint` files handle Unicode fine.
 

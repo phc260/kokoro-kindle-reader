@@ -40,6 +40,10 @@ The combined binary is **GPL-3.0-only**, not "or-later": Slint's GPL option is
 | Rust Standard Library | Primarily **MIT OR Apache-2.0**, with bundled code under additional terms | Statically linked into every Rust output; exact toolchain report staged from `rustc` as `licenses/rust/COPYRIGHT-library.html`. |
 | Installer / uninstaller stub | **NSIS license** (Zlib + bzip2 + CPL-1.0-w/-exception) | LZMA-compressed NSIS stub. |
 | Kokoro-82M weights | **Apache-2.0**, *not shipped* | Runtime download. |
+| `kokoro-host` (Linux `.deb`) | **GPL-3.0-only** combined work | As `kokoro-host.exe`: links the same modified espeak-ng. |
+| `libespeak-ng.so.1` + `espeak-ng-data/` (Linux `.deb`) | **GPL-3.0-or-later**, modified | The same `build-espeak.py` recipe and commit as `espeak-ng.dll`. |
+| `libonnxruntime.so`, `libonnxruntime_providers_shared.so` (Linux `.deb`) | **MIT** | The CPU `onnxruntime` wheel, unmodified; no Dawn/Tint, no DXC. |
+| `kokoro-fetch-models`, the two manifests, the systemd unit (Linux `.deb`) | **MIT** | This project's own files. |
 | Repository source | **MIT**, except Apache-2.0 ported files | Alan's grant; ports retain upstream licence. |
 
 ### Source in this repository that is not MIT (Apache-2.0 islands)
@@ -101,6 +105,12 @@ immutable toolchain commit. A §6 recipient
 therefore does not depend on a mutable upstream tag for either modified espeak-ng or the
 statically linked standard library.
 
+**The Linux `.deb` has no such archive yet**, and for that reason it is not a release
+artifact: `build_installer.py` builds it locally, and `build_corresponding_source.py` refuses
+to run on Linux rather than produce an archive describing the Windows installer. Until the
+packager has a Linux branch, a `.deb` must not be conveyed without the source of the commit
+it was built from and the modified espeak-ng that `native-deps/build-espeak.py` reproduces.
+
 ## How this is enforced
 
 - **`cargo-about --fail`** (`packaging/generate_dependency_licenses.py`, run by
@@ -155,6 +165,9 @@ statically linked standard library.
   `packaging/license-texts.sha256`, both before the build and inside the extracted installer;
   presence alone would not catch truncation or a copy from the wrong upstream revision.
   Every local link from `legal.html` must resolve to a non-empty installed file.
+  The same check opens a Linux `.deb` (in pure Python) against the Linux rows of
+  `components.toml` and its single host report. That package omits `legal.html` by
+  declaration, since nothing there opens it and its links name Windows-only files.
 - **Every binary-bearing CI artifact is complete.** `installer.yml` pairs the installer with
   corresponding source even on a manual, non-release run; `sapi.yml` build-tests the SAPI DLL
   but does not upload that intermediate binary without its notices.

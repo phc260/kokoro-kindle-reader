@@ -86,11 +86,12 @@ python native-deps\fetch-deps.py
 # is required on both, and must be on PATH: nothing goes looking for an interpreter.
 python3 native-deps/fetch-deps.py
 
-# The voice model, into the app-data dir the host reads. DEV only, and in practice LINUX
-# only: on Windows the panel downloads it at first run and still does. The panel has no
-# Linux build yet, so without this an Ubuntu host logs "model.onnx not found" and
-# synthesizes nothing. Reads model-manifest.json - the same file the panel embeds, not a
-# copy. --verify-only is the panel's "Verify & repair" without a GUI.
+# The voice model AND the OCR models, into the app-data dir the host reads - the panel's
+# first-run download without the panel. In practice LINUX only: on Windows the panel still
+# does it. The panel has no Linux build yet, so without this a Linux host logs "model.onnx
+# not found" and answers /ocr with `missing`; the .deb ships this script as
+# `kokoro-fetch-models` for that reason. Reads model-manifest.json + ocr-manifest.json -
+# the same files the panel embeds, not copies. --verify-only is "Verify & repair" without a GUI.
 python3 native-deps/fetch-model.py
 
 # The host builds for two targets. Windows keeps the tray, the pipe and Kindle; Linux is
@@ -134,8 +135,10 @@ cargo run --release --target i686-pc-windows-msvc --manifest-path kokoro-hook\Ca
 C:\Windows\SysWOW64\regsvr32.exe "kokoro-sapi\target\i686-pc-windows-msvc\release\KokoroSapi.dll"
 
 # Packaged installer — builds the x86 DLL + release-builds both crates, stages everything,
-# then runs makensis. NSIS. See packaging/README.md.
+# then runs makensis. NSIS. See packaging/README.md. The SAME script on Linux builds the .deb
+# (host only; dpkg-deb + dpkg-shlibdeps) - a PROFILES row, not a second recipe.
 python packaging\build_installer.py
+python3 packaging/build_installer.py      # Linux -> packaging/dist/kokoro-kindle-reader_X.Y.Z_amd64.deb
 # CI does this on a v* tag (.github/workflows/installer.yml); sapi.yml
 # builds the x86 DLL + runs the COM smoke test on kokoro-sapi/** / kokoro-sapi-smoke/**
 # / kokoro-protocol/** changes; hook.yml compile-checks the x86 hook + injector on
@@ -952,6 +955,22 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   has the pipe, so Kindle narrates regardless; Linux has no other client, so a host that
   swallowed the failure would sit there looking alive with nothing able to reach it — and the
   extension's probe cannot tell that apart from a host that was never started.
+- **The Linux package is a `PROFILES` row in `build_installer.py`, not a second recipe.**
+  Same staging, provenance and notice code as the NSIS installer; only the `deb` packager
+  branch differs. It installs the staged tree verbatim into `/usr/lib/kokoro-kindle-reader/`
+  (a **private** dir: the modified espeak must never be on the system library path, where
+  Ubuntu's own `libespeak-ng1` may already sit), plus `/usr/bin` links and an **opt-in**
+  systemd **user** unit (the host's data is per-user). `Depends:` comes from
+  `dpkg-shlibdeps`, never by hand. Modes are set explicitly and re-read, because this
+  checkout can live on NTFS where everything reads 0777. It is compressed with xz so the
+  verifier can open it with Python's `tarfile`. **`ldd /usr/bin/kokoro-host` lies:** it takes
+  `$ORIGIN` from the link's directory and reports the system espeak. A real `exec` resolves
+  `/proc/self/exe` and maps the bundled one.
+- **espeak's data path is capped at 160 bytes on Linux** (`N_PATH_HOME_DEF`, 230 on
+  Windows), and an overlong `espeak-ng-data` path fails `espeak_ng_Initialize` with nothing
+  more specific. It is never close in an install (`/usr/lib/kokoro-kindle-reader/...`), but a
+  deep scratch or worktree path hits it. That reads as a broken package when it is only the
+  directory the test was run from.
 
 ### Where shared files live
 - **The host has THREE contexts, and the boundary between them is an ownership rule, not
@@ -1107,6 +1126,10 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   block count; checking only special clarifications misses changed or deleted notices.
   The tray and Settings must keep **About & licenses** available independently of narration;
   it opens installed `legal.html`, whose content and local links are checked in packaging.
+  **The `.deb` omits `legal.html`**, declared on both sides (`legal_page` in the build
+  profile, `OMITTED` in `verify_installer_notices.py`). Nothing on Linux opens it, and its
+  links name the panel, the x86 clients and the NSIS stub. It is pinned content, so it is
+  left out rather than edited.
 - **The Apache-2.0 in-file change notices are a distinct duty from shipping the text.**
   Apache-2.0 §4(b) needs each modified file to carry a prominent change notice. The
   `kokoro-ocr` files (PaddleOCR) already had them; `text.rs` (whole-file kokoro-js port),
@@ -1130,7 +1153,7 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   §6 procedure; `THIRD_PARTY_NOTICES.md` is the shipped prose.
 - **Checked-in licence texts are content-pinned, not merely presence-checked.**
   `packaging/license-texts.sha256` inventories `LICENSE`, `THIRD_PARTY_NOTICES.md`, and every
-  file under `licenses/` after newline normalization. `verify-license-texts.py` runs in PR
+  file under `licenses/` after newline normalization. `verify_license_texts.py` runs in PR
   CI, before an installer build, and against the extracted installer; update a hash only after
   comparing the complete replacement with the exact pinned upstream revision. Provisioned
   espeak/ORT/NSIS notices must be the exact named, non-empty files rather than any wildcard
@@ -1140,7 +1163,7 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   checkout with `text eol=lf` in `.gitattributes` — never neither, because `core.autocrlf`
   then decides the digest and the check passes only on the machine that recorded it. Every
   text hash in the tree normalizes and says so in its docstring
-  (`verify-license-texts.normalized_sha256`, `provision_util.sha256_text`,
+  (`verify_license_texts.normalized_sha256`, `provision_util.sha256_text`,
   `build_installer.normalized_text_sha256`, `build-espeak.sha256_text`) *except*
   `components.toml`'s five Material Symbols, which are deliberately **byte-exact against LF**
   so `sha256sum` reproduces them — held there by `kokoro-panel/ui/*.svg text eol=lf`, the same
@@ -1158,9 +1181,12 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   source. Otherwise the release would describe or offer source for a different binary.
 - **`--skip-build` cannot mean "trust whatever is in target".** A successful full installer
   build records every tracked source file's SHA-256, both x64 executable hashes, and
-  `rustc --version --verbose` beside the host output. `--skip-build` requires all records to
+  `rustc --version --verbose` beside the host output, in `target/release/kkr-provenance/<os>/`
+  so a dual-boot checkout's two platforms never overwrite each other's records.
+  `--skip-build` requires all records to
   match, including after a standalone build overwrites an executable. The corresponding-source
-  packager uses records frozen in `staging/provenance/`, including espeak's source manifest,
+  packager uses records frozen in `staging/windows/provenance/` (each OS stages into its own
+  `staging/<os>/`, so a Linux build cannot wipe them), including espeak's source manifest,
   and independently compares the current tracked tree to the build-time manifest. This
   prevents a clean tagged checkout from pairing stale binaries with different source.
 - **The NSIS 3.12 pin is enforced, not documentary.** `build_installer.py` checks
@@ -1178,7 +1204,10 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   upload its intermediate DLL by itself. The Cargo deps' corresponding source is the
   immutable crates.io versions pinned in the committed lockfiles (stated in the archive
   README, not vendored). **Don't ship an installer or intermediate binary alone** — that was
-  the §6/notice gap.
+  the §6/notice gap. **The Linux `.deb` has no source archive yet**:
+  `build_corresponding_source.py` describes the Windows installer and refuses to run on
+  Linux rather than produce a wrong one. So the `.deb` stays a local build, not a release
+  artifact, until that packager gains a Linux branch.
 - **No shipped artifact may claim a bare licence name in its version resource** — not "MIT
   (app code)", which was the actual wording here until it was corrected, and which stopped
   being true the moment this tree stopped being uniformly MIT. Three places set
@@ -1234,6 +1263,11 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
 - **File locks:** rebuilds hit LNK1104 / "Access is denied" while Kindle holds
   `KokoroSapi.dll` or a running `kokoro-panel.exe`/`kokoro-host.exe` holds its exe — stop
   them first. Port lingers after a crashed session.
+- **Smart App Control blocks `makensis.exe`** (unsigned) with `WinError 4551`, so with SAC
+  on the installer can't be built locally. `doctor.cmd` reads its state from
+  `HKLM\SYSTEM\CurrentControlSet\Control\CI\Policy\VerifiedAndReputablePolicyState`
+  (0 off, 1 on, 2 evaluation), and `build_installer.py`'s `spawn` turns the error into a
+  sentence. Turning SAC off can't be undone, so build in CI instead (`installer.yml`).
 - **Slint `step`** on a `Slider` only affects keyboard/scroll, **not** mouse drag — snap
   the dragged value manually (see `SliderRow` in `panel.slint`).
 - **A `windows` crate feature cannot be audited by grepping imports.** The bindings gate

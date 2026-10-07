@@ -214,7 +214,7 @@ against the engine the user actually has installed.
 | `ocr-manifest.json` | The same, for the Cloud Reader OCR models the panel downloads into `<app_data>\ocr\`; also embedded in `kokoro-panel`. Its digests are one of **three** copies that must agree — with `kokoro-ocr`'s own consts and `native-deps/fetch-ocr-models.py`. |
 | `icons/` | Shared app icons (LFS); embedded in the exes' version resource and the installer. |
 | `doctors/` | `doctor.cmd` (Windows) and `doctor.sh` (Linux): list every missing development tool in one pass, from the shared list in `tools.conf`. Tools only, not the provisioned state. See [`doctors/README.md`](doctors/README.md). |
-| `packaging/` | `installer.nsi` + `build_installer.py` (standalone NSIS build) — per-user install with self-elevating voice registration. See [`packaging/README.md`](packaging/README.md). |
+| `packaging/` | `build_installer.py` and the shared licence/notice scripts at the root; each platform's own files under `windows/` (`installer.nsi` — the standalone NSIS build, a per-user install with self-elevating voice registration) and `linux/` (the `.deb`'s systemd unit and docs). See [`packaging/README.md`](packaging/README.md). |
 | `THIRD_PARTY_NOTICES.md` + `licenses/` | Bundle licensing: the repository source is MIT except for the files ported from `kokoro-js` and PaddleOCR and the Google Material Symbols SVGs (Apache-2.0, attributed there file by file), but the shipped binaries link espeak-ng (GPL-3.0-or-later, **modified** by `build-espeak.py`) and Slint-under-GPL, so a release is conveyed under GPLv3. `build_installer.py` stages these notices plus the active Rust toolchain's generated Standard Library report — they must ship *with* the binaries, not just live here. |
 
 ## Building from source
@@ -288,17 +288,18 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 python3 native-deps/fetch-deps.py
 
 # 3. One-time: the models. On Windows the settings panel downloads these at first run; it
-#    does not build for Linux yet, so they are provisioned here instead. The voice model
-#    (~324 MiB) goes to the app-data dir the host reads; the OCR pair goes to native-deps/ocr,
-#    which webserve.rs falls back to when <app_data>/ocr is absent. Both are digest-pinned,
-#    idempotent, and re-runnable to repair.
+#    does not build for Linux yet, so they are provisioned here instead: the voice model
+#    (~324 MiB) and the OCR models (~10 MiB), into the app-data dir the host reads.
+#    Digest-pinned, idempotent, and re-runnable to repair.
 python3 native-deps/fetch-model.py
-python3 native-deps/fetch-ocr-models.py
 
 # 4. Build + run. No tray: the host is a service that binds 127.0.0.1:8787 and serves.
 #    It exits non-zero if it cannot create that endpoint, because on Linux nothing else
 #    can reach it.
 cargo run --manifest-path kokoro-host/Cargo.toml
+
+# 5. Optional: package it. Needs dpkg-dev and cargo-about; see packaging/README.md.
+python3 packaging/build_installer.py     # -> packaging/dist/kokoro-kindle-reader_X.Y.Z_amd64.deb
 ```
 
 The pairing token is written to `$XDG_DATA_HOME/kokoro-kindle-reader/web-endpoint.json`

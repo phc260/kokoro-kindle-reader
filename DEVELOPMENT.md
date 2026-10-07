@@ -127,7 +127,7 @@ the extension need, since there is no Linux installer.
 See [Building from source](ARCHITECTURE.md#building-from-source).
 
 1. Bump the product version in lockstep — 13 locations: 8 `Cargo.toml`s, the two version
-   lines in `packaging/installer.nsi`, and the browser extension's two manifests plus its
+   lines in `packaging/windows/installer.nsi`, and the browser extension's two manifests plus its
    `package.json`. The `/bump-version` command does exactly this.
 2. Commit on `main`, push.
 3. Tag and push the tag: `git tag vX.Y.Z && git push origin vX.Y.Z`. This triggers

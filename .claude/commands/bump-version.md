@@ -14,7 +14,7 @@ commit, tag, or push (those are deliberate, separate steps).
    (digits only, e.g. `0.4.0`). If it is empty, malformed, or has a `v` prefix, stop and
    explain the expected form — do not guess.
 
-2. **Read the current version** from `packaging/installer.nsi` (the `!define VERSION`
+2. **Read the current version** from `packaging/windows/installer.nsi` (the `!define VERSION`
    line) so you can report the old → new transition and match the exact old strings.
 
 3. **Edit these 13 locations** (the version was previously confirmed to live in exactly
@@ -31,7 +31,7 @@ commit, tag, or push (those are deliberate, separate steps).
    - `kokoro-sapi-smoke/Cargo.toml`
    - `kokoro-ocr/Cargo.toml`
 
-   In `packaging/installer.nsi` — **both** the three-part define and the four-part
+   In `packaging/windows/installer.nsi` — **both** the three-part define and the four-part
    product version:
    - `!define VERSION "X.Y.Z"`
    - `VIProductVersion "X.Y.Z.0"`  (Windows version resources are four-part; the `.0` is

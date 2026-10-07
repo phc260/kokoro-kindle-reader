@@ -8,12 +8,13 @@ not spread through the code as `if windows` at every use.
 
 **Only combinations that really exist here are populated.** An unsupported OS or
 architecture raises rather than falling back to a guess: a packaging script that silently
-assumes Windows on an unknown platform produces an artifact nobody checked. Adding the
-Linux release is adding rows here, and the callers should not need to change.
+assumes Windows on an unknown platform produces an artifact nobody checked.
 """
 
+import os
 import platform
 import sys
+from pathlib import Path
 
 # Rust target triples this project actually builds, per (os, arch). The x86 artifacts
 # (kokoro-sapi/hook/inject) are a separate axis - Kindle is a 32-bit Windows process, so
@@ -25,9 +26,26 @@ NATIVE_TRIPLE = {
 
 EXE_SUFFIX = {"windows": ".exe", "linux": ""}
 
-# What a release artifact is called on each platform. Linux is the port plan's packaging
-# step; there is no .deb yet, which is why "linux" is absent rather than guessed at.
-PACKAGE_SUFFIX = {"windows": ".exe"}
+# Where every release artifact is written: the installer package and the corresponding-source
+# archive that must ship beside it, and nothing else, so the folder IS the release.
+DIST_DIR = Path(__file__).resolve().parent / "dist"
+
+# Where each platform's install tree is assembled before its packager runs - one directory
+# per OS, never shared. A checkout can be built from both OSes (a dual-boot drive), and a
+# single staging/ meant the last build wiped the other platform's tree, including the
+# provenance/ the Windows corresponding-source archive is built from.
+STAGING_ROOT = Path(__file__).resolve().parent / "staging"
+
+# What a release artifact is called on each platform, and the pattern that finds the newest
+# one in DIST_DIR. The suffix is also what decides how a package is opened again
+# (verify_installer_notices.UNPACKERS) and which platform's inventory it is checked against
+# (`package_os`), so a .deb verified on Windows is still checked as the Linux package it is.
+PACKAGE_SUFFIX = {"windows": ".exe", "linux": ".deb"}
+PACKAGE_GLOB = {"windows": "*-setup.exe", "linux": "kokoro-kindle-reader_*.deb"}
+
+# Debian's name for each architecture, which is not the kernel's. Only the combinations in
+# NATIVE_TRIPLE are here: a .deb for an architecture nothing builds would be a guess.
+DEB_ARCH = {"x86_64": "amd64"}
 
 
 def current_os():
@@ -77,6 +95,42 @@ def package_suffix(os_name=None):
     if suffix is None:
         raise RuntimeError("No release package format defined for %s yet." % os_name)
     return suffix
+
+
+def staging_dir(os_name=None):
+    """`packaging/staging/<os>/`: the install tree for that platform's package."""
+    os_name = os_name or current_os()
+    if os_name not in PACKAGE_SUFFIX:
+        raise RuntimeError("No release package format defined for %s yet." % os_name)
+    return STAGING_ROOT / os_name
+
+
+def package_glob(os_name=None):
+    os_name = os_name or current_os()
+    pattern = PACKAGE_GLOB.get(os_name)
+    if pattern is None:
+        raise RuntimeError("No release package format defined for %s yet." % os_name)
+    return pattern
+
+
+def package_os(package):
+    """The platform a built package is FOR, read off its suffix - not the platform this
+    script happens to be running on."""
+    suffix = os.path.splitext(str(package))[1].lower()
+    for os_name, s in PACKAGE_SUFFIX.items():
+        if s == suffix:
+            return os_name
+    raise RuntimeError("%s is not a package format this project builds (%s)."
+                       % (package, ", ".join(sorted(PACKAGE_SUFFIX.values()))))
+
+
+def deb_arch(arch=None):
+    arch = arch or current_arch()
+    name = DEB_ARCH.get(arch)
+    if name is None:
+        raise RuntimeError("No Debian architecture recorded for %s; add a row to DEB_ARCH "
+                           "if the Linux package is built there." % arch)
+    return name
 
 
 def describe():

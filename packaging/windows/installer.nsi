@@ -4,8 +4,13 @@
 ; the SAPI voice via voice-setup.ps1 (self-elevating). Per-user install, unelevated;
 ; the registration raises one UAC prompt.
 ;
-; Build via packaging/build_installer.py (stages files into packaging/staging then
+; Build via packaging/build_installer.py (stages files into packaging/staging/windows then
 ; runs makensis). See packaging/README.md.
+;
+; Paths below are relative to THIS file's directory, packaging\windows\: makensis changes
+; into the script's directory before compiling (it is not run with /NOCD). The staging tree
+; is packaging\staging\windows\ (the Linux package stages into its own sibling), and the
+; built -setup.exe goes to packaging\dist\ beside the Linux package.
 
 Unicode true
 !include "MUI2.nsh"
@@ -13,13 +18,13 @@ Unicode true
 !define APPNAME "Kokoro Kindle Reader"
 !define COMPANY "phc260"
 !define VERSION "0.4.0"
-!define STAGING "staging"
+!define STAGING "..\staging\windows"
 !define RUNKEY "Software\Microsoft\Windows\CurrentVersion\Run"
 !define RUNVALUE "kokoro-kindle-reader"
 !define UNINSTKEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\KokoroKindleReader"
 
 Name "${APPNAME}"
-OutFile "kokoro-kindle-reader-${VERSION}-setup.exe"
+OutFile "..\dist\kokoro-kindle-reader-${VERSION}-setup.exe"
 ; Fixed install path - the same per-user folder the original app used
 ; ($LOCALAPPDATA\kokoro-kindle-reader), so this edition installs in place rather
 ; than a second location. Not overridable (no directory page, no reg override), so

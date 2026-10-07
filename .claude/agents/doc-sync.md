@@ -125,7 +125,7 @@ Drift-prone claim types to check explicitly:
   claim. **The provisioning recipe is `native-deps/fetch-deps.py`, and it is the only place
   the ORT version is written** (`ORT_VERSION`) — there is no longer a wrapper carrying a
   second copy of it as a parameter default, so the drift pair that used to need checking is
-  gone. The product version agrees across `packaging/installer.nsi` (`VERSION`)
+  gone. The product version agrees across `packaging/windows/installer.nsi` (`VERSION`)
   and the `FileVersion` in `kokoro-host/build.rs` + `kokoro-panel/build.rs` (both derive it
   from `CARGO_PKG_VERSION`). NSIS is pinned to 3.12 in `installer.yml` and enforced at build
   time by `build_installer.py`, so a doc naming a different NSIS version is wrong, not merely
@@ -150,7 +150,7 @@ Drift-prone claim types to check explicitly:
   Linux is the synth core plus the loopback endpoint and nothing else.
 - **Licence texts are content-pinned, not presence-checked.** `packaging/license-texts.sha256`
   inventories `LICENSE`, `THIRD_PARTY_NOTICES.md` and every file under `licenses/` after
-  newline normalization; `verify-license-texts.py` runs in PR CI, before an installer build,
+  newline normalization; `verify_license_texts.py` runs in PR CI, before an installer build,
   and against the extracted installer. So **an edit to `THIRD_PARTY_NOTICES.md` breaks CI
   until the inventory is updated**. Report the edit and say the hash needs refreshing —
   **never update the hash yourself.** A hash bumped to match an edit is precisely the check
@@ -200,7 +200,7 @@ side is wrong:
 - **`ort` version parity** — `kokoro-ocr`'s `ort` dependency must stay identical to
   `kokoro-host`'s (`=2.0.0-rc.12`, `load-dynamic`, `default-features = false`). Two `ort`
   versions in one process would be two `OrtApi` tables against one library.
-- **Version sync** — the product version in `packaging/installer.nsi` (`VERSION`) ⇆ every
+- **Version sync** — the product version in `packaging/windows/installer.nsi` (`VERSION`) ⇆ every
   crate's `[package] version` ⇆ the browser extension's three manifests. `/bump-version` owns
   the authoritative list; don't duplicate it here, but do flag a mismatch.
 - **Crate `license` fields** — every crate declares one (`cargo-about` treats an unset field
@@ -237,7 +237,7 @@ side is wrong:
   source file is hashed into `kkr-project-source.SHA256SUMS.txt` at installer-build time, so
   an edit there invalidates a `--skip-build` build for reasons unrelated to documentation.
 - Keep the remaining `.ps1` files (the four under `kokoro-sapi/` and `kokoro-sapi-smoke/`)
-  and `packaging/installer.nsi` **ASCII** — PowerShell 5.1 and `makensis` both misread UTF-8
+  and `packaging/windows/installer.nsi` **ASCII** — PowerShell 5.1 and `makensis` both misread UTF-8
   em-dashes/ellipses. Use `-` and `...` there. (Rust, `.md` and `.slint` are fine with
   Unicode.)
 - **Don't quote benchmark figures into the tree.** They date, they are machine-specific, and

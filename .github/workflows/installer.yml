@@ -112,8 +112,8 @@ jobs:
         with:
           name: kokoro-kindle-reader-bundle
           path: |
-            packaging/*-setup.exe
-            packaging/corresponding-source-*.zip
+            packaging/dist/*-setup.exe
+            packaging/dist/corresponding-source-*.zip
           if-no-files-found: error
 
       # Release title: match the existing "kokoro-kindle-reader vX.Y.Z" convention
@@ -132,8 +132,8 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           files: |
-            packaging/*-setup.exe
-            packaging/corresponding-source-*.zip
+            packaging/dist/*-setup.exe
+            packaging/dist/corresponding-source-*.zip
           draft: true
           name: ${{ steps.relname.outputs.title }}
           body: |

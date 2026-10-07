@@ -6,16 +6,17 @@ GPLv3 requires the notices accompany the binaries; a staging bug or a dropped co
 produces an installer that LOOKS complete and is not. This is the same "fail loudly"
 contract as the OCR-model digests - the installer build is not "done" until this passes.
 
-    python3 packaging/verify_installer_notices.py                 # newest packaging/*-setup.exe
+    python3 packaging/verify_installer_notices.py                 # newest package for this OS
     python3 packaging/verify_installer_notices.py --setup path.exe
+    python3 packaging/verify_installer_notices.py --setup packaging/dist/kokoro-kindle-reader_0.4.0_amd64.deb
 
 **Everything here is platform-agnostic except `unpack`.** What must ship, how a shipped
 file is located, and every content check are the same questions for any package; only
-"how do I get the files out of this thing" differs, and that is one dispatch table. When
-the Linux packaging step lands, a `.deb` branch goes in `UNPACKERS` and nothing below it
-changes. Paths are compared with `/` internally and matched case-insensitively, because
-the inventory is written in the installer's own `\` idiom and the tree it describes came
-off a case-insensitive filesystem.
+"how do I get the files out of this thing" differs, and that is one dispatch table. Which
+platform's inventory applies is read off the PACKAGE (its suffix), never off the machine
+running the check. Paths are compared with `/` internally and matched case-insensitively,
+because the inventory is written in the installer's own `\` idiom and the Windows tree it
+describes came off a case-insensitive filesystem.
 """
 
 import argparse
@@ -23,10 +24,10 @@ import contextlib
 import io
 import os
 import re
-import runpy
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import uuid
 from pathlib import Path
@@ -35,14 +36,20 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 import target_platform  # noqa: E402 - needs the path above
+import verify_license_texts  # noqa: E402
+from generate_dependency_licenses import reports as dependency_reports  # noqa: E402
 
 # Project-level notices not owned by one non-Cargo component. Unicode-3.0 is the standalone
 # text linked by THIRD_PARTY_NOTICES.md for the Rust unicode-ident dependency; the generated
 # per-binary reports are checked separately below.
 PROJECT_NOTICES = ["LICENSE", "THIRD_PARTY_NOTICES.md", "legal.html", "licenses/Unicode-3.0.txt"]
 
-DEPENDENCY_REPORTS = ["kokoro-host.html", "kokoro-panel.html", "kokoro-sapi.html",
-                      "kokoro-hook.html", "kokoro-inject.html"]
+# Pinned project texts a package deliberately leaves out. legal.html is the page the Windows
+# tray and Settings open; its per-binary links name the panel, the three x86 clients and the
+# NSIS stub, none of which is in the Linux package, and nothing there opens it. Named here,
+# per package, so the omission is a decision this check knows about rather than a file that
+# went missing - build_installer.py's `legal_page` is the other half.
+OMITTED = {"windows": [], "linux": ["legal.html"]}
 
 # The file that anchors the install root: bare notice names must sit beside it. Named per
 # platform rather than hardcoded, so the Linux package looks for `kokoro-host`, not a file
@@ -79,9 +86,47 @@ def _unpack_nsis(package, dest):
         raise RuntimeError("7z failed to extract %s" % package)
 
 
+def _unpack_deb(package, dest):
+    """A .deb is an `ar` archive of `debian-binary`, `control.tar.*` and `data.tar.*`; the
+    installed files are the last. Read here in Python rather than with dpkg-deb, so a .deb
+    can be checked on any machine with nothing installed - which is also why
+    build_installer.py compresses it with xz and not dpkg's zstd default.
+    """
+    with open(package, "rb") as f:
+        if f.read(8) != b"!<arch>\n":
+            raise RuntimeError("%s is not an ar archive, so not a .deb." % package)
+        while True:
+            header = f.read(60)
+            if not header:
+                break
+            if len(header) != 60 or header[58:60] != b"`\n":
+                raise RuntimeError("%s has a truncated or malformed ar header." % package)
+            name = header[:16].decode("ascii").strip().rstrip("/")
+            size = int(header[48:58].decode("ascii").strip())
+            body = f.read(size)
+            if size % 2:
+                f.read(1)  # ar pads every member to an even offset
+            if not name.startswith("data.tar"):
+                continue
+            try:
+                tar = tarfile.open(fileobj=io.BytesIO(body), mode="r:*")
+            except tarfile.ReadError:
+                raise RuntimeError("%s's %s is compressed in a format Python cannot read; "
+                                   "build_installer.py builds with -Zxz." % (package, name))
+            with tar:
+                # The "data" filter refuses absolute paths and links leaving the tree; the
+                # package's own /usr/bin links are relative and stay inside it.
+                if hasattr(tarfile, "data_filter"):
+                    tar.extractall(dest, filter="data")
+                else:
+                    tar.extractall(dest)
+            return
+    raise RuntimeError("%s has no data.tar member." % package)
+
+
 # Keyed by package suffix, which is what actually decides how to open it - see
-# target_platform.PACKAGE_SUFFIX. A .deb branch goes here and nothing below changes.
-UNPACKERS = {".exe": _unpack_nsis}
+# target_platform.PACKAGE_SUFFIX.
+UNPACKERS = {".exe": _unpack_nsis, ".deb": _unpack_deb}
 
 
 def unpack(package, dest):
@@ -96,8 +141,10 @@ def unpack(package, dest):
 class Shipped:
     """The extracted tree, indexed so a required path can be matched by suffix.
 
-    NSIS/7z put the app files under an internal folder, so matching is by relative-path
-    SUFFIX rather than by absolute path.
+    NSIS/7z put the app files under an internal folder, and the .deb under
+    usr/lib/kokoro-kindle-reader/, so matching is by relative-path SUFFIX rather than by
+    absolute path. Symlinks are not shipped files: the .deb's /usr/bin/kokoro-host is a
+    link to the real one, and anchoring on it would put the install root in /usr/bin.
 
     A BARE name (no directory in the suffix, e.g. `LICENSE`) must be THE install-root file,
     beside the executables - not any nested namesake. The ORT wheel ships its own
@@ -108,7 +155,7 @@ class Shipped:
 
     def __init__(self, root, anchor_name=None):
         anchor_name = (anchor_name or root_anchor()).lower()
-        self.all = [p for p in Path(root).rglob("*") if p.is_file()]
+        self.all = [p for p in Path(root).rglob("*") if p.is_file() and not p.is_symlink()]
         anchor = next((p for p in self.all if p.name.lower() == anchor_name), None)
         if anchor is None:
             raise RuntimeError("%s not found in the extracted package; cannot anchor the "
@@ -143,6 +190,9 @@ _NOTICE_LINE = re.compile(
 _STRING = r'"[^"\\\r\n]+"'
 _LIST = re.compile(r"^[ \t]*%s(?:[ \t]*,[ \t]*%s)*[ \t]*$" % (_STRING, _STRING))
 _VALUE = re.compile(r'"(?P<value>[^"\\\r\n]+)"')
+_PLATFORMS_DECL = re.compile(r"^[ \t]*platforms[ \t]*=", re.M)
+_PLATFORMS_LINE = re.compile(
+    r"^[ \t]*platforms[ \t]*=[ \t]*\[(?P<items>[^\r\n]*)\][ \t]*(?:#[^\r\n]*)?[ \t\r]*$", re.M)
 # PowerShell's wildcard metacharacters, which WildcardPattern.ContainsWildcardCharacters
 # reports; a notice must name one exact file, never a pattern.
 _WILDCARD = re.compile(r"[*?\[\]]")
@@ -158,12 +208,18 @@ def _is_rooted(path):
             re.match(r"^[A-Za-z]:", path) is not None)
 
 
-def component_notice_paths(manifest_path):
-    """The exact per-component notice paths from the authoritative non-Cargo inventory.
+def component_notice_paths(manifest_path, os_name):
+    """The exact per-component notice paths, for the package built for `os_name`, from the
+    authoritative non-Cargo inventory.
 
     Intentionally a narrow, fail-closed parser for components.toml's documented one-line
     `notice = ["path", ...]` schema. Accepting only this small shape avoids a TOML
     dependency while making format drift an error rather than a silently skipped component.
+
+    A component with a `platforms = [...]` line applies to those packages only (the NSIS
+    stub is not in a .deb; libonnxruntime.so is not in a -setup.exe); one without applies
+    to all. An unknown platform name is an error, not a component that silently matches
+    nothing - a misspelt "linux" would otherwise drop its notices from every check.
     """
     from dotnet_compat import ordinal_key, read_all_text
     toml = read_all_text(manifest_path)
@@ -182,8 +238,13 @@ def component_notice_paths(manifest_path):
                            '`notice = ["path", ...]` schema.')
 
     paths = []
-    for m in lines:
-        items = m.group("items")
+    for block in _COMPONENT.split(toml)[1:]:
+        if len(_NOTICE_DECL.findall(block)) != 1:
+            raise RuntimeError("components.toml must have exactly one notice field per "
+                               "component.")
+        if not _applies(block, os_name):
+            continue
+        items = _NOTICE_LINE.search(block).group("items")
         if not _LIST.match(items):
             raise RuntimeError("Malformed components.toml notice list: [%s]" % items)
         for value in _VALUE.finditer(items):
@@ -199,6 +260,22 @@ def component_notice_paths(manifest_path):
     return sorted({p.lower(): p for p in paths}.values(), key=ordinal_key)
 
 
+def _applies(block, os_name):
+    decls = _PLATFORMS_DECL.findall(block)
+    if not decls:
+        return True
+    line = _PLATFORMS_LINE.search(block)
+    if len(decls) != 1 or line is None or not _LIST.match(line.group("items")):
+        raise RuntimeError("A components.toml platforms field must be one line of the form "
+                           '`platforms = ["windows", ...]`.')
+    names = [v.group("value") for v in _VALUE.finditer(line.group("items"))]
+    unknown = [n for n in names if n not in target_platform.PACKAGE_SUFFIX]
+    if unknown:
+        raise RuntimeError("components.toml names unknown platform(s) %s; known: %s."
+                           % (", ".join(unknown), ", ".join(sorted(target_platform.PACKAGE_SUFFIX))))
+    return os_name in names
+
+
 # --- the checks ---------------------------------------------------------------------------
 
 def verify(setup):
@@ -206,16 +283,20 @@ def verify(setup):
     import verify_dependency_licenses
 
     setup = Path(setup)
-    print("==> Verifying %s on %s" % (setup, target_platform.describe()))
+    os_name = target_platform.package_os(setup)
+    print("==> Verifying the %s package %s on %s"
+          % (os_name, setup, target_platform.describe()))
 
     work = Path(tempfile.gettempdir()) / ("kkr-verify-" + uuid.uuid4().hex)
     work.mkdir(parents=True)
     try:
         unpack(setup, work)
-        tree = Shipped(work)
+        tree = Shipped(work, root_anchor(os_name))
         root = tree.install_root
 
-        required = PROJECT_NOTICES + component_notice_paths(HERE / "components.toml")
+        omitted = OMITTED[os_name]
+        required = ([n for n in PROJECT_NOTICES if n not in omitted] +
+                    component_notice_paths(HERE / "components.toml", os_name))
         required = sorted({r.lower(): r for r in required}.values(), key=ordinal_key)
 
         missing, empty, group = [], [], []
@@ -229,7 +310,9 @@ def verify(setup):
         # The UI's local legal page must lead to files at their actual install-relative
         # paths, not just namesakes elsewhere in the extracted tree.
         legal = tree.find("legal.html")
-        if legal is not None:
+        if legal is not None and "legal.html" in omitted:
+            group.append("legal.html ships, but this package is declared to omit it")
+        elif legal is not None:
             for link in re.finditer(r'href="(?P<path>[^"]+)"', read_all_text(legal)):
                 rel = link.group("path")
                 if rel.startswith("https://"):
@@ -241,19 +324,16 @@ def verify(setup):
         # Presence is insufficient for the fixed, checked-in texts: verify the installer
         # carries the reviewed bytes, not a truncated or wrong-revision file. Provisioned
         # notice trees are intentionally allowed as additions.
-        # Run verify-license-texts.py in THIS process (output hushed, since we build our own
-        # report) rather than forking a second interpreter; it raises SystemExit on a mismatch.
-        argv_bak, sys.argv = sys.argv, [str(HERE / "verify-license-texts.py"),
-                                        "--root", str(root), "--allow-additional"]
+        # In this process, with its output hushed since this check builds its own report; it
+        # raises SystemExit on a mismatch, as it would on the command line.
         hushed = io.StringIO()
         try:
             with contextlib.redirect_stdout(hushed), contextlib.redirect_stderr(hushed):
-                runpy.run_path(str(HERE / "verify-license-texts.py"), run_name="__main__")
+                verify_license_texts.main(["--root", str(root), "--allow-additional"] +
+                                          ["--omit=%s" % n for n in omitted])
         except SystemExit as exc:
             if exc.code:
                 group.append("checked-in licence texts do not match packaging/license-texts.sha256")
-        finally:
-            sys.argv = argv_bak
 
         # ORT's own LICENSE + ThirdPartyNotices come from exact canonical paths in
         # components.toml, not a directory marker: a co-location check can be satisfied by
@@ -278,11 +358,12 @@ def verify(setup):
                     not re.search(r"^commit-hash:\s+[0-9a-f]{40}\s*$", text, re.M)):
                 group.append("licenses\\rust\\TOOLCHAIN.txt (missing release or immutable commit)")
 
-        # The five per-binary generated Cargo dependency reports. Each must also carry the
+        # The per-binary generated Cargo dependency reports, one per crate that package
+        # ships (five on Windows, the host alone on Linux). Each must also carry the
         # exact licence/notice files harvested from its resolved crate packages;
         # cargo-about's normalized SPDX fallback can contain copyright placeholders, so the
         # appendix is load-bearing.
-        for name in DEPENDENCY_REPORTS:
+        for name in dependency_reports(os_name):
             rel = "licenses/dependencies/%s" % name
             shown = rel.replace("/", "\\")
             report = tree.find(rel)
@@ -318,13 +399,14 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     setup = args.setup
+    pattern = target_platform.package_glob()
     if not setup:
-        pattern = "*-setup%s" % target_platform.package_suffix()
-        built = sorted(HERE.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
+        built = sorted(target_platform.DIST_DIR.glob(pattern),
+                       key=lambda p: p.stat().st_mtime, reverse=True)
         setup = built[0] if built else None
     if not setup or not Path(setup).exists():
-        raise SystemExit("No installer package found to verify (looked for *-setup%s)."
-                         % target_platform.package_suffix())
+        raise SystemExit("No installer package found to verify (looked for %s)."
+                         % (target_platform.DIST_DIR / pattern))
     try:
         verify(setup)
     except RuntimeError as e:
