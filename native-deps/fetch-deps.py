@@ -139,6 +139,18 @@ def layout():
     }
 
 
+def ort_marker(os_name):
+    """The ORT-PROVISION.txt text for `os_name`'s pinned wheel.
+
+    Written here, and read by packaging/build_installer.py through this function, so the
+    installer's preflight compares the marker against the SAME pin that produced it - not a
+    second copy of the wheel name and digest that could be bumped without the other.
+    """
+    wheel = WHEELS[os_name]
+    return "%s=%s\nwheel=%s\nwheel-sha256=%s" % (
+        wheel["distribution"], ORT_VERSION, wheel["name"], wheel["sha256"])
+
+
 def marker_matches(path, expected):
     """Compare a provision marker ignoring line endings and trailing newlines, so a marker
     written by the PowerShell script this replaced (CRLF) still reads as current and does not
@@ -176,8 +188,7 @@ def provision_ort(paths, force):
     runtime.mkdir(parents=True, exist_ok=True)
 
     marker = runtime / "ORT-PROVISION.txt"
-    expected = "%s=%s\nwheel=%s\nwheel-sha256=%s" % (
-        wheel["distribution"], ORT_VERSION, wheel["name"], wheel["sha256"])
+    expected = ort_marker("windows" if WINDOWS else "linux")
 
     # Re-fetch when ANY expected piece is missing, not just the libraries. Each of the notice
     # anchors was added after the libraries, so a provision predating one has the libraries
