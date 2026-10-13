@@ -68,6 +68,7 @@ for (const t of targets) {
     await cp(path.join(root, 'offscreen.html'), path.join(outdir, 'offscreen.html'));
   }
   await cp(path.join(root, 'options.html'), path.join(outdir, 'options.html'));
+  await cp(path.join(root, '..', 'LICENSE'), path.join(outdir, 'LICENSE'));
 
   // The extension shares the project's icons rather than carrying its own copies - same source
   // the exes, the tray and the installer use, so the browser's toolbar and Kindle's tray can
