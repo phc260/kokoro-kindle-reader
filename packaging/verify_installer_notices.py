@@ -6,9 +6,10 @@ GPLv3 requires the notices accompany the binaries; a staging bug or a dropped co
 produces an installer that LOOKS complete and is not. This is the same "fail loudly"
 contract as the OCR-model digests - the installer build is not "done" until this passes.
 
-    python3 packaging/verify_installer_notices.py                 # newest package for this OS
+    python3 packaging/verify_installer_notices.py                 # newest package this machine builds
     python3 packaging/verify_installer_notices.py --setup path.exe
     python3 packaging/verify_installer_notices.py --setup packaging/dist/kokoro-kindle-reader_0.4.0_amd64.deb
+    python3 packaging/verify_installer_notices.py --setup packaging/dist/kokoro-kindle-reader-0.4.0-1-x86_64.pkg.tar.xz
 
 **Everything here is platform-agnostic except `unpack`.** What must ship, how a shipped
 file is located, and every content check are the same questions for any package; only
@@ -114,25 +115,45 @@ def _unpack_deb(package, dest):
                 raise RuntimeError("%s's %s is compressed in a format Python cannot read; "
                                    "build_installer.py builds with -Zxz." % (package, name))
             with tar:
-                # The "data" filter refuses absolute paths and links leaving the tree; the
-                # package's own /usr/bin links are relative and stay inside it.
-                if hasattr(tarfile, "data_filter"):
-                    tar.extractall(dest, filter="data")
-                else:
-                    tar.extractall(dest)
+                _extract(tar, dest)
             return
     raise RuntimeError("%s has no data.tar member." % package)
 
 
-# Keyed by package suffix, which is what actually decides how to open it - see
-# target_platform.PACKAGE_SUFFIX.
-UNPACKERS = {".exe": _unpack_nsis, ".deb": _unpack_deb}
+def _extract(tar, dest):
+    # Symlinks are left out: they are not shipped files (see Shipped), and where the OS will
+    # not create one - Windows without the privilege - tarfile writes a COPY of the target
+    # instead, so /usr/bin/kokoro-host arrived as a second real `kokoro-host` and anchored
+    # the install root in /usr/bin. The "data" filter refuses absolute paths for the rest.
+    members = [m for m in tar.getmembers() if not m.issym()]
+    if hasattr(tarfile, "data_filter"):
+        tar.extractall(dest, members=members, filter="data")
+    else:
+        tar.extractall(dest, members=members)
+
+
+def _unpack_pacman(package, dest):
+    """An Arch package is a single compressed tar: the installed files, plus makepkg's
+    .PKGINFO/.BUILDINFO/.MTREE at its root, which no notice path can match. xz for the same
+    reason as the .deb - build_installer.py sets PKGEXT so Python's tarfile can open it."""
+    try:
+        tar = tarfile.open(package, mode="r:*")
+    except tarfile.ReadError:
+        raise RuntimeError("%s is compressed in a format Python cannot read; "
+                           "build_installer.py builds with PKGEXT=.pkg.tar.xz." % package)
+    with tar:
+        _extract(tar, dest)
+
+
+# Keyed by package format, read off the file's suffix - see target_platform.PACKAGE_FORMATS.
+UNPACKERS = {"nsis": _unpack_nsis, "deb": _unpack_deb, "pacman": _unpack_pacman}
 
 
 def unpack(package, dest):
-    unpacker = UNPACKERS.get(Path(package).suffix.lower())
+    fmt = target_platform.format_of(package)
+    unpacker = UNPACKERS.get(fmt)
     if unpacker is None:
-        raise RuntimeError("No unpacker for %s; add one to UNPACKERS." % Path(package).suffix)
+        raise RuntimeError("No unpacker for %s packages; add one to UNPACKERS." % fmt)
     unpacker(package, dest)
 
 
@@ -141,9 +162,9 @@ def unpack(package, dest):
 class Shipped:
     """The extracted tree, indexed so a required path can be matched by suffix.
 
-    NSIS/7z put the app files under an internal folder, and the .deb under
+    NSIS/7z put the app files under an internal folder, and both Linux packages under
     usr/lib/kokoro-kindle-reader/, so matching is by relative-path SUFFIX rather than by
-    absolute path. Symlinks are not shipped files: the .deb's /usr/bin/kokoro-host is a
+    absolute path. Symlinks are not shipped files: a Linux package's /usr/bin/kokoro-host is a
     link to the real one, and anchoring on it would put the install root in /usr/bin.
 
     A BARE name (no directory in the suffix, e.g. `LICENSE`) must be THE install-root file,
@@ -269,10 +290,10 @@ def _applies(block, os_name):
         raise RuntimeError("A components.toml platforms field must be one line of the form "
                            '`platforms = ["windows", ...]`.')
     names = [v.group("value") for v in _VALUE.finditer(line.group("items"))]
-    unknown = [n for n in names if n not in target_platform.PACKAGE_SUFFIX]
+    unknown = [n for n in names if n not in target_platform.PACKAGE_OSES]
     if unknown:
         raise RuntimeError("components.toml names unknown platform(s) %s; known: %s."
-                           % (", ".join(unknown), ", ".join(sorted(target_platform.PACKAGE_SUFFIX))))
+                           % (", ".join(unknown), ", ".join(target_platform.PACKAGE_OSES)))
     return os_name in names
 
 

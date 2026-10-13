@@ -1,4 +1,4 @@
-name: hook (Kindle x86 hook + injector)
+name: windows hook (Kindle x86 hook + injector)
 
 # Compile-checks the two x86 artifacts kokoro-host injects into Kindle 18632+ to force the
 # Kokoro voice: kokoro_hook.dll (patches ISpVoice::SetVoice) and kokoro-inject.exe (the
@@ -7,10 +7,15 @@ name: hook (Kindle x86 hook + injector)
 
 on:
   push:
-    paths: ['kokoro-hook/**', 'kokoro-inject/**', '.github/workflows/hook.yml']
+    paths: ['kokoro-hook/**', 'kokoro-inject/**', '.github/workflows/windows-hook.yml']
   pull_request:
-    paths: ['kokoro-hook/**', 'kokoro-inject/**', '.github/workflows/hook.yml']
+    paths: ['kokoro-hook/**', 'kokoro-inject/**', '.github/workflows/windows-hook.yml']
   workflow_dispatch:
+
+# Read-only: nothing here writes to the repository, and the build runs third-party build
+# scripts that should not hold a token that could.
+permissions:
+  contents: read
 
 jobs:
   build:

@@ -1,31 +1,35 @@
-# packaging — the NSIS installer and the Linux .deb
+# packaging — the NSIS installer and the Linux packages
 
-One script, two packages. On Windows it builds `kokoro-kindle-reader-X.Y.Z-setup.exe`
-(**standalone NSIS** via `makensis` — *not* a Tauri bundler); on Linux,
-`kokoro-kindle-reader_X.Y.Z_amd64.deb` (`dpkg-deb`). The platform facts live in the `PROFILES`
-table in `build_installer.py`; everything else is the same code — see
-[The Linux package](#the-linux-package-deb) for what differs. The directory says the same
-thing: files only one platform's package uses live under `windows/` and `linux/`, and
-everything at the root is shared.
+One script, three packages. On Windows it builds `kokoro-kindle-reader-X.Y.Z-setup.exe`
+(**standalone NSIS** via `makensis` — *not* a Tauri bundler); on Debian/Ubuntu,
+`kokoro-kindle-reader_X.Y.Z_amd64.deb` (`dpkg-deb`); on Arch,
+`kokoro-kindle-reader-X.Y.Z-1-x86_64.pkg.tar.xz` (`makepkg`). The platform facts live in the
+`PROFILES` table in `build_installer.py`, and which packager runs is
+`target_platform.package_format()`; everything else is the same code — see
+[The Linux packages](#the-linux-packages-deb-and-arch) for what differs. The directory says
+the same thing: files only one platform's packages use live under `windows/` and `linux/`,
+and everything at the root is shared.
 
 ```powershell
 python packaging\build_installer.py          # Windows
-python3 packaging/build_installer.py          # Linux
+python3 packaging/build_installer.py          # Linux: a .deb or an Arch package, by distribution
 ```
 
-CI runs this on a `v*` tag or manual dispatch (`.github/workflows/installer.yml`), on Windows
-only. Its Actions artifact always carries the setup.exe and corresponding-source archive
-together; a tag also drafts a GitHub Release with both attached — see
-[`../DEVELOPMENT.md`](../DEVELOPMENT.md). The `.deb` is built locally and is not a release
-artifact yet.
+CI runs this on a `v*` tag, on pushes to main that touch the installer's inputs, and on manual
+dispatch (`.github/workflows/windows-installer.yml`), on Windows. Its Actions artifact always
+carries the setup.exe and corresponding-source archive together; only a tag also drafts a
+GitHub Release with both attached — see
+[`../DEVELOPMENT.md`](../DEVELOPMENT.md). The Linux packages are built and verified in CI
+(`debian-installer.yml`, `arch-installer.yml`) and uploaded with their own source archives;
+they are not attached to releases yet.
 
 ## Layout
 
 | File | What |
 |---|---|
-| `build_installer.py` | Release-builds the profile's crates (both x64 exes and the three x86 artifacts on Windows; the host alone on Linux), records source/toolchain provenance, stages everything into `staging\<os>\`, then runs the profile's packager: `makensis`, or `dpkg-deb`. `--skip-build` accepts only matching recorded outputs. |
+| `build_installer.py` | Release-builds the profile's crates (both x64 exes and the three x86 artifacts on Windows; the host alone on Linux), records source/toolchain provenance, stages everything into `staging\<os>\`, then runs this machine's packager: `makensis`, `dpkg-deb`, or `makepkg`. `--skip-build` accepts only matching recorded outputs. |
 | `windows/installer.nsi` | The NSIS script: install/uninstall sections, the elevation hooks, the Run value, the model-deletion prompt. Carries the product `VERSION`. Its paths are relative to `windows/` (`..\staging\windows`, and the `-setup.exe` written to `..\dist`), because `makensis` compiles from the script's own directory. |
-| `linux/` | Data files only the `.deb` carries: the systemd user unit, `README.Debian`, and the Debian `copyright` pointer. `build_installer.py` renders them with LF whatever the checkout did. |
+| `linux/` | Data files only the Linux packages carry: the systemd user unit, the `README` (first-run steps), and the `copyright` pointer. `build_installer.py` renders them with LF whatever the checkout did. |
 | `generate_dependency_licenses.py` | Runs `cargo about --locked` against each shipped crate's `Cargo.lock` and appends exact packaged licence files and source copyright headers; called automatically by `build_installer.py`. Needs `cargo install cargo-about --locked --features cli` once. |
 | `about.toml`, `about.hbs` | `cargo-about`'s config (the accepted-licence list; `GPL-3.0-only` granted per-crate to Slint only) and output template. |
 | `verify_dependency_licenses.py`, `test_dependency_licenses.py` | Verify every appendix text hash and block count, plus clarification/embedded-source hashes per crate/version (also inside the extracted installer); 27 offline regression fixtures, run in CI by `license-check.yml`. |
@@ -33,10 +37,10 @@ artifact yet.
 | `components.toml` | Checked-in inventory of every **non-Cargo** component (the toolchain-supplied Rust Standard Library, shipped native DLLs, compiled-in SVGs, NSIS stub, plus the not-shipped downloaded assets — OCR + voice models — for attribution): origin, version/revision, SHA-256, SPDX, notice files, modification status. |
 | `verify_component_hashes.py` | Re-hashes the in-repo assets `components.toml` pins by SHA-256 (the five Material Symbols SVGs compiled into `kokoro-panel.exe`) and fails if any drifted — the in-repo half of provenance; `verify_installer_notices.py` covers the shipped side. Those digests are byte-exact against LF, which `kokoro-panel/ui/*.svg text eol=lf` in `.gitattributes` is what makes reproducible off this machine. Run by `license-check.yml`. |
 | `license-texts.sha256`, `verify_license_texts.py` | Reviewed SHA-256s for the shipped checked-in notice/licence files, normalized across CRLF/LF, plus the fail-closed verifier used by CI, the installer build, and the extraction test. |
-| `verify_installer_notices.py` | Extracts the built package — a `-setup.exe` with 7-Zip, a `.deb` in pure Python — derives exact component notice paths from `components.toml` for the platform that package is for (a component's `platforms` field), and fails if any is missing or empty. A CI step in `installer.yml` runs it after the build; run manually anytime. |
-| `build_corresponding_source.py` | Builds `corresponding-source-<version>.zip` (GPLv3 §6 plus NSIS/LZMA CPL source) for attaching to a Windows release. Refuses to run on Linux: there is no archive for the `.deb` yet. |
+| `verify_installer_notices.py` | Extracts the built package — a `-setup.exe` with 7-Zip, a `.deb` or an Arch `.pkg.tar.xz` in pure Python — derives exact component notice paths from `components.toml` for the platform that package is for (a component's `platforms` field), and fails if any is missing or empty. A CI step in `windows-installer.yml`, `debian-installer.yml` and `arch-installer.yml` runs it after the build; run manually anytime. |
+| `build_corresponding_source.py` | Builds the GPLv3 §6 corresponding-source archive for the package THIS machine builds, from its own staging tree and provenance: `corresponding-source-<version>.zip` for the Windows installer (with the NSIS/LZMA CPL source), `-debian.zip` / `-arch.zip` for the Linux packages. Run it after the package build; each installer workflow does. |
 | `staging\windows\`, `staging/linux/` | Build output — everything that goes into that platform's package, plus the `provenance/` the source archive is built from. One tree per OS, so building on one never wipes the other's (this checkout can be built from both sides of a dual-boot). Regenerated by `build_installer.py`. |
-| `dist\` | The release artifacts and nothing else: the `-setup.exe` or `.deb`, and `corresponding-source-<version>.zip` beside it. Not tracked; CI uploads from here. |
+| `dist\` | The release artifacts and nothing else: the `-setup.exe`, `.deb` or `.pkg.tar.xz`, and its own `corresponding-source-<version>[-debian\|-arch].zip` beside it. Not tracked; CI uploads each package with its archive from here. |
 | `dependency-licenses\` | Output of `generate_dependency_licenses.py` — provisioned, not tracked (like `native-deps\windows\runtime\notices\`). |
 
 **The four licence-notice scripts above are Python now, and the coupling that made them one
@@ -81,7 +85,7 @@ python packaging\build_installer.py
 
 Each script had a `.ps1` harness beside it for a while, which resolved an interpreter and
 forwarded flags. They held no logic, so they were removed rather than kept as a second set
-of entry points; `installer.yml`, `license-check.yml` and a local build all call the `.py`
+of entry points; `windows-installer.yml`, `license-check.yml` and a local build all call the `.py`
 now. The consequence is that **Python 3 must be on `PATH`** - nothing goes looking for it.
 If a `py`/`python`/`python3` on Windows looks like a 0-byte file, that is an App Execution
 Alias and it works: judge one by running it, never by its size.
@@ -95,10 +99,11 @@ instead of `certifi` or `truststore`.
 
 `target_platform.py` holds what genuinely differs by platform - OS and architecture
 detection, the Rust target triple, the executable suffix, the release package format - and
-`build_installer.py`'s `PROFILES` holds the rest: which runtime libraries ship, which extra
-client artifacts exist, which packager runs. Only the Windows rows are populated, and an
-unknown platform raises rather than falling through to them. Adding the Linux release is
-adding rows, not a second script.
+`build_installer.py`'s `PROFILES` holds the rest: which runtime libraries ship and which extra
+client artifacts exist. Which packager runs is `target_platform.package_format()`'s, because
+on Linux it depends on the distribution rather than the platform. An unknown platform or
+distribution family raises rather than falling through to another's. Adding a package format
+is adding rows and a packager, not a second script.
 
 **The port was accepted on evidence, not on the scripts running.** A full PowerShell
 installer build and a Python `--skip-build` over the same tree produced **byte-identical
@@ -203,7 +208,7 @@ Unicode Character Database data in `espeak-ng-data\`, a different document from 
 `unicode-ident` crate's licence. The installer/uninstaller stub is NSIS compressed with LZMA
 (`SetCompressor /SOLID lzma`), so this script stages NSIS's own `COPYING` (zlib + bzip2 +
 CPL-1.0-with-linking-exception) from the installed toolchain to `licenses\nsis\`; NSIS is
-**pinned** in `installer.yml` so that text matches the version used. Both stagers **throw**
+**pinned** in `windows-installer.yml` so that text matches the version used. Both stagers **throw**
 when the text is absent. The espeak cache marker includes `build-espeak.py`'s normalized
 SHA-256, so any patch/build-recipe change forces a rebuild; its build-time source manifest
 must match the tree placed in the corresponding-source archive. `build_installer.py` also
@@ -232,7 +237,7 @@ manifest recorded when the binaries were built; `--skip-build` also checks both 
 hashes, since a standalone build can overwrite them without updating the records. The
 source packager uses the records frozen under `staging/windows/provenance/`, including espeak's
 source manifest, rather than a later provision or build's records. A tag requires a clean matching source tag; a
-manual run marks the archive non-release. `installer.yml` pairs it with the installer in the
+manual run marks the archive non-release. `windows-installer.yml` pairs it with the installer in the
 Actions artifact, and a tag also attaches both to the release. `components.toml` is the
 checked-in inventory of every non-Cargo shipped component; [`../LICENSING.md`](../LICENSING.md)
 is the authoritative per-artifact map.
@@ -248,59 +253,85 @@ Nor may any shipped artifact claim plain "MIT" in its version resource — that'
 `kokoro-panel/build.rs`, which is what Windows shows in each exe's Properties dialog. See
 [`../THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md).
 
-## The Linux package (.deb)
+## The Linux packages (.deb and Arch)
 
 ```bash
 python3 native-deps/fetch-deps.py        # once: the Linux runtime tree
-python3 packaging/build_installer.py     # -> packaging/dist/kokoro-kindle-reader_X.Y.Z_amd64.deb
+python3 packaging/build_installer.py     # Debian/Ubuntu -> packaging/dist/kokoro-kindle-reader_X.Y.Z_amd64.deb
+                                         # Arch -> packaging/dist/kokoro-kindle-reader-X.Y.Z-1-x86_64.pkg.tar.xz
 python3 packaging/verify_installer_notices.py
-sudo apt install ./packaging/dist/kokoro-kindle-reader_X.Y.Z_amd64.deb
+python3 packaging/build_corresponding_source.py --allow-uncommitted   # no flag on a clean release tag
+sudo apt install ./packaging/dist/kokoro-kindle-reader_X.Y.Z_amd64.deb                # Debian/Ubuntu
+sudo pacman -U ./packaging/dist/kokoro-kindle-reader-X.Y.Z-1-x86_64.pkg.tar.xz        # Arch
 ```
 
-Needs `dpkg-dev` and `cargo-about` (`./doctors/doctor.sh` checks both). The staging tree,
-`staging/linux/`, has the same flat layout as the Windows installer's; `package_deb` lays it
-out as:
+Which one is built is the distribution's family, from os-release: `ID`, then each `ID_LIKE`
+entry, so Ubuntu and Mint build a `.deb` and Manjaro an Arch package. Any other family raises:
+a package for a package manager the machine may not have is one nobody checked. Needs
+`cargo-about`, plus `dpkg-dev` for the `.deb` or `base-devel` for Arch (`./doctors/doctor.sh`
+checks the right one). **On Arch, build as a regular user** — makepkg refuses root, and the
+build says so before compiling anything.
+
+The staging tree, `staging/linux/`, has the same flat layout as the Windows installer's, and
+both packages wrap that one tree. `lay_out_linux` places it as:
 
 | In the package | What |
 |---|---|
 | `/usr/lib/kokoro-kindle-reader/` | the staged tree verbatim: `kokoro-host`, the three libraries it opens (`libonnxruntime.so`, `libonnxruntime_providers_shared.so`, `libespeak-ng.so.1`), `espeak-ng-data/`, the licence tree, and `tools/` + the two manifests |
 | `/usr/bin/kokoro-host`, `/usr/bin/kokoro-fetch-models` | relative links into the app dir |
 | `/usr/lib/systemd/user/kokoro-host.service` | opt-in: `systemctl --user enable --now kokoro-host` |
-| `/usr/share/doc/kokoro-kindle-reader/` | `README.Debian` (first-run steps) and `copyright` |
+| `/usr/share/doc/kokoro-kindle-reader/README` | first-run steps (the unit's `Documentation=`) |
+| `copyright` | the licence pointer: `/usr/share/doc/kokoro-kindle-reader/` in the `.deb`, `/usr/share/licenses/kokoro-kindle-reader/` in the Arch package, where each distribution looks |
 
 The libraries sit in a **private** directory, found through the `$ORIGIN` rpath `build.rs`
-sets, never on the system library path. Ubuntu may already have its own `libespeak-ng1`
-installed; it is unmodified and would change the phonemes with no error. A real `exec`
-resolves `$ORIGIN` through `/proc/self/exe`, so the `/usr/bin` link finds the bundled copy.
+sets, never on the system library path. The distribution may already have its own installed
+(`libespeak-ng1` on Ubuntu, `espeak-ng` on Arch); it is unmodified and would change the
+phonemes with no error. A real `exec` resolves `$ORIGIN` through `/proc/self/exe`, so the `/usr/bin` link finds the bundled copy.
 **`ldd /usr/bin/kokoro-host` does not**: it takes `$ORIGIN` from the link's own directory and
 reports the system copy. That is `ldd` misleading you, not the loader — check
 `/proc/<pid>/maps` of a running host, or `ldd` the real path in the app dir.
 
-Differences from the Windows package, each deliberate:
+Differences from the Windows package, each deliberate, and the same for both Linux packages
+unless it says otherwise:
 
 - **The host alone.** The panel does not build for Linux, and the Kindle clients are
   Windows's by nature. So nothing downloads the models, and the package ships
   `native-deps/fetch-model.py` as `kokoro-fetch-models`. It fetches the voice model and the
   OCR models into `~/.local/share/kokoro-kindle-reader/` — the panel's first-run download,
   without the panel.
-- **`Depends:` is derived, not written.** `dpkg-shlibdeps` reads every ELF in the package
-  (found by magic, not listed), plus `python3` for the fetcher.
+- **The dependency list is derived, not written.** Every ELF in the package is asked (found
+  by magic, not listed). For the `.deb`, `dpkg-shlibdeps` reads them, plus `python3` for the
+  fetcher. For Arch, `pacman_depends` takes each ELF's `NEEDED` libraries, drops the ones the
+  package ships itself (by file name or `SONAME`), resolves the rest through `ldconfig -p` to a
+  file and through `pacman -Qqo` to the package that owns it, plus `python`. A library that
+  resolves to nothing fails the build.
+- **The Arch PKGBUILD is generated, and only copies.** `build_installer.py` has staged and laid
+  out every file before makepkg runs; `package()` copies the tree in, and makepkg contributes
+  the metadata (`.PKGINFO`, `.BUILDINFO`, `.MTREE`). `!strip`, `!debug` and no tidying, so the
+  provisioned ONNX Runtime and espeak-ng ship byte for byte; `!autodeps`, because the
+  dependencies are derived above and nothing here is a library for other packages. Every
+  makepkg location points into a temp dir, so the user's `makepkg.conf` decides none of it.
 - **Modes are set, then re-read.** This checkout can live on NTFS, where every file reads
-  0777, and `dpkg-deb` records what it finds. So the tree is laid out in a temp dir, set to
-  0755/0644 explicitly and checked; a filesystem that ignored `chmod` fails the build.
-- **xz, not dpkg's zstd default**, so `verify_installer_notices.py` can open the package with
-  Python's `tarfile` on any machine.
+  0777, and both packagers record what they find. So the tree is laid out in a temp dir, set
+  to 0755/0644 explicitly and checked; a filesystem that ignored `chmod` fails the build.
+- **xz, not the packagers' zstd defaults**, so `verify_installer_notices.py` can open either
+  package with Python's `tarfile` on any machine. On Windows `tarfile` cannot create the
+  `/usr/bin` symlinks and writes copies of their targets instead, so the verifier skips
+  symlinks; otherwise the copy of `kokoro-host` in `/usr/bin` would anchor the install root.
 - **No `legal.html`.** It is the Windows tray's About page, its links name the panel, the x86
   clients and the NSIS stub, and nothing on Linux opens it. It is pinned content, so it is
   left out rather than edited. That is declared twice, so neither side can drift alone:
   `legal_page` in the profile, and `OMITTED` in the verifier.
-- **No packager licence.** NSIS writes its own stub into every `-setup.exe`; `dpkg-deb`
-  contributes no code to a `.deb`.
-- **No corresponding-source archive yet.** `build_corresponding_source.py` describes the
-  Windows installer and refuses to run here. Until it has a Linux branch, a `.deb` must not be
-  conveyed to anyone without pairing it with source (see `THIRD_PARTY_NOTICES.md`).
-- **No maintainer scripts.** The package enables nothing and downloads nothing at install
-  time; the user runs both steps as themselves, because both are per-user.
+- **No packager licence.** NSIS writes its own stub into every `-setup.exe`; `dpkg-deb` and
+  `makepkg` contribute no code to their packages.
+- **Its own corresponding-source archive.** `build_corresponding_source.py` builds
+  `corresponding-source-<version>-debian.zip` or `-arch.zip` from this machine's build, with
+  the same project, espeak-ng and Rust Standard Library source as the Windows archive and no
+  NSIS source. Like the Windows one it needs `rust-src` and an LFS-resolved checkout, and it
+  refuses a release build from a dirty or untagged tree. A Linux package is never conveyed
+  without it (see `THIRD_PARTY_NOTICES.md`).
+- **No maintainer or install scripts.** The package enables nothing and downloads nothing at
+  install time; the user runs both steps as themselves, because both are per-user.
 
 On a checkout built from both OSes (a dual-boot drive), nothing one platform's build writes
 is read by the other's. Each stages into its own `staging/<os>/`, so a Linux build leaves

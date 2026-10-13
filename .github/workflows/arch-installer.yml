@@ -1,0 +1,132 @@
+name: arch installer (Linux host build + .pkg.tar.xz)
+
+# The Arch Linux package, built natively on Arch: the same fetch-deps.py provisioning and the
+# same build_installer.py as the .deb (debian-installer.yml), which picks the makepkg packager
+# from os-release. The binaries are built HERE rather than borrowed from the Ubuntu job:
+# makepkg is an Arch tool, and building on the distribution the package is for is what pins
+# its glibc floor to Arch's rather than to whatever the Ubuntu runner happened to have.
+#
+# The host's unit tests and the start-and-probe check live in debian-installer.yml and are not
+# repeated: the source is the same, and this job's question is whether the PACKAGE builds.
+#
+# It then builds the package's own corresponding-source archive and uploads the two together:
+# the package links modified espeak-ng (GPL), so it never leaves CI without that source.
+#
+# makepkg refuses to run as root and a container job runs as root, so everything from
+# provisioning on runs as an unprivileged `builder` (the `as-builder` wrapper below).
+
+on:
+  push:
+    paths:
+      - 'kokoro-host/**'
+      - 'kokoro-ocr/**'
+      - 'kokoro-protocol/**'
+      - 'native-deps/*.py'
+      # What the package build reads beyond the host: the packaging scripts and Linux data,
+      # the shipped licence texts, and the manifests fetch-model.py ships beside it.
+      - 'packaging/**'
+      - '!packaging/windows/**'
+      - 'licenses/**'
+      - 'LICENSE'
+      - 'THIRD_PARTY_NOTICES.md'
+      - 'model-manifest.json'
+      - 'ocr-manifest.json'
+      - '.github/workflows/arch-installer.yml'
+  pull_request:
+    paths:
+      - 'kokoro-host/**'
+      - 'kokoro-ocr/**'
+      - 'kokoro-protocol/**'
+      - 'native-deps/*.py'
+      - 'packaging/**'
+      - '!packaging/windows/**'
+      - 'licenses/**'
+      - 'LICENSE'
+      - 'THIRD_PARTY_NOTICES.md'
+      - 'model-manifest.json'
+      - 'ocr-manifest.json'
+      - '.github/workflows/arch-installer.yml'
+  workflow_dispatch:
+
+# Read-only: nothing here writes to the repository, and the build runs third-party build
+# scripts that should not hold a token that could.
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # Arch is rolling, so there is no version to pin: this is the Arch a user installing the
+    # package today has. base-devel brings makepkg, fakeroot, gcc, make and binutils (readelf).
+    container: archlinux:base-devel
+    steps:
+      # Before checkout, because actions/checkout falls back to a REST download without git -
+      # and build_installer.py records provenance with `git ls-files`, which needs a real
+      # clone. cmake + the C toolchain build espeak-ng from source, as on Ubuntu; rustup
+      # provides cargo. git-lfs because the checkout resolves LFS files for the
+      # corresponding-source archive, for the reason debian-installer.yml gives.
+      - name: Install build tools
+        run: |
+          pacman -Syu --noconfirm --needed git git-lfs cmake python rustup
+          useradd --create-home builder
+          printf '#!/bin/sh\nexec runuser -u builder -- env HOME=/home/builder PATH="/home/builder/.cargo/bin:$PATH" "$@"\n' > /usr/local/bin/as-builder
+          chmod 0755 /usr/local/bin/as-builder
+
+      - uses: actions/checkout@v7
+        with:
+          lfs: true
+
+      # The checkout ran as root; the build runs as builder and writes into the tree.
+      - name: Hand the checkout to the build user
+        run: chown -R builder:builder "$GITHUB_WORKSPACE"
+
+      # rust-src: the source archive carries the exact standard-library source linked in.
+      - name: Install the Rust toolchain
+        run: as-builder sh -c 'rustup set profile minimal && rustup default stable && rustup component add rust-src'
+
+      - name: Provision native dependencies
+        run: as-builder python native-deps/fetch-deps.py
+
+      # build_installer.py -> generate_dependency_licenses.py THROWS without it. Pinned to
+      # match windows-installer.yml.
+      - name: Install cargo-about (pinned)
+        run: as-builder cargo install cargo-about --version 0.9.1 --locked --features cli
+
+      # Release-builds the host, stages it with the provisioned runtime and the notice tree,
+      # derives `depends` from the binaries, and has makepkg pack it into packaging/dist/.
+      - name: Build the Arch package
+        run: as-builder python packaging/build_installer.py
+
+      # Opens the built package (in pure Python) and fails if any notice the Linux rows of
+      # components.toml require is missing or empty - the GPL text must ship WITH the binary.
+      - name: Verify the package's notices
+        run: as-builder python packaging/verify_installer_notices.py
+
+      # The package's own metadata, so a wrong depends or a missing file is readable in the
+      # log without downloading the artifact.
+      - name: Show the package
+        run: |
+          pkg="$(ls packaging/dist/*.pkg.tar.xz)"
+          pacman -Qip "$pkg"
+          pacman -Qlp "$pkg"
+
+      # Complete corresponding source (GPLv3 section 6) for this package, from this job's own
+      # build and provenance - the strict release proof on a v* tag, a NON-RELEASE-stamped
+      # archive otherwise, since the upload below conveys the package either way.
+      - name: Build corresponding source (release)
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: as-builder python packaging/build_corresponding_source.py
+
+      - name: Build corresponding source (non-release)
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        run: as-builder python packaging/build_corresponding_source.py --allow-uncommitted
+
+      # Never the package alone: it and its source travel as one artifact.
+      - name: Upload package + corresponding source
+        uses: actions/upload-artifact@v7
+        with:
+          name: kokoro-kindle-reader-arch-bundle
+          path: |
+            packaging/dist/*.pkg.tar.xz
+            packaging/dist/corresponding-source-*-arch.zip
+          if-no-files-found: error

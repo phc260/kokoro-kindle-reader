@@ -185,7 +185,7 @@ under `native-deps/`. That is where a **release** `kokoro-host` looks (`boot` in
 **It exists for Linux.** On Windows the settings panel downloads both at first run and
 remains the normal route. The panel does not build for Linux yet (the port plan's
 desktop-integration step), so without this a Linux host starts, logs `model.onnx not found`,
-synthesizes nothing and answers `/ocr` with `missing`. That is why the Linux `.deb` **ships
+synthesizes nothing and answers `/ocr` with `missing`. That is why both Linux packages **ship
 this script** as `kokoro-fetch-models`, with the two manifests beside it in the same relative
 layout, so it is no longer dev-only. It works on Windows too, and its `--verify-only` is the
 panel's **Verify & repair** without a GUI.

@@ -35,8 +35,8 @@ drift and dependency upgrades that require renewed notice review. Ordinary packa
 and source headers are checked independently of those special requirements, including a
 BOM/CRLF licence, changed text, deleted whole blocks and missing/duplicate inventories.
 It neither builds nor
-runs the application. The licence PR workflow (`license-check.yml`) runs these checks on
-`windows-latest`; normal report generation also verifies all configured upstream text
+runs the application. The licence workflow (`license-check.yml`, on pushes to main and PRs)
+runs these checks on `windows-latest` and `ubuntu-latest`; normal report generation also verifies all configured upstream text
 hashes, as does installer extraction.
 
 ## A standing rule for every fixture here
@@ -277,7 +277,7 @@ x86 crates have at all (none of them carries a `#[test]` suite).
 | `test/capture.check.ts` | Chrome/Chromium/Edge | **Works.** Drives `capture.ts` against a fixture shaped like the measured reader: shadow piercing, candidate scoring, blob-identity page turns, capture while the tab is hidden |
 | `test/ocr-bench.ts` | paired host + `KOKORO_ALLOWED_ORIGINS` | **Works, with setup.** Word error rate over rendered pages with known ground truth, across the matrix that produces silent failures (two-column, dark, non-default font) |
 | `test/ext-ocr.check.ts` | a Chrome that honours `--load-extension` | **Effectively unrunnable** — see below |
-| `kokoro-sapi-smoke` | x86 build; a host only for the `Speak` half | **Works — 12 checks, and the only one of these that CI runs** (`sapi.yml`). `LoadLibrary` + the COM object model + `Speak`, without Kindle or elevation. The 7 COM checks need no host, which is why the hostless runner still catches a vtable/QI regression; the `Speak` half self-SKIPs there - after `RECOVER_WINDOW` (15 s) of re-attempts, so a hostless run takes that long; start a host inside the window and the same run narrates instead |
+| `kokoro-sapi-smoke` | x86 build; a host only for the `Speak` half | **Works — 12 checks, and the only one of these that CI runs** (`windows-sapi.yml`). `LoadLibrary` + the COM object model + `Speak`, without Kindle or elevation. The 7 COM checks need no host, which is why the hostless runner still catches a vtable/QI regression; the `Speak` half self-SKIPs there - after `RECOVER_WINDOW` (15 s) of re-attempts, so a hostless run takes that long; start a host inside the window and the same run narrates instead |
 | `kokoro-hook --bin selftest` | Kokoro registered; x86 build | Works. Guards the `SetVoice` vtable index (slot 18) without Kindle |
 | `kokoro-sapi/test-speak.ps1` | 32-bit PowerShell, host running, DLL registered | Works. The SAPI-registered path end to end |
 
@@ -287,12 +287,13 @@ x86 crates have at all (none of them carries a `#[test]` suite).
 
 Recorded here rather than left implicit.
 
-### The browser suite runs nowhere in CI; the two Rust suites now run on `linux.yml`
+### The browser suite runs nowhere in CI; the two Rust suites now run on `debian-installer.yml`
 
-`installer.yml` (builds the package on a `v*` tag or manual dispatch), `license-check.yml`
-(runs the Cargo licence gate plus component/notice integrity checks), `sapi.yml` (builds the
-x86 DLL and runs the COM smoke test), and `hook.yml` (compile-checks the x86 hook and
-injector) run none of the 246 tests above. `linux.yml` is the exception: as a side effect of
+`windows-installer.yml` (builds the package on a `v*` tag, a push to main touching its inputs, or manual dispatch), `license-check.yml`
+(runs the Cargo licence gate plus component/notice integrity checks), `windows-sapi.yml` (builds the
+x86 DLL and runs the COM smoke test), and `windows-hook.yml` (compile-checks the x86 hook and
+injector) and `arch-installer.yml` (builds and verifies the Arch package) run none of the 246
+tests above. `debian-installer.yml` is the exception: as a side effect of
 proving the Ubuntu build actually links and runs, it runs `cargo test --manifest-path
 kokoro-host/Cargo.toml` and `cargo test --manifest-path kokoro-ocr/Cargo.toml` on every push
 that touches `kokoro-host/**`, `kokoro-ocr/**`, `kokoro-protocol/**`, or `native-deps/*.py` —

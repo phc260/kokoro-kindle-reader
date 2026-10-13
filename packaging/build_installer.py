@@ -5,16 +5,19 @@ then hand the staging tree to the platform's packager.
     python3 packaging/build_installer.py              # full: build + stage + package
     python3 packaging/build_installer.py --skip-build # reuse existing release binaries
 
-Output, per platform:
-    Windows: packaging/dist/kokoro-kindle-reader-<version>-setup.exe   (NSIS)
-    Linux:   packaging/dist/kokoro-kindle-reader_<version>_amd64.deb   (dpkg-deb)
+Output, per package format:
+    Windows:       packaging/dist/kokoro-kindle-reader-<version>-setup.exe              (NSIS)
+    Debian/Ubuntu: packaging/dist/kokoro-kindle-reader_<version>_amd64.deb              (dpkg-deb)
+    Arch Linux:    packaging/dist/kokoro-kindle-reader-<version>-1-x86_64.pkg.tar.xz    (makepkg)
 
 **The logic here is platform-agnostic; the platform-specific facts are the `PROFILES`
-table.** Which binaries and runtime libraries ship, what the extra client artifacts are,
-which packager turns a staging tree into an installable file - those differ. The order of
-operations, the provenance contract, the notice staging and every fail-closed check do not.
-Both platforms stage the same flat app directory, each into its own staging/<os>/; only
-the last step differs, and that is the `PACKAGERS` dispatch at the bottom.
+table.** Which binaries and runtime libraries ship, what the extra client artifacts are -
+those differ per platform. Which packager turns the staging tree into an installable file
+differs per DISTRIBUTION on Linux, so it is not a profile field: `target_platform.
+package_format()` picks it, and the .deb and the Arch package wrap the same Linux tree. The
+order of operations, the provenance contract, the notice staging and every fail-closed check
+do not differ at all. Every platform stages the same flat app directory, each into its own
+staging/<os>/; only the last step differs, and that is the `PACKAGERS` dispatch at the bottom.
 """
 
 import argparse
@@ -22,6 +25,7 @@ import hashlib
 import os
 import re
 import runpy
+import shlex
 import shutil
 import stat
 import subprocess
@@ -60,7 +64,6 @@ WINDOWS = {
     "app_files": {"icon.ico": ROOT / "icons" / "icon.ico"},
     # legal.html: the About page the tray and Settings open (legal.rs).
     "legal_page": True,
-    "packager": "nsis",
 }
 
 LINUX = {
@@ -92,7 +95,6 @@ LINUX = {
     # content, so it is left out rather than edited; verify_installer_notices.OMITTED
     # records the same decision on the checking side.
     "legal_page": False,
-    "packager": "deb",
 }
 
 PROFILES = {"windows": WINDOWS, "linux": LINUX}
@@ -105,7 +107,7 @@ NSIS_EXE = Path(r"C:\Program Files (x86)\NSIS\makensis.exe")
 # Each platform's packaging data lives in packaging/<os>/; everything at packaging/'s root is
 # shared. The script's paths are relative to its own directory, which makensis changes into.
 NSIS_SCRIPT = HERE / "windows" / "installer.nsi"
-DEB_DATA_DIR = HERE / "linux"
+LINUX_DATA_DIR = HERE / "linux"
 
 # .NET's File.WriteAllLines uses Environment.NewLine and appends one after the last line.
 # The provenance records are build-local, never shipped and never compared across machines,
@@ -120,7 +122,13 @@ def profile():
     if p is None:
         raise Fail("No installer profile for %s; add a row to PROFILES rather than letting "
                    "this fall through to another platform's." % os_name)
-    return dict(p, os=os_name)
+    try:
+        fmt = target_platform.package_format()
+    except RuntimeError as e:
+        raise Fail(str(e))
+    if target_platform.PACKAGE_FORMATS[fmt]["os"] != os_name:
+        raise Fail("Package format %s does not carry the %s tree." % (fmt, os_name))
+    return dict(p, os=os_name, packager=fmt)
 
 
 def ort_provision_expected(os_name):
@@ -150,7 +158,7 @@ def spawn(cmd, **kwargs):
             raise
         raise Fail("Windows blocked %s from running: an Application Control policy, usually "
                    "Smart App Control, which blocks unsigned executables (doctors\\doctor.cmd "
-                   "reports it). Build the installer in CI (installer.yml) instead, or turn "
+                   "reports it). Build the installer in CI (windows-installer.yml) instead, or turn "
                    "Smart App Control off in Windows Security - it cannot be turned back on."
                    % cmd[0]) from None
 
@@ -350,6 +358,29 @@ def check_deb():
         found = shutil.which(name)
         if not found:
             raise Fail("%s not found - install %s (sudo apt install %s)." % (name, pkg, pkg))
+        tools[name] = found
+    return {"tool": tools, "notices": {}}
+
+
+def check_pacman():
+    """makepkg builds the package and writes its metadata (.PKGINFO, .BUILDINFO, .MTREE);
+    readelf, ldconfig and pacman are how `depends` is read off the binaries, the role
+    dpkg-shlibdeps plays for the .deb. Unpinned for the same reason as dpkg: makepkg puts
+    no code of its own into the package.
+
+    makepkg refuses to run as root, and finding that out after a release build is a waste
+    of the build - so it is checked here, before anything compiles.
+    """
+    print("==> Checking the Arch Linux packaging tools")
+    if os.geteuid() == 0:
+        raise Fail("makepkg refuses to run as root. Run the build as a regular user.")
+    tools = {}
+    for name, pkg in (("makepkg", "pacman"), ("readelf", "binutils"),
+                      ("ldconfig", "glibc"), ("pacman", "pacman")):
+        found = shutil.which(name)
+        if not found:
+            raise Fail("%s not found - install %s (sudo pacman -S --needed %s; base-devel "
+                       "has all of them)." % (name, pkg, pkg))
         tools[name] = found
     return {"tool": tools, "notices": {}}
 
@@ -590,40 +621,50 @@ def copy_tree_contents(src, dest):
 def package_nsis(stage, packager):
     print("==> makensis")
     run([packager["tool"], NSIS_SCRIPT], what="makensis failed")
-    built = sorted(target_platform.DIST_DIR.glob(target_platform.package_glob("windows")),
+    built = sorted(target_platform.DIST_DIR.glob(target_platform.package_glob("nsis")),
                    key=lambda p: p.stat().st_mtime, reverse=True)
     if not built:
         raise Fail("makensis produced no installer.")
     return built[0]
 
 
-DEB_PACKAGE = "kokoro-kindle-reader"
+PACKAGE_NAME = "kokoro-kindle-reader"
+MAINTAINER = "Alan P.H. Chiu <phc260@nyu.edu>"
 # The app dir: the staged tree as-is, so the host finds its libraries through `$ORIGIN` and
 # espeak-ng-data beside `current_exe()` exactly as it does in target/release, and
-# legal.html's relative links resolve. /usr/lib/<package> is Debian's place for a
-# package's private executables and libraries - these must not be on the system library
+# legal.html's relative links resolve. /usr/lib/<package> is where both Debian and Arch put
+# a package's private executables and libraries - these must not be on the system library
 # path, where a distribution's own (unmodified) libespeak-ng would be told apart by nothing.
-DEB_APP_DIR = "usr/lib/%s" % DEB_PACKAGE
+LINUX_APP_DIR = "usr/lib/%s" % PACKAGE_NAME
 # /usr/bin links -> their target inside the app dir. Both resolve to the real file before
 # they look for anything beside themselves (`current_exe()` reads /proc/self/exe; the
 # script resolves `__file__`), so the link is only a name on PATH.
-DEB_COMMANDS = {"kokoro-host": "kokoro-host", "kokoro-fetch-models": "tools/fetch-model.py"}
-# The only files that ship executable. Shared libraries are 0644 in a .deb; everything
-# else is data.
-DEB_EXECUTABLES = ["kokoro-host", "tools/fetch-model.py"]
-# Checked-in data files placed outside the app dir: source in DEB_DATA_DIR -> path in the
-# package. Rendered with LF whatever the checkout did to them - systemd reads a CR as part
-# of the value, and this tree is also checked out on Windows.
-DEB_DATA = {
-    "kokoro-host.service": "usr/lib/systemd/user/kokoro-host.service",
-    "README.Debian": "usr/share/doc/%s/README.Debian" % DEB_PACKAGE,
-    "copyright": "usr/share/doc/%s/copyright" % DEB_PACKAGE,
+LINUX_COMMANDS = {"kokoro-host": "kokoro-host", "kokoro-fetch-models": "tools/fetch-model.py"}
+# The only files that ship executable. Shared libraries are 0644 in both packages;
+# everything else is data.
+LINUX_EXECUTABLES = ["kokoro-host", "tools/fetch-model.py"]
+# Checked-in data files placed outside the app dir, per package format: source in
+# LINUX_DATA_DIR -> path in the package. Rendered with LF whatever the checkout did to them -
+# systemd reads a CR as part of the value, and this tree is also checked out on Windows.
+# The unit and the README sit at the same paths in both (the unit's Documentation= names the
+# README); the copyright pointer goes where each distribution looks for a package's licence.
+LINUX_DATA = {
+    "deb": {
+        "kokoro-host.service": "usr/lib/systemd/user/kokoro-host.service",
+        "README": "usr/share/doc/%s/README" % PACKAGE_NAME,
+        "copyright": "usr/share/doc/%s/copyright" % PACKAGE_NAME,
+    },
+    "pacman": {
+        "kokoro-host.service": "usr/lib/systemd/user/kokoro-host.service",
+        "README": "usr/share/doc/%s/README" % PACKAGE_NAME,
+        "copyright": "usr/share/licenses/%s/copyright" % PACKAGE_NAME,
+    },
 }
 DEB_CONTROL = """\
 Package: %(package)s
 Version: %(version)s
 Architecture: %(arch)s
-Maintainer: Alan P.H. Chiu <phc260@nyu.edu>
+Maintainer: %(maintainer)s
 Installed-Size: %(installed_kib)d
 Depends: %(depends)s
 Section: sound
@@ -636,8 +677,36 @@ Description: Local Kokoro-82M narrator for Kindle Cloud Reader
  .
  After installing, run kokoro-fetch-models, then
  systemctl --user enable --now kokoro-host. See
- /usr/share/doc/kokoro-kindle-reader/README.Debian.
+ /usr/share/doc/kokoro-kindle-reader/README.
 """
+# Not a source PKGBUILD: build_installer.py has already staged and laid out every file, so
+# package() only copies that tree in and makepkg contributes what it is for - the package
+# metadata (.PKGINFO, .BUILDINFO, .MTREE) and the archive.
+PACMAN_PKGBUILD = """\
+# Generated by packaging/build_installer.py - see PACMAN_PKGBUILD there.
+pkgname=%(package)s
+pkgver=%(pkgver)s
+pkgrel=1
+pkgdesc='Local Kokoro-82M narrator for Kindle Cloud Reader (Chrome/Edge extension backend)'
+arch=('%(arch)s')
+url='https://github.com/phc260/kokoro-kindle-reader'
+# What the package as a whole is conveyed under, since its binaries link a modified
+# espeak-ng; the per-component breakdown is THIRD_PARTY_NOTICES.md in the app dir.
+license=('GPL-3.0-only')
+depends=(%(depends)s)
+# Nothing in the tree is touched after it is laid out: the provisioned ONNX Runtime and
+# espeak-ng libraries ship byte for byte (no strip, no split -debug package, no tidying),
+# and no autodeps - depends is read off the binaries by build_installer.py, and nothing
+# here is a library for other packages to depend on.
+options=('!strip' '!debug' '!autodeps' '!purge' '!zipman' '!staticlibs' '!libtool')
+
+package() {
+    cp -a %(root)s/. "$pkgdir"/
+}
+"""
+# The ABI tag `ldconfig -p` prints for this architecture's libraries, so a 32-bit
+# (lib32) copy of a soname is never taken for the one the 64-bit binaries load.
+LDCONFIG_ABI = {"x86_64": "x86-64"}
 
 
 def cargo_version(manifest):
@@ -660,8 +729,8 @@ def normalize_modes(root, executables):
     and then prove the filesystem kept them.
 
     Copied modes cannot be trusted here. This checkout lives on NTFS on a dual-boot
-    machine, where every file reads back 0777, and dpkg-deb records whatever it finds: the
-    package would install world-writable files into /usr/lib (and dpkg-deb refuses a
+    machine, where every file reads back 0777, and both packagers record whatever they find:
+    the package would install world-writable files into /usr/lib (and dpkg-deb refuses a
     DEBIAN/ that is group- or world-writable). A filesystem that ignores chmod would make
     that silent, so the result is re-read rather than assumed.
     """
@@ -702,7 +771,7 @@ def deb_depends(work, root, shlibdeps):
     """
     control = work / "debian" / "control"
     control.write_text("Source: %s\n\nPackage: %s\nArchitecture: any\n"
-                       % (DEB_PACKAGE, DEB_PACKAGE), encoding="ascii")
+                       % (PACKAGE_NAME, PACKAGE_NAME), encoding="ascii")
     elves = [p for p in sorted(root.rglob("*"))
              if p.is_file() and not p.is_symlink() and is_elf(p)]
     proc = subprocess.run([shlibdeps, "-O"] + ["-e%s" % p for p in elves],
@@ -718,30 +787,38 @@ def deb_depends(work, root, shlibdeps):
                % len(elves))
 
 
+def lay_out_linux(stage, root, fmt):
+    """The installed tree under `root`, the same for both Linux packages bar the data-file
+    placement: the staged app dir, the /usr/bin links, and `fmt`'s data files. Returns the
+    app dir. Modes are the caller's to normalize, once any packager-specific directory
+    exists."""
+    app = root / LINUX_APP_DIR
+    shutil.copytree(stage, app,
+                    ignore=lambda d, names: ["provenance"] if Path(d) == stage else [])
+    bindir = root / "usr" / "bin"
+    bindir.mkdir(parents=True)
+    for name, target in LINUX_COMMANDS.items():
+        if not (app / target).is_file():
+            raise Fail("/usr/bin/%s would point at %s, which is not staged." % (name, target))
+        os.symlink(os.path.relpath(app / target, bindir), bindir / name)
+    for src, dest in LINUX_DATA[fmt].items():
+        write_lf(LINUX_DATA_DIR / src, root / dest)
+    return app
+
+
 def package_deb(stage, packager):
     version = cargo_version(ROOT / "kokoro-host" / "Cargo.toml")
-    out = target_platform.DIST_DIR / ("%s_%s_%s.deb" % (DEB_PACKAGE, version, target_platform.deb_arch()))
+    out = target_platform.DIST_DIR / ("%s_%s_%s.deb" % (PACKAGE_NAME, version, target_platform.deb_arch()))
     print("==> dpkg-deb (%s)" % out.name)
 
     # Laid out in a temporary directory rather than under packaging/, for the modes: see
     # normalize_modes.
     work = Path(tempfile.mkdtemp(prefix="kkr-deb-"))
     try:
-        root = work / "debian" / DEB_PACKAGE
-        app = root / DEB_APP_DIR
-        shutil.copytree(stage, app,
-                        ignore=lambda d, names: ["provenance"] if Path(d) == stage else [])
-        bindir = root / "usr" / "bin"
-        bindir.mkdir(parents=True)
-        for name, target in DEB_COMMANDS.items():
-            if not (app / target).is_file():
-                raise Fail("/usr/bin/%s would point at %s, which is not staged."
-                           % (name, target))
-            os.symlink(os.path.relpath(app / target, bindir), bindir / name)
-        for src, dest in DEB_DATA.items():
-            write_lf(DEB_DATA_DIR / src, root / dest)
+        root = work / "debian" / PACKAGE_NAME
+        app = lay_out_linux(stage, root, "deb")
         (root / "DEBIAN").mkdir()
-        normalize_modes(root, [app / e for e in DEB_EXECUTABLES])
+        normalize_modes(root, [app / e for e in LINUX_EXECUTABLES])
 
         # python3 runs kokoro-fetch-models; nothing ELF-shaped says so.
         depends = deb_depends(work, root, packager["tool"]["dpkg-shlibdeps"]) + ["python3"]
@@ -749,7 +826,8 @@ def package_deb(stage, packager):
                         for d, _dirs, files in os.walk(root) for f in files)
         control = root / "DEBIAN" / "control"
         control.write_text(DEB_CONTROL % {
-            "package": DEB_PACKAGE, "version": version, "arch": target_platform.deb_arch(),
+            "package": PACKAGE_NAME, "version": version, "arch": target_platform.deb_arch(),
+            "maintainer": MAINTAINER,
             "installed_kib": (installed + 1023) // 1024, "depends": ", ".join(depends),
         }, encoding="utf-8")
         os.chmod(control, 0o644)
@@ -766,9 +844,119 @@ def package_deb(stage, packager):
     return out
 
 
+def parse_dynamic(text):
+    """(DT_SONAME or None, [DT_NEEDED, ...]) from `readelf --dynamic --wide` output."""
+    soname = re.search(r"\(SONAME\)\s+Library soname: \[([^\]]+)\]", text)
+    needed = re.findall(r"\(NEEDED\)\s+Shared library: \[([^\]]+)\]", text)
+    return (soname.group(1) if soname else None), needed
+
+
+def parse_ldconfig(text, abi):
+    """soname -> path from `ldconfig -p`, for libraries of one ABI only. The first entry
+    wins, which is the one the loader would take."""
+    found = {}
+    for line in text.splitlines():
+        m = re.match(r"\s+(\S+)\s+\(([^)]*)\)\s+=>\s+(\S+)\s*$", line)
+        if m and abi in [t.strip() for t in m.group(2).split(",")]:
+            found.setdefault(m.group(1), m.group(3))
+    return found
+
+
+def pacman_depends(root, tools):
+    """`depends` read off the binaries, as dpkg-shlibdeps does it for the .deb - never
+    written by hand. Every ELF in the package is asked for the libraries it NEEDS, found by
+    its magic rather than listed; those this package ships itself (by file name or SONAME:
+    the host finds them through `$ORIGIN`) are dropped; each of the rest is resolved through
+    the loader's own cache to a file, and that file to the installed package that owns it.
+    A library that cannot be resolved or is owned by nothing fails the build: a package that
+    installs and then cannot start is the failure this exists to prevent.
+    """
+    elves = [p for p in sorted(root.rglob("*"))
+             if p.is_file() and not p.is_symlink() and is_elf(p)]
+    ours, needed = set(), set()
+    for elf in elves:
+        soname, libs = parse_dynamic(capture([tools["readelf"], "--dynamic", "--wide", elf],
+                                             "readelf failed on %s." % elf))
+        ours.add(elf.name)
+        if soname:
+            ours.add(soname)
+        needed.update(libs)
+    arch = target_platform.current_arch()
+    if arch not in LDCONFIG_ABI:
+        raise Fail("No ldconfig ABI tag recorded for %s; add a row to LDCONFIG_ABI." % arch)
+    cache = parse_ldconfig(capture([tools["ldconfig"], "-p"], "ldconfig -p failed."),
+                           LDCONFIG_ABI[arch])
+    owners = set()
+    for lib in sorted(needed - ours):
+        path = cache.get(lib)
+        if path is None:
+            raise Fail("The package needs %s, which the loader's cache has no %s copy of."
+                       % (lib, LDCONFIG_ABI[arch]))
+        owners.add(capture([tools["pacman"], "-Qqo", path],
+                           "No installed package owns %s (needed as %s)." % (path, lib)).strip())
+    if not owners:
+        raise Fail("No shared-library dependencies found for %d binaries." % len(elves))
+    return sorted(owners)
+
+
+def package_pacman(stage, packager):
+    version = cargo_version(ROOT / "kokoro-host" / "Cargo.toml")
+    # pkgver may not contain a hyphen. An underscore keeps a pre-release ordered before its
+    # release: vercmp sorts `0.4.0_rc.1` older than `0.4.0`.
+    pkgver = version.replace("-", "_")
+    if not re.match(r"^[A-Za-z0-9._+]+$", pkgver):
+        raise Fail("%s is not a valid pacman pkgver (from version %s)." % (pkgver, version))
+    name = "%s-%s-1-%s%s" % (PACKAGE_NAME, pkgver, target_platform.pacman_arch(),
+                             target_platform.PACKAGE_FORMATS["pacman"]["suffix"])
+    out = target_platform.DIST_DIR / name
+    print("==> makepkg (%s)" % name)
+
+    # Laid out in a temporary directory rather than under packaging/, for the modes: see
+    # normalize_modes.
+    work = Path(tempfile.mkdtemp(prefix="kkr-pacman-"))
+    try:
+        root = work / "root"
+        app = lay_out_linux(stage, root, "pacman")
+        normalize_modes(root, [app / e for e in LINUX_EXECUTABLES])
+
+        # python runs kokoro-fetch-models; nothing ELF-shaped says so.
+        depends = pacman_depends(root, packager["tool"]) + ["python"]
+        (work / "PKGBUILD").write_text(PACMAN_PKGBUILD % {
+            "package": PACKAGE_NAME, "pkgver": pkgver, "arch": target_platform.pacman_arch(),
+            "depends": " ".join("'%s'" % d for d in depends), "root": shlex.quote(str(root)),
+        }, encoding="utf-8")
+
+        # Every makepkg location points into `work`, so nothing in the user's makepkg.conf
+        # decides where the package lands. xz, named rather than left to makepkg.conf (zstd
+        # on Arch): it is what Python's tarfile opens without a third-party module, and
+        # verify_installer_notices.py unpacks this with nothing else. --nodeps, because
+        # whether this machine has the package's dependencies installed says nothing about
+        # the package.
+        pkgdest = work / "out"
+        pkgdest.mkdir()
+        env = dict(os.environ, PKGDEST=str(pkgdest), BUILDDIR=str(work / "build"),
+                   SRCDEST=str(work / "src"), LOGDEST=str(work / "log"),
+                   PKGEXT=target_platform.PACKAGE_FORMATS["pacman"]["suffix"],
+                   PACKAGER=MAINTAINER)
+        if spawn([packager["tool"]["makepkg"], "--nodeps", "--noconfirm"],
+                 cwd=str(work), env=env).returncode:
+            raise Fail("makepkg failed")
+        built = pkgdest / name
+        if not built.is_file():
+            raise Fail("makepkg produced %s, not %s."
+                       % (", ".join(p.name for p in pkgdest.iterdir()) or "nothing", name))
+        if out.exists():
+            out.unlink()
+        shutil.move(str(built), str(out))
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    return out
+
+
 PACKAGERS = {
     "nsis": {"check": check_nsis, "package": package_nsis},
     "deb": {"check": check_deb, "package": package_deb},
+    "pacman": {"check": check_pacman, "package": package_pacman},
 }
 
 

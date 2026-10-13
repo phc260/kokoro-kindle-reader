@@ -2,8 +2,8 @@
 
 Kokoro Kindle Reader's repository source is MIT-licensed — see [`LICENSE`](LICENSE) —
 apart from a handful of files and assets derived from Apache-2.0 projects, listed below. The
-**distributed binaries** (the Windows `-setup.exe` or the Linux `.deb`, and everything they
-install) additionally bundle third-party components, one of which is copyleft. This file is
+**distributed binaries** (the Windows `-setup.exe` or a Linux package - the `.deb` or the Arch
+`.pkg.tar.xz` - and everything they install) additionally bundle third-party components, one of which is copyleft. This file is
 the notice that accompanies those binaries; the installer places a copy next to the
 application.
 
@@ -88,8 +88,9 @@ notice of record is in the source.
 | **NSIS** (installer/uninstaller stub) | the `-setup.exe` itself + the installed `Uninstall.exe` | NSIS license (zlib/libpng + bzip2 + CPL-1.0-w/-exception for the LZMA module) |
 | **Kokoro-82M** model weights | *not shipped* — downloaded on first run | Apache-2.0 |
 
-**The Linux package** (`kokoro-kindle-reader_X.Y.Z_amd64.deb`) carries a subset of that
-table, under the same terms. It ships `kokoro-host` alone: no settings panel, so no Slint
+**The Linux packages** (`kokoro-kindle-reader_X.Y.Z_amd64.deb` and
+`kokoro-kindle-reader-X.Y.Z-1-x86_64.pkg.tar.xz`, which install the same files) carry a subset
+of that table, under the same terms. It ships `kokoro-host` alone: no settings panel, so no Slint
 and no Material Symbols, and no Kindle clients. It carries the same modified espeak-ng, as
 `libespeak-ng.so.1` and `espeak-ng-data/`, so its binaries are conveyed under GPLv3 for
 that reason alone. Its ONNX Runtime is the **CPU** build, `libonnxruntime.so` and
@@ -432,11 +433,13 @@ The individual upstreams, for reference:
   recorded in the archive's `TOOLCHAIN.txt`. The archive includes that exact toolchain's
   complete `rust-src` `library/` tree rather than relying on the upstream link.
 
-The Linux `.deb` is not yet a release artifact: it is built locally by
-`packaging/build_installer.py`, and no source archive is produced for it. Anyone who conveys
-one must provide the corresponding source themselves. That is this repository at the commit
-it was built from, plus the modified espeak-ng that `native-deps/build-espeak.py` reproduces
-from the same pinned commit.
+The Linux packages have archives of their own, produced by the same script on the machine
+that built the package: **`corresponding-source-X.Y.Z-debian.zip`** for the `.deb` and
+**`corresponding-source-X.Y.Z-arch.zip`** for the Arch package. Each holds the same project
+source, modified espeak-ng tree and Rust Standard Library source, without the NSIS archive
+(no NSIS code is in a Linux package), and a rebuild README for that distribution. The CI
+builds upload each Linux package only together with its archive. The Linux packages are not
+yet attached to releases; anyone who conveys one must convey its archive with it.
 
 The download above satisfies the §6 obligation, so this project makes no separate standing
 written offer of source (§6(b)). If a release's source archive is ever missing or a link is

@@ -24,8 +24,8 @@ limit the whole pass to that one.
    line, and current pin (`git grep -n 'uses:' -- .github/workflows`). Group by action so
    the same action used in multiple workflows is bumped consistently. Today that set is:
    `actions/checkout`, `actions/setup-python`, `Swatinem/rust-cache`,
-   `actions/upload-artifact`, `softprops/action-gh-release`, and the channel-pinned
-   `dtolnay/rust-toolchain@stable` (skip that one).
+   `actions/upload-artifact`, `actions/download-artifact`, `softprops/action-gh-release`,
+   and the channel-pinned `dtolnay/rust-toolchain@stable` (skip that one).
 
 2. **Find the latest release for each.** Fetch `https://github.com/<owner>/<repo>/releases`
    (e.g. `https://github.com/actions/upload-artifact/releases`) and read the newest
@@ -40,10 +40,15 @@ limit the whole pass to that one.
    - **`actions/upload-artifact` v4+** — artifact names must be **unique per run**
      (no re-uploading the same name); output is not mergeable across jobs; needs a
      matching `download-artifact` major if one is used. Verify each workflow uploads a
-     single uniquely-named artifact and has no `download-artifact` consumer.
+     single uniquely-named artifact, and that the one consumer - `windows-installer.yml`'s
+     `release` job, which publishes the bundle its `build` job uploaded - downloads it with
+     a compatible `download-artifact` major (v8 extracts a zipped upload, the default, and
+     skips a non-zip "direct" one).
    - **`actions/checkout` / `setup-python`** — a new major usually bumps the Node runtime
-     and may drop old GHES/runner support; confirm the runners here are `windows-latest`
-     on github.com (fine) and that `lfs: true` / other inputs still exist.
+     and may drop old GHES/runner support; confirm the runners here are GitHub-hosted
+     (`windows-latest`, `ubuntu-latest`, and the `archlinux:base-devel` container job in
+     `arch-installer.yml`, which runs JavaScript actions on the runner's own Node) and that
+     `lfs: true` / other inputs still exist.
    - **`action-gh-release` / `rust-cache`** — check input renames and default changes
      (e.g. release draft/latest behavior, cache key scheme) against how they're invoked.
    If a bump would require a **behavioral** change to the workflow (not just the pin),
@@ -62,11 +67,11 @@ limit the whole pass to that one.
    latest release · breaking-change verdict (OK / notes). Do **not** commit or push as
    part of this command — wait for an explicit go, per this repo's gate discipline. A
    workflow file changing under `.github/` never justifies an auto-push, and a tag is a
-   release (`installer.yml` fires on `v*`), so tagging is never part of finishing this.
+   release (`windows-installer.yml` fires on `v*`), so tagging is never part of finishing this.
 
 ## Hard limits (do not cross)
 - **Never** pin-bump the release-triggering behavior or touch tags — editing
-  `installer.yml`'s action pins is fine, but this command must not create/move tags or
+  `windows-installer.yml`'s action pins is fine, but this command must not create/move tags or
   publish releases.
 - **Never** switch the pinning style (don't convert `@vN` to a SHA or to `@vX.Y.Z`)
   unless explicitly asked — consistency with the existing convention matters.

@@ -89,7 +89,7 @@ python3 native-deps/fetch-deps.py
 # The voice model AND the OCR models, into the app-data dir the host reads - the panel's
 # first-run download without the panel. In practice LINUX only: on Windows the panel still
 # does it. The panel has no Linux build yet, so without this a Linux host logs "model.onnx
-# not found" and answers /ocr with `missing`; the .deb ships this script as
+# not found" and answers /ocr with `missing`; both Linux packages ship this script as
 # `kokoro-fetch-models` for that reason. Reads model-manifest.json + ocr-manifest.json -
 # the same files the panel embeds, not copies. --verify-only is "Verify & repair" without a GUI.
 python3 native-deps/fetch-model.py
@@ -135,13 +135,19 @@ cargo run --release --target i686-pc-windows-msvc --manifest-path kokoro-hook\Ca
 C:\Windows\SysWOW64\regsvr32.exe "kokoro-sapi\target\i686-pc-windows-msvc\release\KokoroSapi.dll"
 
 # Packaged installer — builds the x86 DLL + release-builds both crates, stages everything,
-# then runs makensis. NSIS. See packaging/README.md. The SAME script on Linux builds the .deb
-# (host only; dpkg-deb + dpkg-shlibdeps) - a PROFILES row, not a second recipe.
+# then runs makensis. NSIS. See packaging/README.md. The SAME script on Linux builds the
+# package for the distribution's family (os-release): a .deb on Debian/Ubuntu (dpkg-deb +
+# dpkg-shlibdeps), an Arch package on Arch (makepkg - so NOT as root). Host only, one staged
+# tree for both - a PROFILES row plus a packager, not a second recipe.
 python packaging\build_installer.py
-python3 packaging/build_installer.py      # Linux -> packaging/dist/kokoro-kindle-reader_X.Y.Z_amd64.deb
-# CI does this on a v* tag (.github/workflows/installer.yml); sapi.yml
+python3 packaging/build_installer.py      # Debian/Ubuntu -> packaging/dist/kokoro-kindle-reader_X.Y.Z_amd64.deb
+                                          # Arch -> packaging/dist/kokoro-kindle-reader-X.Y.Z-1-x86_64.pkg.tar.xz
+# CI does this on a v* tag, and as a check on pushes to main (.github/workflows/
+# windows-installer.yml - only the tag publishes, from a job of its own); debian-installer.yml
+# and arch-installer.yml build + verify the Linux packages on host/packaging changes and
+# upload each only together with its own corresponding-source archive; windows-sapi.yml
 # builds the x86 DLL + runs the COM smoke test on kokoro-sapi/** / kokoro-sapi-smoke/**
-# / kokoro-protocol/** changes; hook.yml compile-checks the x86 hook + injector on
+# / kokoro-protocol/** changes; windows-hook.yml compile-checks the x86 hook + injector on
 # kokoro-hook/** / kokoro-inject/** changes. (Both also re-run on edits to their own
 # workflow file.)
 
@@ -955,15 +961,27 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   has the pipe, so Kindle narrates regardless; Linux has no other client, so a host that
   swallowed the failure would sit there looking alive with nothing able to reach it — and the
   extension's probe cannot tell that apart from a host that was never started.
-- **The Linux package is a `PROFILES` row in `build_installer.py`, not a second recipe.**
-  Same staging, provenance and notice code as the NSIS installer; only the `deb` packager
-  branch differs. It installs the staged tree verbatim into `/usr/lib/kokoro-kindle-reader/`
-  (a **private** dir: the modified espeak must never be on the system library path, where
-  Ubuntu's own `libespeak-ng1` may already sit), plus `/usr/bin` links and an **opt-in**
-  systemd **user** unit (the host's data is per-user). `Depends:` comes from
-  `dpkg-shlibdeps`, never by hand. Modes are set explicitly and re-read, because this
-  checkout can live on NTFS where everything reads 0777. It is compressed with xz so the
-  verifier can open it with Python's `tarfile`. **`ldd /usr/bin/kokoro-host` lies:** it takes
+- **The Linux packages are a `PROFILES` row in `build_installer.py`, not a second recipe.**
+  Same staging, provenance and notice code as the NSIS installer; only the packager branch
+  differs, and the distribution's family picks it (os-release `ID`, then `ID_LIKE`, in
+  `target_platform.package_format()`): `deb` on Debian/Ubuntu, `pacman` on Arch, and any
+  other family raises rather than building for a package manager the machine may not have.
+  Both wrap the SAME staged tree, so everything keyed by platform — `components.toml`'s
+  `platforms`, the dependency report, `OMITTED` — is `linux` for both. Each installs the
+  staged tree verbatim into `/usr/lib/kokoro-kindle-reader/` (a **private** dir: the
+  modified espeak must never be on the system library path, where the distribution's own
+  libespeak-ng may already sit), plus `/usr/bin` links and an **opt-in** systemd **user**
+  unit (the host's data is per-user). The dependency list is read off the binaries, never
+  written by hand: `dpkg-shlibdeps` for the `.deb`; for Arch, every ELF's `NEEDED` less what
+  the package ships, resolved through `ldconfig -p` to a file and `pacman -Qqo` to its
+  owner. The PKGBUILD is generated and only copies the laid-out tree in, with `!strip`,
+  `!autodeps` and no tidying so the provisioned libraries ship byte for byte. **makepkg
+  refuses root**, and `check_pacman` says so before anything compiles (CI runs the Arch
+  build as a `builder` user for that reason). Modes are set explicitly and re-read, because
+  this checkout can live on NTFS where everything reads 0777. Both are compressed with xz so
+  the verifier can open them with Python's `tarfile` — which on Windows cannot create the
+  `/usr/bin` symlinks and writes a COPY instead, so the verifier skips symlinks rather than
+  anchoring the install root on that copy. **`ldd /usr/bin/kokoro-host` lies:** it takes
   `$ORIGIN` from the link's directory and reports the system espeak. A real `exec` resolves
   `/proc/self/exe` and maps the bundled one.
 - **espeak's data path is capped at 160 bytes on Linux** (`N_PATH_HOME_DEF`, 230 on
@@ -1095,14 +1113,21 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   installer/uninstaller stub is NSIS compressed with LZMA (`SetCompressor /SOLID lzma`), so
   `build_installer.py` stages NSIS's own `COPYING` (zlib + bzip2 + CPL-1.0 with the LZMA
   linking exception) from the installed toolchain to `licenses/nsis/NSIS-COPYING.txt`. NSIS
-  is **pinned** in `installer.yml` (`--version=3.12`) so that shipped licence matches the
+  is **pinned** in `windows-installer.yml` (`--version=3.12`) so that shipped licence matches the
   version actually used. Both stagers **throw** when the text is absent — a modified GPL
   binary or an LZMA stub shipped without its licence is the failure they exist to prevent.
 - **`cargo-about` must run in CI, and `GPL-3.0-only` is accepted for Slint ONLY.**
-  `installer.yml` installs `cargo about` (pinned `0.9.1`, `--locked --features cli`) before
+  `windows-installer.yml` installs `cargo about` (pinned `0.9.1`, `--locked --features cli`) before
   `build_installer.py`; without it `generate_dependency_licenses.py` throws, so this is a
   build prerequisite, not just a compliance step (it was missing, and the gate had never
-  run in CI). `license-check.yml` runs the same gate on PRs that touch the closure.
+  run in CI). `license-check.yml` runs the same gate on pushes to main and PRs that touch
+  the closure (it was PR-only and had never run once, since changes land on main), for
+  **both** platforms, each in a job on its own OS. Cross-resolving the Linux triple from
+  Windows would catch a licence but not the gate breaking where the Linux package builds run
+  it (LF checkout, case-sensitive paths, the Linux `cargo-about`). `debian-installer.yml` and
+  `arch-installer.yml` exercise that too, inside full package builds; the
+  `license-check.yml` job is the fast answer, with no native provisioning or release build in
+  front of it.
   `about.toml` grants `GPL-3.0-only` via **per-crate** `[<slint-crate>] accepted` entries,
   not the global list, so a GPL dependency arriving through anything other than Slint still
   fails `--fail`. The list of slint crates is deliberately generous — naming an absent crate
@@ -1126,7 +1151,7 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   block count; checking only special clarifications misses changed or deleted notices.
   The tray and Settings must keep **About & licenses** available independently of narration;
   it opens installed `legal.html`, whose content and local links are checked in packaging.
-  **The `.deb` omits `legal.html`**, declared on both sides (`legal_page` in the build
+  **The Linux packages omit `legal.html`**, declared on both sides (`legal_page` in the build
   profile, `OMITTED` in `verify_installer_notices.py`). Nothing on Linux opens it, and its
   links name the panel, the x86 clients and the NSIS stub. It is pinned content, so it is
   left out rather than edited.
@@ -1143,7 +1168,7 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   (origin, version/revision, SHA-256 where pinned, SPDX, notice files, modification status).
   The standard library is not a Cargo package: `build_installer.py` stages the active
   toolchain's generated `COPYRIGHT-library.html` plus a `TOOLCHAIN.txt` with its immutable
-  commit, and `installer.yml` installs `rust-src` so `build_corresponding_source.py` can put
+  commit, and `windows-installer.yml` installs `rust-src` so `build_corresponding_source.py` can put
   that exact `library/` tree into the source archive. The source packager requires its active
   toolchain to equal the installer's staged `TOOLCHAIN.txt`, so a local toolchain switch cannot
   pair different standard-library source with the binary. `verify_installer_notices.py` extracts
@@ -1198,16 +1223,27 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   source with LFS resolved, all lockfiles/scripts, the *modified* espeak-ng 1.52.0 tree and
   the exact Rust Standard Library source with SHA-256 manifests, the hash-verified official
   NSIS 3.12 source archive for its CPL-covered LZMA module, and a rebuild README);
-  `installer.yml` builds it on every run: strict tag-matched source for releases, a clearly
-  stamped non-release archive for manual CI runs. Its Actions artifact always carries the
-  archive beside the installer, and a tag attaches both to the release. `sapi.yml` does not
+  `windows-installer.yml` builds it on every run: strict tag-matched source for releases, a clearly
+  stamped non-release archive for push and manual CI runs. Its Actions artifact always carries the
+  archive beside the installer, and a tag attaches both to the release. `windows-sapi.yml` does not
   upload its intermediate DLL by itself. The Cargo deps' corresponding source is the
   immutable crates.io versions pinned in the committed lockfiles (stated in the archive
   README, not vendored). **Don't ship an installer or intermediate binary alone** — that was
-  the §6/notice gap. **The Linux `.deb` has no source archive yet**:
-  `build_corresponding_source.py` describes the Windows installer and refuses to run on
-  Linux rather than produce a wrong one. So the `.deb` stays a local build, not a release
-  artifact, until that packager gains a Linux branch.
+  the §6/notice gap. **Every package has its own archive, built where the package was
+  built**: `build_corresponding_source.py` describes whichever package this machine builds
+  (`package_format()`), from THAT machine's staging tree and provenance, and names it per
+  format (`PACKAGE_FORMATS[...]["source_zip"]`: `corresponding-source-X.Y.Z.zip` for
+  Windows, `-debian.zip`, `-arch.zip`) so the three never overwrite each other - the `.deb`
+  and the Arch package are separate builds with separate provenance even though they wrap
+  one tree. The platform parts of the README are blocks in the script, and the Windows
+  README is byte-identical to what it was before Linux existed; keep it that way unless the
+  Windows text itself is meant to change. Linux needs `rust-src` and an LFS-resolved
+  checkout for the same reasons Windows does, and carries no NSIS source because neither
+  Linux packager puts code of its own into a package. `debian-installer.yml` and
+  `arch-installer.yml` upload each package only inside one artifact with its archive (an
+  Actions artifact conveys the binary just as a release would). **The Linux packages are not
+  attached to GitHub Releases yet**: only `windows-installer.yml` publishes, and only its own
+  pair - three workflows racing to create one draft release is the problem to solve first.
 - **No shipped artifact may claim a bare licence name in its version resource** — not "MIT
   (app code)", which was the actual wording here until it was corrected, and which stopped
   being true the moment this tree stopped being uniformly MIT. Three places set
@@ -1220,8 +1256,11 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   connect-only with no GPL deps.
 
 ### Git workflow (committing, branching, tagging)
-- **A tag is a release.** `installer.yml` fires on `v*` and builds the installer plus the
-  corresponding-source archive into a draft release. So `git tag` / `git push --tags` /
+- **A tag is a release.** `windows-installer.yml` fires on `v*` and builds the installer plus the
+  corresponding-source archive into a draft release. It also runs on pushes to main that
+  touch what the installer is built from - a check, so a broken packaging script surfaces at
+  its commit rather than at the next tag - and those runs publish nothing: the `release` job
+  is tag-only and is the only job with `contents: write`. So `git tag` / `git push --tags` /
   `git push origin v*` are **never** part of finishing a change — tagging is a separate,
   deliberate, explicitly-requested act, and publishing the draft stays manual on top of that.
 - **Committing on `main` is normal here** — the release flow commits version bumps directly
@@ -1267,7 +1306,7 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   on the installer can't be built locally. `doctor.cmd` reads its state from
   `HKLM\SYSTEM\CurrentControlSet\Control\CI\Policy\VerifiedAndReputablePolicyState`
   (0 off, 1 on, 2 evaluation), and `build_installer.py`'s `spawn` turns the error into a
-  sentence. Turning SAC off can't be undone, so build in CI instead (`installer.yml`).
+  sentence. Turning SAC off can't be undone, so build in CI instead (`windows-installer.yml`).
 - **Slint `step`** on a `Slider` only affects keyboard/scroll, **not** mouse drag — snap
   the dragged value manually (see `SliderRow` in `panel.slint`).
 - **A `windows` crate feature cannot be audited by grepping imports.** The bindings gate

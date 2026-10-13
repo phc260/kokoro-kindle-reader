@@ -50,7 +50,7 @@ material) — don't pad.
   ~510-token `Expand` limit, and the `CHUNK_INFO`/SAPI-event mechanism), Layout table, build
   steps.
 - `DEVELOPMENT.md` — contributor workflow: the CI table matches the workflows under
-  `.github/workflows/` (triggers + what each builds), the release steps match `installer.yml`
+  `.github/workflows/` (triggers + what each builds), the release steps match `windows-installer.yml`
   (v* tag -> draft release; publishing stays manual), and the clone-don't-use-release-archives
   guidance (Git LFS) stays true. It also carries the git-workflow rules (commit on `main` is
   normal here; tags are a separate deliberate act) — check those against `CLAUDE.md`.
@@ -127,7 +127,7 @@ Drift-prone claim types to check explicitly:
   second copy of it as a parameter default, so the drift pair that used to need checking is
   gone. The product version agrees across `packaging/windows/installer.nsi` (`VERSION`)
   and the `FileVersion` in `kokoro-host/build.rs` + `kokoro-panel/build.rs` (both derive it
-  from `CARGO_PKG_VERSION`). NSIS is pinned to 3.12 in `installer.yml` and enforced at build
+  from `CARGO_PKG_VERSION`). NSIS is pinned to 3.12 in `windows-installer.yml` and enforced at build
   time by `build_installer.py`, so a doc naming a different NSIS version is wrong, not merely
   stale.
 - **Command snippets** — the PowerShell/cargo/python commands in fenced blocks still run as

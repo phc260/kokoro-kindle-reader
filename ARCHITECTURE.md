@@ -214,7 +214,7 @@ against the engine the user actually has installed.
 | `ocr-manifest.json` | The same, for the Cloud Reader OCR models the panel downloads into `<app_data>\ocr\`; also embedded in `kokoro-panel`. Its digests are one of **three** copies that must agree — with `kokoro-ocr`'s own consts and `native-deps/fetch-ocr-models.py`. |
 | `icons/` | Shared app icons (LFS); embedded in the exes' version resource and the installer. |
 | `doctors/` | `doctor.cmd` (Windows) and `doctor.sh` (Linux): list every missing development tool in one pass, from the shared list in `tools.conf`. Tools only, not the provisioned state. See [`doctors/README.md`](doctors/README.md). |
-| `packaging/` | `build_installer.py` and the shared licence/notice scripts at the root; each platform's own files under `windows/` (`installer.nsi` — the standalone NSIS build, a per-user install with self-elevating voice registration) and `linux/` (the `.deb`'s systemd unit and docs). See [`packaging/README.md`](packaging/README.md). |
+| `packaging/` | `build_installer.py` and the shared licence/notice scripts at the root; each platform's own files under `windows/` (`installer.nsi` — the standalone NSIS build, a per-user install with self-elevating voice registration) and `linux/` (the Linux packages' systemd unit and docs). See [`packaging/README.md`](packaging/README.md). |
 | `THIRD_PARTY_NOTICES.md` + `licenses/` | Bundle licensing: the repository source is MIT except for the files ported from `kokoro-js` and PaddleOCR and the Google Material Symbols SVGs (Apache-2.0, attributed there file by file), but the shipped binaries link espeak-ng (GPL-3.0-or-later, **modified** by `build-espeak.py`) and Slint-under-GPL, so a release is conveyed under GPLv3. `build_installer.py` stages these notices plus the active Rust toolchain's generated Standard Library report — they must ship *with* the binaries, not just live here. |
 
 ## Building from source
@@ -257,12 +257,16 @@ runs `makensis`):
 python packaging\build_installer.py
 ```
 
-CI does this on a `v*` tag or manual dispatch (`.github/workflows/installer.yml`). Every
-Actions artifact pairs the installer with corresponding source; a tag also drafts a release
-with both. The `sapi.yml` workflow builds the DLL + runs the COM smoke test on engine changes
-but does not distribute that bare DLL, and `hook.yml` compile-checks the x86 hook + injector.
-`linux.yml` provisions the Linux native dependencies and builds, tests and starts the host on
-Ubuntu — the only place that build is linked and run.
+CI does this on a `v*` tag, on pushes to main that touch what the installer is built from,
+and on manual dispatch (`.github/workflows/windows-installer.yml`). Every Actions artifact
+pairs the installer with corresponding source; only a tag also drafts a release with both,
+from a separate job that alone holds write access. The `windows-sapi.yml` workflow builds the DLL + runs the COM smoke test on engine changes
+but does not distribute that bare DLL, and `windows-hook.yml` compile-checks the x86 hook + injector.
+`debian-installer.yml` provisions the Linux native dependencies and builds, tests and starts the host on
+Ubuntu — the only place that build is linked and run — then builds the `.deb` and verifies its
+notices. `arch-installer.yml` builds and verifies the Arch package the same way, natively in
+an Arch container. Each uploads its package only together with that package's own
+corresponding-source archive.
 
 ### Building on Ubuntu
 
@@ -299,6 +303,7 @@ python3 native-deps/fetch-model.py
 cargo run --manifest-path kokoro-host/Cargo.toml
 
 # 5. Optional: package it. Needs dpkg-dev and cargo-about; see packaging/README.md.
+#    On Arch the same command builds a .pkg.tar.xz with makepkg instead (as a regular user).
 python3 packaging/build_installer.py     # -> packaging/dist/kokoro-kindle-reader_X.Y.Z_amd64.deb
 ```
 
@@ -319,7 +324,7 @@ expect it to be split when the panel and desktop integration land.
 | the host exits 1 at startup | the endpoint could not be created — the message names the reason (port 8787 taken is the usual one) |
 
 `ldd target/debug/kokoro-host` is the fastest single check that the staged tree is complete;
-`.github/workflows/linux.yml` runs exactly that sequence on every push, so a green run there
+`.github/workflows/debian-installer.yml` runs exactly that sequence on every push, so a green run there
 means the build, the tests and the library resolution all hold on a clean machine.
 
 ## Kindle for PC notes (technical)

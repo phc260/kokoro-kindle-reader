@@ -46,10 +46,32 @@ detect_lfs_files() {
 detect_cmake()   { VER=$(version cmake --version);   [ -n "$VER" ] && FOUND=1; }
 detect_python()  { VER=$(version python3 --version); [ -n "$VER" ] && FOUND=1; }
 detect_rust()    { VER=$(version cargo --version);   [ -n "$VER" ] && FOUND=1; }
+# The corresponding-source archive carries the standard-library source the host links.
+detect_rust_src() {
+    local sysroot
+    sysroot=$(rustc --print sysroot 2>/dev/null) || return 0
+    [ -f "$sysroot/lib/rustlib/src/rust/library/std/Cargo.toml" ] && FOUND=1
+}
 detect_bun()     { VER=$(version bun --version);     [ -n "$VER" ] && FOUND=1; }
 detect_cargo_about() { VER=$(version cargo about --version); [ -n "$VER" ] && FOUND=1; }
-# The .deb: dpkg-deb builds it, dpkg-shlibdeps derives its Depends. Both come from dpkg-dev.
-detect_dpkg_dev() { have dpkg-deb && have dpkg-shlibdeps && FOUND=1; }
+# The package this distribution gets, by the same os-release family build_installer.py reads
+# (target_platform.LINUX_FAMILY_FORMAT): a .deb from dpkg-deb, its Depends from
+# dpkg-shlibdeps (dpkg-dev); an Arch package from makepkg, its depends from readelf +
+# ldconfig + pacman (base-devel). Any other family has no package, so nothing satisfies it.
+detect_linux_pkg() {
+    local ids="" f
+    for f in /etc/os-release /usr/lib/os-release; do
+        [ -r "$f" ] && { ids=$(. "$f" && printf '%s %s' "${ID:-}" "${ID_LIKE:-}"); break; }
+    done
+    for f in $ids; do
+        case $f in
+            debian) have dpkg-deb && have dpkg-shlibdeps &&
+                        { FOUND=1; DETAIL="dpkg-dev, for a .deb"; }; return ;;
+            arch) have makepkg && have readelf && have ldconfig && have pacman &&
+                      { FOUND=1; DETAIL="makepkg, for an Arch package"; }; return ;;
+        esac
+    done
+}
 # espeak-ng is built from source (its cmake enables C++), and cargo links with the C compiler.
 detect_cc() {
     local cc="" cxx="" c

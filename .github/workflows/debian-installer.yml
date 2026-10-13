@@ -1,4 +1,4 @@
-name: linux (host build + tests)
+name: debian installer (Linux host build + tests + .deb)
 
 # The Ubuntu half of the host. This is the only place the Linux build is actually
 # LINKED and RUN -- development happens on Windows, where `cargo check
@@ -11,6 +11,11 @@ name: linux (host build + tests)
 # It does NOT narrate: that needs the model (~325 MB, downloaded by the panel at first
 # run) and an audio device. The synth is exercised by the unit tests, which need no
 # model, no network and no host.
+#
+# It then builds the .deb with the same build_installer.py a local Linux build runs,
+# verifies the notice tree inside it, and builds its corresponding-source archive. The .deb
+# links modified espeak-ng (GPL), so it leaves CI only TOGETHER with that archive - one
+# artifact holding both, the way windows-installer.yml pairs the installer with its own.
 
 on:
   push:
@@ -19,38 +24,67 @@ on:
       - 'kokoro-ocr/**'
       - 'kokoro-protocol/**'
       - 'native-deps/*.py'
-      - '.github/workflows/linux.yml'
+      # What the .deb build reads beyond the host: the packaging scripts and Linux data,
+      # the shipped licence texts, and the manifests fetch-model.py ships beside it.
+      - 'packaging/**'
+      - '!packaging/windows/**'
+      - 'licenses/**'
+      - 'LICENSE'
+      - 'THIRD_PARTY_NOTICES.md'
+      - 'model-manifest.json'
+      - 'ocr-manifest.json'
+      - '.github/workflows/debian-installer.yml'
   pull_request:
     paths:
       - 'kokoro-host/**'
       - 'kokoro-ocr/**'
       - 'kokoro-protocol/**'
       - 'native-deps/*.py'
-      - '.github/workflows/linux.yml'
+      - 'packaging/**'
+      - '!packaging/windows/**'
+      - 'licenses/**'
+      - 'LICENSE'
+      - 'THIRD_PARTY_NOTICES.md'
+      - 'model-manifest.json'
+      - 'ocr-manifest.json'
+      - '.github/workflows/debian-installer.yml'
   workflow_dispatch:
+
+# Read-only: nothing here writes to the repository, and the build runs third-party build
+# scripts that should not hold a token that could.
+permissions:
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      # No `lfs: true`: nothing on the Linux path reads an LFS file. The tray icon is the
-      # only `include_bytes!` of one and it is inside a `cfg(windows)` function, so it is
-      # never evaluated here. If that ever changes, add it — an LFS pointer embeds as a
-      # 132-byte text file and fails at run time, not at build time.
+      # `lfs: true` for the corresponding-source archive, not the build: nothing on the
+      # Linux build path reads an LFS file (the tray icon is the only `include_bytes!` of
+      # one, inside a `cfg(windows)` function), but the archive is the whole project
+      # source, and it refuses to ship an LFS pointer in place of a file.
       - uses: actions/checkout@v7
+        with:
+          lfs: true
 
+      # rust-src: the archive carries the exact standard-library source linked into the
+      # host, from this toolchain's own copy.
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rust-src
 
       # espeak-ng is built from source, pinned: a distribution's libespeak-ng is
       # unmodified and probably not 1.52.0, and either difference changes the phonemes.
       # cmake + a C toolchain are all it needs -- the audio/async/mbrola/sonic backends
-      # are configured OFF precisely so there is nothing else to install.
+      # are configured OFF precisely so there is nothing else to install. dpkg-dev is for the
+      # .deb (dpkg-shlibdeps derives its Depends:); build-essential pulls it in already, but
+      # build_installer.py refuses to run without it, so it is named rather than implied.
       - name: Install build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends build-essential cmake
+          sudo apt-get install -y --no-install-recommends build-essential cmake dpkg-dev
 
-      # The recipe is invoked directly, the same way installer.yml invokes it on Windows -
+      # The recipe is invoked directly, the same way windows-installer.yml invokes it on Windows -
       # one script, one entry point, no wrappers. build-espeak.py checks out
       # an immutable commit and refuses to build a tree carrying anything but the one
       # documented modification, which it verifies by digest.
@@ -125,3 +159,49 @@ jobs:
             exit 1
           fi
           kill "$host_pid" 2>/dev/null || true
+
+      # build_installer.py -> generate_dependency_licenses.py THROWS without it, as on
+      # Windows. Pinned to match windows-installer.yml.
+      - name: Install cargo-about (pinned)
+        run: cargo install cargo-about --version 0.9.1 --locked --features cli
+
+      # Release-builds the host, stages it with the provisioned runtime and the notice tree,
+      # and packs it with dpkg-deb into packaging/dist/. Its preflight runs the component-hash
+      # and licence-text checks, and the cargo-about gate runs while staging the notices.
+      - name: Build the .deb
+        run: python3 packaging/build_installer.py
+
+      # Opens the built .deb (in pure Python) and fails if any notice the Linux rows of
+      # components.toml require is missing or empty - the GPL text must ship WITH the binary.
+      - name: Verify the .deb's notices
+        run: python3 packaging/verify_installer_notices.py
+
+      # The package's own metadata, so a wrong Depends: or a missing file is readable in
+      # the log without downloading the artifact.
+      - name: Show the .deb
+        run: |
+          deb="$(ls packaging/dist/*.deb)"
+          dpkg-deb --info "$deb"
+          dpkg-deb --contents "$deb"
+
+      # Complete corresponding source (GPLv3 section 6) for the .deb, from this job's own
+      # build and provenance. A run on a v* tag must pass the strict clean+matching-tag proof;
+      # any other run is not a release, but the upload below still conveys its .deb, so it is
+      # paired with a source archive from the same checkout, stamped NON-RELEASE.
+      - name: Build corresponding source (release)
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: python3 packaging/build_corresponding_source.py
+
+      - name: Build corresponding source (non-release)
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        run: python3 packaging/build_corresponding_source.py --allow-uncommitted
+
+      # Never the .deb alone: the GPL-covered package and its source travel as one artifact.
+      - name: Upload .deb + corresponding source
+        uses: actions/upload-artifact@v7
+        with:
+          name: kokoro-kindle-reader-debian-bundle
+          path: |
+            packaging/dist/*.deb
+            packaging/dist/corresponding-source-*-debian.zip
+          if-no-files-found: error

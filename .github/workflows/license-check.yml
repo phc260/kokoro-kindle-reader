@@ -1,12 +1,54 @@
-name: License check (cargo-about gate)
+name: license check (cargo-about gate, Windows + Linux)
 
-# Runs the cargo-about --fail gate (the same one build_installer.py runs) on pull requests
-# that could change the licence closure, so a dependency under a licence not in
-# packaging/about.toml's `accepted` list is caught at review time - not only on a release
-# tag. This does NOT build the installer or the native deps; it only resolves and renders
-# the Cargo dependency-licence notices, which is what the gate needs.
+# Runs the cargo-about --fail gate (the same one build_installer.py runs) on every push to
+# main and every pull request that could change the licence closure, so a dependency under a
+# licence not in packaging/about.toml's `accepted` list is caught at the commit that brought
+# it in - not only on a release tag - for both platforms, each on its own OS: the Windows
+# installer's five crates on windows-latest, the Linux packages' host on ubuntu-latest. This
+# does NOT build either package or the native deps; it only resolves and renders the Cargo
+# dependency-licence notices, which is what the gate needs.
+#
+# The push trigger is what makes this run at all. It used to fire on pull requests only, and
+# changes here land on main directly, so the gate had never run once.
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - '**/Cargo.toml'
+      - '**/Cargo.lock'
+      - '.gitattributes'
+      - 'packaging/about.toml'
+      - 'packaging/about.hbs'
+      - 'packaging/generate_dependency_licenses.py'
+      - 'packaging/verify_dependency_licenses.py'
+      - 'packaging/test_dependency_licenses.py'
+      - 'packaging/source_notices.py'
+      - 'packaging/dotnet_compat.py'
+      - 'packaging/source-notices.json'
+      - 'legal.html'
+      - 'legal.rs'
+      - 'packaging/components.toml'
+      - 'packaging/verify_component_hashes.py'
+      - 'packaging/license-texts.sha256'
+      - 'packaging/verify_license_texts.py'
+      # The installer/staging/notice-verifier/corresponding-source scripts control what ships;
+      # touching them re-runs this gate (the full extraction proof runs in the installer
+      # workflows, which build the packages it opens).
+      - 'packaging/build_installer.py'
+      - 'packaging/build_corresponding_source.py'
+      - 'packaging/windows/installer.nsi'
+      - 'packaging/linux/copyright'
+      - 'packaging/verify_installer_notices.py'
+      - 'packaging/target_platform.py'
+      - 'THIRD_PARTY_NOTICES.md'
+      - 'LICENSING.md'
+      - 'LICENSE'
+      - 'licenses/**'
+      - 'native-deps/**'
+      - 'kokoro-panel/ui/*.svg'
+      - '.github/workflows/windows-installer.yml'
+      - '.github/workflows/license-check.yml'
   pull_request:
     paths:
       - '**/Cargo.toml'
@@ -27,11 +69,12 @@ on:
       - 'packaging/license-texts.sha256'
       - 'packaging/verify_license_texts.py'
       # The installer/staging/notice-verifier/corresponding-source scripts control what ships;
-      # touching them re-runs this gate at review time (the full extraction proof still runs on
-      # the tag build in installer.yml, which needs the built -setup.exe).
+      # touching them re-runs this gate (the full extraction proof runs in the installer
+      # workflows, which build the packages it opens).
       - 'packaging/build_installer.py'
       - 'packaging/build_corresponding_source.py'
       - 'packaging/windows/installer.nsi'
+      - 'packaging/linux/copyright'
       - 'packaging/verify_installer_notices.py'
       - 'packaging/target_platform.py'
       - 'THIRD_PARTY_NOTICES.md'
@@ -40,7 +83,7 @@ on:
       - 'licenses/**'
       - 'native-deps/**'
       - 'kokoro-panel/ui/*.svg'
-      - '.github/workflows/installer.yml'
+      - '.github/workflows/windows-installer.yml'
       - '.github/workflows/license-check.yml'
   workflow_dispatch:
 
@@ -49,7 +92,7 @@ permissions:
 
 jobs:
   cargo-about:
-    name: cargo-about gate
+    name: cargo-about gate (Windows installer)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
@@ -57,7 +100,7 @@ jobs:
       # Every check below is a Python script invoked directly. windows-latest happens to
       # ship a Python, but pin one rather than depend on a runner image: "the image changed"
       # is not a failure anyone wants to diagnose from a licence gate.
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
@@ -76,7 +119,7 @@ jobs:
             kokoro-hook
             kokoro-inject
 
-      # Pinned to match the release pipeline (installer.yml).
+      # Pinned to match the release pipeline (windows-installer.yml).
       - name: Install cargo-about (pinned)
         run: cargo install cargo-about --version 0.9.1 --locked --features cli
 
@@ -84,7 +127,7 @@ jobs:
       # crate whose resolved licence is not accepted for it in about.toml. A new licence
       # category (or GPL arriving through anything other than Slint) fails this job.
       - name: Run the licence gate
-        run: python packaging/generate_dependency_licenses.py
+        run: python packaging/generate_dependency_licenses.py --platform windows
 
       # 27 offline fixtures over the notice verifier - invented notices only, no network
       # and no built installer, so a regression in the verifier is caught here rather than
@@ -100,5 +143,48 @@ jobs:
 
       # A present, non-empty licence file can still be truncated or copied from the wrong
       # upstream revision. Pin the fixed checked-in texts after normalizing CRLF/LF.
+      - name: Verify checked-in licence texts
+        run: python packaging/verify_license_texts.py
+
+  # The Linux packages' half, on Linux. Its closure is a subset of the Windows
+  # host's today, but nothing keeps it one: a cfg(unix) dependency reaches only this report.
+  # cargo-about could resolve the Linux triple from the Windows runner, and that would catch
+  # a licence - but not the gate breaking where it actually runs: build_installer.py on Linux,
+  # with an LF checkout, a case-sensitive filesystem and the Linux cargo-about.
+  # debian-installer.yml and arch-installer.yml exercise those too, inside full package
+  # builds; this is the fast
+  # answer, with no native provisioning or release build in front of it. The same three
+  # checks that build runs, plus the verifier's regression fixtures.
+  cargo-about-linux:
+    name: cargo-about gate (Linux packages)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: kokoro-host
+
+      # Pinned to match the release pipeline (windows-installer.yml).
+      - name: Install cargo-about (pinned)
+        run: cargo install cargo-about --version 0.9.1 --locked --features cli
+
+      - name: Run the licence gate
+        run: python packaging/generate_dependency_licenses.py --platform linux
+
+      - name: Test notice-verification regressions
+        run: python packaging/test_dependency_licenses.py
+
+      - name: Verify component hashes
+        run: python packaging/verify_component_hashes.py
+
       - name: Verify checked-in licence texts
         run: python packaging/verify_license_texts.py

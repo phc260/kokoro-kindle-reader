@@ -1,4 +1,4 @@
-name: Installer (kokoro-host + panel)
+name: windows installer (kokoro-host + panel)
 
 # Builds the installer: the tray host (kokoro-host) + the Slint settings panel
 # (kokoro-panel) + the native Dawn WebGPU runtime + the x86 KokoroSapi.dll (Rust),
@@ -9,14 +9,48 @@ name: Installer (kokoro-host + panel)
 # Reader OCR models are NOT bundled - the app downloads them at first run - so they are not
 # provisioned here. The synth core is pure Rust; onnxruntime.dll is loaded at runtime via
 # the `ort` crate, by both the synth and the OCR.
+#
+# Three events, one build. A v* tag is a RELEASE: the strict corresponding-source proof, then
+# a draft GitHub Release (the `release` job). A push to main that touches anything the
+# installer is built from runs the same build as a CHECK, so a broken packaging script is
+# found at the commit that broke it rather than at the next tag. That is not hypothetical:
+# this workflow used to run on tags only, and the whole Python port of the packaging scripts
+# landed without one run of it. A manual dispatch is the same check on demand. Non-tag runs
+# still upload their installer, paired with a source archive stamped NON-RELEASE.
 
 on:
   workflow_dispatch:
   push:
     tags: ['v*']
+    branches: [main]
+    # Applies to the branch pushes only: GitHub does not evaluate path filters for a tag
+    # push, so every v* tag still builds a release.
+    paths:
+      - 'kokoro-host/**'
+      - 'kokoro-panel/**'
+      - 'kokoro-sapi/**'
+      - 'kokoro-hook/**'
+      - 'kokoro-inject/**'
+      - 'kokoro-protocol/**'
+      - 'kokoro-ocr/**'
+      - 'native-deps/*.py'
+      - 'packaging/**'
+      - '!packaging/linux/**'
+      - 'licenses/**'
+      - 'LICENSE'
+      - 'THIRD_PARTY_NOTICES.md'
+      - 'legal.html'
+      - 'legal.rs'
+      - 'icons/**'
+      - 'model-manifest.json'
+      - 'ocr-manifest.json'
+      - '.github/workflows/windows-installer.yml'
 
+# Read-only for the build, which runs third-party build scripts (every crate's build.rs) and
+# must not hold a token that can write to the repository. The `release` job alone gets
+# contents: write, and only on a tag.
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: installer-${{ github.ref }}
@@ -69,7 +103,7 @@ jobs:
       # convenience. windows-latest happens to ship a Python, but pin one rather than depend
       # on a runner image: this is the release path, and "the image changed" is not a failure
       # anyone wants to diagnose from a tagged build.
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
@@ -94,9 +128,10 @@ jobs:
         run: python packaging/verify_installer_notices.py
 
       # Complete corresponding source (GPLv3 section 6) for the GPL-covered binaries.
-      # A tag build must satisfy the strict clean+matching-tag proof. A manual build is not
-      # a release, but upload-artifact still conveys its installer, so pair it with a source
-      # archive from the same checkout and stamp that archive NON-RELEASE.
+      # A tag build must satisfy the strict clean+matching-tag proof. A non-tag build (a push
+      # to main, or a manual run) is not a release, but upload-artifact still conveys its
+      # installer, so pair it with a source archive from the same checkout and stamp that
+      # archive NON-RELEASE.
       - name: Build corresponding source (release)
         if: startsWith(github.ref, 'refs/tags/v')
         run: python packaging/build_corresponding_source.py
@@ -105,8 +140,9 @@ jobs:
         if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         run: python packaging/build_corresponding_source.py --allow-uncommitted
 
-      # Never upload the GPL-covered installer as a standalone Actions artifact. This path
-      # runs on manual dispatch too, where there is no GitHub Release to pair the source.
+      # Never upload the GPL-covered installer as a standalone Actions artifact. This runs on
+      # every event - a push or a manual run has no GitHub Release to pair the source with -
+      # and on a tag it is also what the `release` job publishes from.
       - name: Upload installer + corresponding source
         uses: actions/upload-artifact@v7
         with:
@@ -116,24 +152,39 @@ jobs:
             packaging/dist/corresponding-source-*.zip
           if-no-files-found: error
 
+  # On a v* tag, publish a draft GitHub Release from the bundle the build uploaded - the same
+  # bytes, not a rebuild. A job of its own so that publishing is the only thing that ever holds
+  # contents: write.
+  release:
+    name: Publish draft release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: kokoro-kindle-reader-bundle
+          path: dist
+
       # Release title: match the existing "kokoro-kindle-reader vX.Y.Z" convention
       # (strip the leading v from the tag).
       - name: Compose release title
-        if: startsWith(github.ref, 'refs/tags/v')
         id: relname
-        shell: bash
         run: echo "title=kokoro-kindle-reader v${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
-      # On a v* tag, also publish a draft GitHub Release. Attach BOTH the installer and the
-      # corresponding-source archive: the GPL-covered binaries must be conveyed with their
-      # complete corresponding source from the same place (GPLv3 section 6(d)).
+      # Attach BOTH the installer and the corresponding-source archive: the GPL-covered
+      # binaries must be conveyed with their complete corresponding source from the same place
+      # (GPLv3 section 6(d)). fail_on_unmatched_files, so a bundle missing either is an error
+      # rather than a release with one attachment.
       - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v3
         with:
+          fail_on_unmatched_files: true
           files: |
-            packaging/dist/*-setup.exe
-            packaging/dist/corresponding-source-*.zip
+            dist/*-setup.exe
+            dist/corresponding-source-*.zip
           draft: true
           name: ${{ steps.relname.outputs.title }}
           body: |

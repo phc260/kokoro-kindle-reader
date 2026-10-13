@@ -11,7 +11,6 @@ architecture raises rather than falling back to a guess: a packaging script that
 assumes Windows on an unknown platform produces an artifact nobody checked.
 """
 
-import os
 import platform
 import sys
 from pathlib import Path
@@ -36,16 +35,46 @@ DIST_DIR = Path(__file__).resolve().parent / "dist"
 # provenance/ the Windows corresponding-source archive is built from.
 STAGING_ROOT = Path(__file__).resolve().parent / "staging"
 
-# What a release artifact is called on each platform, and the pattern that finds the newest
-# one in DIST_DIR. The suffix is also what decides how a package is opened again
-# (verify_installer_notices.UNPACKERS) and which platform's inventory it is checked against
-# (`package_os`), so a .deb verified on Windows is still checked as the Linux package it is.
-PACKAGE_SUFFIX = {"windows": ".exe", "linux": ".deb"}
-PACKAGE_GLOB = {"windows": "*-setup.exe", "linux": "kokoro-kindle-reader_*.deb"}
+# Every package format this project builds: the platform whose staged tree it carries, the
+# suffix a built one is recognized by, and the pattern that finds the newest in DIST_DIR.
+# The suffix is what decides how a package is opened again (verify_installer_notices.UNPACKERS)
+# and which platform's inventory it is checked against (`package_os`), so a .deb verified on
+# Windows is still checked as the Linux package it is.
+#
+# Two formats can carry ONE platform: the .deb and the Arch package wrap the same staged
+# Linux tree, so everything keyed by platform - components.toml's `platforms`, the
+# dependency reports, the omitted legal page - applies to both, and only the wrapping differs.
+#
+# `source_zip` names the corresponding-source archive that must travel with a built package
+# (build_corresponding_source.py), per FORMAT: the .deb and the Arch package are separate
+# builds with their own provenance, so each gets its own archive, and the names keep them
+# apart wherever both land - one release, or one dist/. The Windows name predates the others
+# and is unchanged.
+PACKAGE_FORMATS = {
+    "nsis": {"os": "windows", "suffix": ".exe", "glob": "*-setup.exe",
+             "source_zip": "corresponding-source-%s.zip"},
+    "deb": {"os": "linux", "suffix": ".deb", "glob": "kokoro-kindle-reader_*.deb",
+            "source_zip": "corresponding-source-%s-debian.zip"},
+    "pacman": {"os": "linux", "suffix": ".pkg.tar.xz",
+               "glob": "kokoro-kindle-reader-*.pkg.tar.xz",
+               "source_zip": "corresponding-source-%s-arch.zip"},
+}
+# The platforms some package carries: what components.toml's `platforms` may name.
+PACKAGE_OSES = sorted({f["os"] for f in PACKAGE_FORMATS.values()})
+
+# Which format a Linux machine builds, by the distribution family os-release puts it in: its
+# ID first, then each ID_LIKE entry (Ubuntu is `ubuntu` like `debian`; Manjaro is `manjaro`
+# like `arch`). A distribution in neither family raises rather than guessing - a package for
+# a package manager the machine may not have is an artifact nobody checked.
+LINUX_FAMILY_FORMAT = {"debian": "deb", "arch": "pacman"}
+# Where os-release lives: /etc first, /usr/lib as the specification's fallback.
+OS_RELEASE = [Path("/etc/os-release"), Path("/usr/lib/os-release")]
 
 # Debian's name for each architecture, which is not the kernel's. Only the combinations in
 # NATIVE_TRIPLE are here: a .deb for an architecture nothing builds would be a guess.
 DEB_ARCH = {"x86_64": "amd64"}
+# Arch Linux's, which is the kernel's - recorded anyway, for the same reason.
+PACMAN_ARCH = {"x86_64": "x86_64"}
 
 
 def current_os():
@@ -89,39 +118,73 @@ def exe_name(stem, os_name=None):
     return stem + EXE_SUFFIX[os_name or current_os()]
 
 
-def package_suffix(os_name=None):
+def distro_ids(paths=None):
+    """os-release's ID followed by its ID_LIKE entries, in that order: the most specific
+    name first, then the families it says it belongs to."""
+    for path in paths or OS_RELEASE:
+        if path.is_file():
+            fields = {}
+            for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+                key, sep, value = line.partition("=")
+                if sep and not key.lstrip().startswith("#"):
+                    fields[key.strip()] = value.strip().strip("\"'")
+            return [i for i in [fields.get("ID", "")] + fields.get("ID_LIKE", "").split() if i]
+    raise RuntimeError("No os-release file (%s): cannot tell which Linux package format "
+                       "this machine builds." % ", ".join(str(p) for p in paths or OS_RELEASE))
+
+
+def package_format(os_name=None, ids=None):
+    """The package format THIS machine builds: NSIS on Windows; on Linux, the one for the
+    distribution's family. `ids` is for tests; it is read from os-release otherwise."""
     os_name = os_name or current_os()
-    suffix = PACKAGE_SUFFIX.get(os_name)
-    if suffix is None:
-        raise RuntimeError("No release package format defined for %s yet." % os_name)
-    return suffix
+    if os_name == "windows":
+        return "nsis"
+    if os_name == "linux":
+        ids = distro_ids() if ids is None else ids
+        for i in ids:
+            if i in LINUX_FAMILY_FORMAT:
+                return LINUX_FAMILY_FORMAT[i]
+        raise RuntimeError("No package format for this Linux distribution (os-release ID and "
+                           "ID_LIKE: %s). Packages are built for the %s families; add a row "
+                           "to LINUX_FAMILY_FORMAT rather than building one for another's."
+                           % (", ".join(ids) or "none",
+                              " and ".join(sorted(LINUX_FAMILY_FORMAT))))
+    raise RuntimeError("No release package format defined for %s yet." % os_name)
 
 
 def staging_dir(os_name=None):
-    """`packaging/staging/<os>/`: the install tree for that platform's package."""
+    """`packaging/staging/<os>/`: the install tree for that platform's packages. Per
+    platform, not per format - the .deb and the Arch package stage the same tree."""
     os_name = os_name or current_os()
-    if os_name not in PACKAGE_SUFFIX:
+    if os_name not in PACKAGE_OSES:
         raise RuntimeError("No release package format defined for %s yet." % os_name)
     return STAGING_ROOT / os_name
 
 
-def package_glob(os_name=None):
-    os_name = os_name or current_os()
-    pattern = PACKAGE_GLOB.get(os_name)
-    if pattern is None:
-        raise RuntimeError("No release package format defined for %s yet." % os_name)
-    return pattern
+def package_glob(fmt=None):
+    """The DIST_DIR pattern for a format; this machine's own when none is named. A format,
+    not a platform: two formats carry the Linux tree."""
+    fmt = fmt or package_format()
+    if fmt not in PACKAGE_FORMATS:
+        raise RuntimeError("%r is not a package format (%s); a platform name is not one."
+                           % (fmt, ", ".join(sorted(PACKAGE_FORMATS))))
+    return PACKAGE_FORMATS[fmt]["glob"]
+
+
+def format_of(package):
+    """The format a built package is IN, read off its suffix - not the format this machine
+    happens to build."""
+    name = str(package).lower()
+    for fmt, f in PACKAGE_FORMATS.items():
+        if name.endswith(f["suffix"]):
+            return fmt
+    raise RuntimeError("%s is not a package format this project builds (%s)."
+                       % (package, ", ".join(sorted(f["suffix"] for f in PACKAGE_FORMATS.values()))))
 
 
 def package_os(package):
-    """The platform a built package is FOR, read off its suffix - not the platform this
-    script happens to be running on."""
-    suffix = os.path.splitext(str(package))[1].lower()
-    for os_name, s in PACKAGE_SUFFIX.items():
-        if s == suffix:
-            return os_name
-    raise RuntimeError("%s is not a package format this project builds (%s)."
-                       % (package, ", ".join(sorted(PACKAGE_SUFFIX.values()))))
+    """The platform a built package is FOR - which inventory it is checked against."""
+    return PACKAGE_FORMATS[format_of(package)]["os"]
 
 
 def deb_arch(arch=None):
@@ -130,6 +193,15 @@ def deb_arch(arch=None):
     if name is None:
         raise RuntimeError("No Debian architecture recorded for %s; add a row to DEB_ARCH "
                            "if the Linux package is built there." % arch)
+    return name
+
+
+def pacman_arch(arch=None):
+    arch = arch or current_arch()
+    name = PACMAN_ARCH.get(arch)
+    if name is None:
+        raise RuntimeError("No Arch Linux architecture recorded for %s; add a row to "
+                           "PACMAN_ARCH if the Arch package is built there." % arch)
     return name
 
 

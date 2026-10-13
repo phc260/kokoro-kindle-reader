@@ -69,8 +69,9 @@ passes; do not weaken build gates to make a check succeed. A check does not prov
 
 ## Git workflow
 
-- **A tag is a release**, not a step in finishing a change. `installer.yml` fires on `v*`
-  and builds the installer plus corresponding source into a draft release. A request to
+- **A tag is a release**, not a step in finishing a change. `windows-installer.yml` fires on `v*`
+  and builds the installer plus corresponding source into a draft release (it also runs on
+  pushes to main, as a check that publishes nothing). A request to
   commit or push is not a request to tag or publish a release.
 
 When a commit is requested, follow `CLAUDE.md` and `DEVELOPMENT.md` for branching, trailers,
@@ -115,11 +116,14 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
   `read_controls` falls back to `Controls::default()` for a missing file, unparseable JSON
   (a UTF-8 BOM does it silently) and a missing key alike. Flag any fix that writes an initial
   `controls.json` instead, and any silent GPU→CPU substitution: the fallback must log.
-- **The Linux `.deb` is a `PROFILES` row in `packaging/build_installer.py`, not a second
-  recipe.** Flag a shell build script or dpkg maintainer script carrying logic, a hand-written
-  `Depends:` (it comes from `dpkg-shlibdeps`), bundled libraries placed on the system library
-  path instead of the private `/usr/lib/kokoro-kindle-reader/`, or modes copied rather than
-  set (the checkout can be NTFS, where everything reads 0777).
+- **The Linux packages (`.deb` and Arch) are a `PROFILES` row in
+  `packaging/build_installer.py`, not a second recipe.** Flag a shell build script, a dpkg
+  maintainer script or a pacman install script carrying logic, a hand-written dependency list
+  (`Depends:` comes from `dpkg-shlibdeps`; Arch's `depends` from the binaries' `NEEDED` via
+  `ldconfig -p` and `pacman -Qqo`), a packager chosen by anything but the os-release family,
+  makepkg options that let it strip or tidy the provisioned libraries, bundled libraries
+  placed on the system library path instead of the private `/usr/lib/kokoro-kindle-reader/`,
+  or modes copied rather than set (the checkout can be NTFS, where everything reads 0777).
 - **There is ONE provisioning recipe for both platforms: `native-deps/fetch-deps.py` (plus
   `build-espeak.py`).** Both platforms invoke it directly; there is no wrapper on either
   side. Flag any change that adds a platform-specific wrapper back, or a second
@@ -329,9 +333,10 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
   licence isn't on `packaging/about.toml`'s accepted list. Don't replace that with a
   hand-written prose list of "the unusual crates" — that's what drifted and shipped four
   sole-licensed crates as if MIT/Apache-2.0 already covered them. `cargo about` must be
-  installed in CI (pinned in `installer.yml`; also gated on PRs by `license-check.yml`) or
-  the build throws. `GPL-3.0-only` is accepted for the Slint crates ONLY (per-crate entries
-  in `about.toml`), so a GPL dep through anything else fails `--fail`.
+  installed in CI (pinned in `windows-installer.yml`, `debian-installer.yml` and
+  `arch-installer.yml`; also gated on pushes to main and PRs by `license-check.yml`, for both the Windows installer and the Linux packages, each
+  on its own OS) or the build throws. `GPL-3.0-only` is accepted for the Slint crates ONLY
+  (per-crate entries in `about.toml`), so a GPL dep through anything else fails `--fail`.
   Preserve the packaged-file/source-header appendices and the hash-pinned upstream
   clarifications. `cargo-about` only warns if a clarification fails; the separate
   `verify_dependency_licenses.py` check must reject missing texts in the generated AND
@@ -347,7 +352,7 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
   block count; checking only special clarifications misses changed or deleted notices.
   The tray and Settings must keep **About & licenses** available independently of narration;
   it opens installed `legal.html`, whose content and local links are checked in packaging.
-  The `.deb` omits `legal.html` on purpose (`legal_page` in the profile, `OMITTED` in the
+  The Linux packages omit `legal.html` on purpose (`legal_page` in the profile, `OMITTED` in the
   verifier) - flag either side changing without the other.
 - **Provisioned notices that must ship, and the checks that prove they do.** Besides the ORT
   wheel notices, `fetch-deps.py` provisions espeak-ng's own `COPYING*` (incl. `COPYING.UCD`,
@@ -392,11 +397,13 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
   `corresponding-source-X.Y.Z.zip` (LFS-resolved source, lockfiles/scripts, the modified
   espeak-ng tree and the exact Rust Standard Library source, both with SHA-256 manifests,
   plus the hash-verified official NSIS 3.12 source for its CPL-covered LZMA module)
-  and `installer.yml` pairs it with the installer in both Actions artifacts and tagged
-  releases. `sapi.yml` build-tests its intermediate DLL but does not upload it bare. Never
-  ship an installer or intermediate binary alone. The Linux `.deb` has no archive yet and the
-  packager refuses to run on Linux, so flag anything that publishes a `.deb` as a release
-  artifact before that exists.
+  and `windows-installer.yml` pairs it with the installer in both Actions artifacts and tagged
+  releases. `windows-sapi.yml` build-tests its intermediate DLL but does not upload it bare. Never
+  ship an installer or intermediate binary alone. Each Linux package has its own archive
+  (`corresponding-source-X.Y.Z-debian.zip` / `-arch.zip`, built on the machine that built
+  the package); flag any upload or publish of a `.deb` or Arch package (an Actions artifact
+  included) that does not carry that package's own archive beside it, and any change that
+  makes the Windows archive README differ from what it was without meaning to.
 
 ## Encoding rules (real bugs, not style)
 

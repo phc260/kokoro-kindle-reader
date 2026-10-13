@@ -54,7 +54,7 @@ upstream = "https://github.com/rust-lang/rust"
 spdx = "LicenseRef-Rust-Standard-Library-Per-Build"
 modified = false
 notice = ["licenses/rust/COPYRIGHT-library.html", "licenses/rust/TOOLCHAIN.txt", "THIRD_PARTY_NOTICES.md"]
-corresponding_source = "corresponding-source-X.Y.Z.zip carries the exact rust-src library tree from this toolchain"
+corresponding_source = "each package's own corresponding-source archive (corresponding-source-X.Y.Z.zip, -debian.zip, -arch.zip) carries the exact rust-src library tree from the toolchain that built it"
 provisioned_by = "the active rustc sysroot"
 staged_by = "packaging/build_installer.py"
 
@@ -200,7 +200,7 @@ modified = true
 modification = "phsource/ph_english_us: phoneme o@ reverted from horse-hoarse merger (upstream 5b01dd86), 2026-07-05; see build-espeak.py and THIRD_PARTY_NOTICES.md section 5(a) notice"
 notice = ["licenses/espeak-ng/COPYING", "licenses/espeak-ng/COPYING.APACHE", "licenses/espeak-ng/COPYING.BSD2", "licenses/espeak-ng/COPYING.UCD", "licenses/espeak-ng-BSD-2-Clause.txt", "licenses/GPL-3.0.txt"]
 platforms = ["linux"]
-corresponding_source = "native-deps/build-espeak.py (patch + build recipe, itself SHA-256-bound to the cache); the Linux package has no corresponding-source archive yet - see packaging/README.md"
+corresponding_source = "native-deps/build-espeak.py (patch + build recipe, itself SHA-256-bound to the cache); corresponding-source-X.Y.Z-debian.zip / -arch.zip must match the build-time source SHA-256 manifest"
 provisioned_by = "native-deps/fetch-deps.py -> build-espeak.py"
 staged_by = "packaging/build_installer.py"
 sha256_note = "per-build (built with the system C/C++ toolchain; not hash-pinned by design)"
@@ -216,7 +216,7 @@ modification = "derived from the modified phsource above (the o@ revert affects 
 # COPYING.UCD covers the Unicode Character Database data baked into this directory; it is a
 # DIFFERENT document from licenses/Unicode-3.0.txt (which is for the unicode-ident crate).
 notice = ["licenses/espeak-ng/COPYING", "licenses/espeak-ng/COPYING.UCD", "licenses/GPL-3.0.txt"]
-corresponding_source = "native-deps/build-espeak.py; corresponding-source-X.Y.Z.zip"
+corresponding_source = "native-deps/build-espeak.py; corresponding-source-X.Y.Z.zip (-debian.zip / -arch.zip for the Linux packages)"
 provisioned_by = "native-deps/fetch-deps.py -> build-espeak.py"
 staged_by = "packaging/build_installer.py"
 
@@ -346,7 +346,7 @@ staged_by = "packaging/build_installer.py"
 [[component]]
 name = "NSIS installer/uninstaller stub"
 shipped_as = "the -setup.exe itself, and the installed Uninstall.exe"
-version = "3.12 (pinned in .github/workflows/installer.yml)"
+version = "3.12 (pinned in .github/workflows/windows-installer.yml)"
 upstream = "https://nsis.sourceforge.io"
 # zlib/libpng for NSIS + zlib module, bzip2 for the bzip2 module, CPL-1.0 (with a linking
 # exception) for the LZMA module this installer uses (SetCompressor /SOLID lzma).
@@ -359,8 +359,8 @@ staged_by = "packaging/build_installer.py (from the installed NSIS COPYING)"
 
 # --- The Linux package's own files (MIT) -------------------------------------------------
 [[component]]
-name = "Linux package files: kokoro-fetch-models, the two manifests, the systemd user unit, README.Debian, copyright"
-shipped_as = "tools/fetch-model.py + tools/provision_util.py + model-manifest.json + ocr-manifest.json in the app dir; /usr/bin links; /usr/lib/systemd/user/kokoro-host.service; /usr/share/doc/kokoro-kindle-reader/"
+name = "Linux package files: kokoro-fetch-models, the two manifests, the systemd user unit, README, copyright"
+shipped_as = "tools/fetch-model.py + tools/provision_util.py + model-manifest.json + ocr-manifest.json in the app dir; /usr/bin links; /usr/lib/systemd/user/kokoro-host.service; /usr/share/doc/kokoro-kindle-reader/; the copyright pointer in /usr/share/doc (.deb) or /usr/share/licenses (Arch)"
 version = "this repository, at the build's commit"
 upstream = "this repository (native-deps/, the repo root, packaging/linux/)"
 spdx = "MIT"

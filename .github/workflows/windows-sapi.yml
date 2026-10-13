@@ -1,4 +1,4 @@
-name: sapi (Rust SAPI engine)
+name: windows sapi (Rust SAPI engine)
 
 # Builds the x86 Rust SAPI DLL (kokoro-sapi) and runs the no-Kindle COM smoke test
 # (kokoro-sapi-smoke): LoadLibrary + DllGetClassObject + CreateInstance + QI across the
@@ -9,10 +9,15 @@ name: sapi (Rust SAPI engine)
 
 on:
   push:
-    paths: ['kokoro-sapi/**', 'kokoro-sapi-smoke/**', 'kokoro-protocol/**', '.github/workflows/sapi.yml']
+    paths: ['kokoro-sapi/**', 'kokoro-sapi-smoke/**', 'kokoro-protocol/**', '.github/workflows/windows-sapi.yml']
   pull_request:
-    paths: ['kokoro-sapi/**', 'kokoro-sapi-smoke/**', 'kokoro-protocol/**', '.github/workflows/sapi.yml']
+    paths: ['kokoro-sapi/**', 'kokoro-sapi-smoke/**', 'kokoro-protocol/**', '.github/workflows/windows-sapi.yml']
   workflow_dispatch:
+
+# Read-only: nothing here writes to the repository, and the build runs third-party build
+# scripts that should not hold a token that could.
+permissions:
+  contents: read
 
 jobs:
   build:

@@ -1,7 +1,8 @@
-# systemd USER unit for the Kokoro Kindle Reader host (installed by the .deb into
-# /usr/lib/systemd/user/). It serves the browser extension on 127.0.0.1:8787 and nothing else
-# on Linux. Opt-in, not enabled by the package - the Linux counterpart of the Windows host's
-# login autostart, which the user also turns on by running the app:
+# systemd USER unit for the Kokoro Kindle Reader host (installed by both Linux packages, the
+# .deb and the Arch package, into /usr/lib/systemd/user/). It serves the browser extension on
+# 127.0.0.1:8787 and nothing else on Linux. Opt-in, not enabled by the package - the Linux
+# counterpart of the Windows host's login autostart, which the user also turns on by running
+# the app:
 #
 #     systemctl --user enable --now kokoro-host
 #
@@ -10,7 +11,7 @@
 
 [Unit]
 Description=Kokoro Kindle Reader synthesis host (browser extension endpoint)
-Documentation=file:///usr/share/doc/kokoro-kindle-reader/README.Debian
+Documentation=file:///usr/share/doc/kokoro-kindle-reader/README
 
 [Service]
 ExecStart=/usr/lib/kokoro-kindle-reader/kokoro-host

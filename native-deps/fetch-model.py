@@ -17,7 +17,7 @@ WHY THIS EXISTS when the panel already downloads both: the panel is the only oth
 downloader in the tree and it does not build for Linux yet (that is the port plan's
 desktop-integration step). Without this, a Linux host starts, logs "model.onnx not found"
 and synthesizes nothing, and answers /ocr with `missing` - so the Linux package would
-install a narrator with nothing to narrate with. The .deb therefore ships this script as
+install a narrator with nothing to narrate with. Both Linux packages therefore ship it as
 `kokoro-fetch-models`, laid out as it is here (this file in tools/, the two manifests one
 level up), so the same path arithmetic finds them in both places. On Windows the panel
 stays the normal route; this works there too, and --verify-only is the panel's

@@ -44,7 +44,7 @@ cargo test --manifest-path kokoro-host\Cargo.toml     # 47
 
 All three run in seconds and need no host, no Kindle, no models and no network. **No CI workflow
 runs the browser extension's `bun test`**; the two Rust suites do run in CI, as a side effect of
-`linux.yml` proving the Ubuntu build links (`kokoro-host/**`, `kokoro-ocr/**`,
+`debian-installer.yml` proving the Ubuntu build links (`kokoro-host/**`, `kokoro-ocr/**`,
 `kokoro-protocol/**`, or `native-deps/*.py` changes) — see [TESTS.md](TESTS.md) for the full
 inventory, what each suite pins, the seven by-hand harnesses, and the known gaps.
 
@@ -94,13 +94,14 @@ to co-author to work around it.
 
 | Workflow | Trigger | What it does |
 |---|---|---|
-| `installer.yml` | `v*` tag push, or manual dispatch | Full installer build (both exes + the 3 x86 artifacts + NSIS, pinned). Installs `cargo-about` (pinned) for the Cargo licence gate and `rust-src` for the exact Standard Library corresponding source; verifies the built installer's notice tree (`verify_installer_notices.py`). Its Actions artifact always contains the setup.exe **and** `corresponding-source-*.zip`; on a tag it also drafts a release with both. |
-| `license-check.yml` | PRs touching dependency, component, packaging, or notice inputs | Runs the `cargo-about --fail` gate plus component and fixed notice-text integrity checks at review time — no full build. |
-| `sapi.yml` | `kokoro-sapi/**`, `kokoro-sapi-smoke/**`, or `kokoro-protocol/**` changes | Builds the x86 SAPI DLL + runs the no-Kindle COM smoke test (`kokoro-sapi-smoke`). It does not upload the bare intermediate DLL; the licensed installer is the distribution path. |
-| `hook.yml` | `kokoro-hook/**` / `kokoro-inject/**` changes | Compile-checks the x86 hook + injector. |
-| `linux.yml` | `kokoro-host/**`, `kokoro-ocr/**`, `kokoro-protocol/**`, or `native-deps/*.py` | Provisions the Linux native deps for real, then builds, tests and **starts** the host on Ubuntu. The only place the Linux build is linked and run — development happens on Windows, where `cargo check --target x86_64-unknown-linux-gnu` proves the `cfg` gating compiles and nothing beyond it. |
+| `windows-installer.yml` | `v*` tag push; push to main touching the installer's inputs; manual dispatch | Full installer build (both exes + the 3 x86 artifacts + NSIS, pinned). Installs `cargo-about` (pinned) for the Cargo licence gate and `rust-src` for the exact Standard Library corresponding source; verifies the built installer's notice tree (`verify_installer_notices.py`). Its Actions artifact always contains the setup.exe **and** `corresponding-source-*.zip`; on a tag a separate `release` job, the only one with `contents: write`, drafts a release with both. Non-tag runs are a check and publish nothing. |
+| `license-check.yml` | Pushes to main and PRs touching dependency, component, packaging, or notice inputs | Runs the `cargo-about --fail` gate for **both** platforms, each on its own OS — the Windows installer's five crates on `windows-latest`, the Linux packages' host on `ubuntu-latest` (the fast version of what `debian-installer.yml` and `arch-installer.yml` check inside full package builds) — plus component and fixed notice-text integrity checks at review time — no full build. |
+| `windows-sapi.yml` | `kokoro-sapi/**`, `kokoro-sapi-smoke/**`, or `kokoro-protocol/**` changes | Builds the x86 SAPI DLL + runs the no-Kindle COM smoke test (`kokoro-sapi-smoke`). It does not upload the bare intermediate DLL; the licensed installer is the distribution path. |
+| `windows-hook.yml` | `kokoro-hook/**` / `kokoro-inject/**` changes | Compile-checks the x86 hook + injector. |
+| `debian-installer.yml` | `kokoro-host/**`, `kokoro-ocr/**`, `kokoro-protocol/**`, `native-deps/*.py`, or the `.deb`'s packaging/licence inputs | Provisions the Linux native deps for real, then builds, tests and **starts** the host on Ubuntu. The only place the Linux build is linked and run — development happens on Windows, where `cargo check --target x86_64-unknown-linux-gnu` proves the `cfg` gating compiles and nothing beyond it. Then builds the `.deb` (`build_installer.py`) and verifies its notice tree (`verify_installer_notices.py`). Then builds its corresponding-source archive (`corresponding-source-*-debian.zip`) and uploads the `.deb` and the archive as one artifact - never the `.deb` alone. |
+| `arch-installer.yml` | the same paths as `debian-installer.yml` | Builds the Arch package natively in an `archlinux:base-devel` container: the same `fetch-deps.py` and `build_installer.py`, which picks `makepkg` from os-release, then `verify_installer_notices.py`. Runs the build as a `builder` user because makepkg refuses root. No tests or host probe (`debian-installer.yml` has those for the same source). Uploads the package with its own corresponding-source archive (`-arch.zip`) as one artifact. |
 
-`sapi.yml` and `hook.yml` also re-run when their own workflow file changes (the standard
+`windows-sapi.yml` and `windows-hook.yml` also re-run when their own workflow file changes (the standard
 self-trigger); the trigger columns list only the source paths that matter day to day.
 
 ## Releasing
@@ -131,7 +132,7 @@ See [Building from source](ARCHITECTURE.md#building-from-source).
    `package.json`. The `/bump-version` command does exactly this.
 2. Commit on `main`, push.
 3. Tag and push the tag: `git tag vX.Y.Z && git push origin vX.Y.Z`. This triggers
-   `installer.yml`, which builds the installer and creates a **draft** release.
+   `windows-installer.yml`, which builds the installer and creates a **draft** release.
 4. Smoke-test the built installer, then **publish the draft manually** — publishing is
    a deliberate step by design; CI never publishes.
 

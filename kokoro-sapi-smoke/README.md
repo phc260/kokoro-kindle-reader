@@ -3,7 +3,7 @@
 A standalone harness that exercises the `kokoro-sapi` engine **without Kindle, without
 registration, without elevation**: it `LoadLibrary`s the DLL and drives the COM object
 directly, so a vtable/QI/slot-order regression fails loudly instead of silently breaking
-Read Aloud. Run in CI on every `kokoro-sapi` change (`.github/workflows/sapi.yml`).
+Read Aloud. Run in CI on every `kokoro-sapi` change (`.github/workflows/windows-sapi.yml`).
 
 ## The COM checks (no host needed)
 

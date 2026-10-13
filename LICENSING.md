@@ -40,10 +40,10 @@ The combined binary is **GPL-3.0-only**, not "or-later": Slint's GPL option is
 | Rust Standard Library | Primarily **MIT OR Apache-2.0**, with bundled code under additional terms | Statically linked into every Rust output; exact toolchain report staged from `rustc` as `licenses/rust/COPYRIGHT-library.html`. |
 | Installer / uninstaller stub | **NSIS license** (Zlib + bzip2 + CPL-1.0-w/-exception) | LZMA-compressed NSIS stub. |
 | Kokoro-82M weights | **Apache-2.0**, *not shipped* | Runtime download. |
-| `kokoro-host` (Linux `.deb`) | **GPL-3.0-only** combined work | As `kokoro-host.exe`: links the same modified espeak-ng. |
-| `libespeak-ng.so.1` + `espeak-ng-data/` (Linux `.deb`) | **GPL-3.0-or-later**, modified | The same `build-espeak.py` recipe and commit as `espeak-ng.dll`. |
-| `libonnxruntime.so`, `libonnxruntime_providers_shared.so` (Linux `.deb`) | **MIT** | The CPU `onnxruntime` wheel, unmodified; no Dawn/Tint, no DXC. |
-| `kokoro-fetch-models`, the two manifests, the systemd unit (Linux `.deb`) | **MIT** | This project's own files. |
+| `kokoro-host` (Linux packages) | **GPL-3.0-only** combined work | As `kokoro-host.exe`: links the same modified espeak-ng. |
+| `libespeak-ng.so.1` + `espeak-ng-data/` (Linux packages) | **GPL-3.0-or-later**, modified | The same `build-espeak.py` recipe and commit as `espeak-ng.dll`. |
+| `libonnxruntime.so`, `libonnxruntime_providers_shared.so` (Linux packages) | **MIT** | The CPU `onnxruntime` wheel, unmodified; no Dawn/Tint, no DXC. |
+| `kokoro-fetch-models`, the two manifests, the systemd unit (Linux packages) | **MIT** | This project's own files. |
 | Repository source | **MIT**, except Apache-2.0 ported files | Alan's grant; ports retain upstream licence. |
 
 ### Source in this repository that is not MIT (Apache-2.0 islands)
@@ -105,11 +105,14 @@ immutable toolchain commit. A §6 recipient
 therefore does not depend on a mutable upstream tag for either modified espeak-ng or the
 statically linked standard library.
 
-**The Linux `.deb` has no such archive yet**, and for that reason it is not a release
-artifact: `build_installer.py` builds it locally, and `build_corresponding_source.py` refuses
-to run on Linux rather than produce an archive describing the Windows installer. Until the
-packager has a Linux branch, a `.deb` must not be conveyed without the source of the commit
-it was built from and the modified espeak-ng that `native-deps/build-espeak.py` reproduces.
+**Each Linux package has its own archive**, built by the same script on the machine that
+built the package, from that build's provenance: `corresponding-source-X.Y.Z-debian.zip`
+for the `.deb` and `corresponding-source-X.Y.Z-arch.zip` for the Arch package. Each holds
+the same project source, modified espeak-ng tree and Rust Standard Library source as the
+Windows archive, and no NSIS source, since neither Linux packager puts code of its own into
+a package. `debian-installer.yml` and `arch-installer.yml` upload each package only in one
+artifact with its archive. Neither Linux package is attached to a GitHub Release yet; until
+one is, conveying a Linux package means conveying its archive with it.
 
 ## How this is enforced
 
@@ -165,11 +168,12 @@ it was built from and the modified espeak-ng that `native-deps/build-espeak.py` 
   `packaging/license-texts.sha256`, both before the build and inside the extracted installer;
   presence alone would not catch truncation or a copy from the wrong upstream revision.
   Every local link from `legal.html` must resolve to a non-empty installed file.
-  The same check opens a Linux `.deb` (in pure Python) against the Linux rows of
-  `components.toml` and its single host report. That package omits `legal.html` by
+  The same check opens either Linux package - a `.deb` or an Arch `.pkg.tar.xz`, in pure
+  Python - against the Linux rows of `components.toml` and its single host report. Those
+  packages omit `legal.html` by
   declaration, since nothing there opens it and its links name Windows-only files.
-- **Every binary-bearing CI artifact is complete.** `installer.yml` pairs the installer with
-  corresponding source even on a manual, non-release run; `sapi.yml` build-tests the SAPI DLL
+- **Every binary-bearing CI artifact is complete.** `windows-installer.yml` pairs the installer with
+  corresponding source on every non-release run (a push to main or a manual run); `windows-sapi.yml` build-tests the SAPI DLL
   but does not upload that intermediate binary without its notices.
 - **`components.toml`** is the checked-in inventory of every shipped component the Cargo
   gate cannot see.
@@ -205,5 +209,5 @@ archives. Withdrawal prevents further deficient downloads; it does not itself re
 obligations to prior recipients or establish reinstatement under GPLv3 §8. Assess that
 history and any rights-holder notices with qualified counsel rather than declaring the
 violation cured by a newer release. Do **not** rewrite source tags. Review stale draft
-binary assets too (`installer.yml` publishes as `draft: true`). No release assets have been
+binary assets too (`windows-installer.yml` publishes as `draft: true`). No release assets have been
 changed by this repository audit.
