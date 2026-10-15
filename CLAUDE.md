@@ -974,8 +974,10 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   unit (the host's data is per-user). The dependency list is read off the binaries, never
   written by hand: `dpkg-shlibdeps` for the `.deb`; for Arch, every ELF's `NEEDED` less what
   the package ships, resolved through `ldconfig -p` to a file and `pacman -Qqo` to its
-  owner. The PKGBUILD is generated and only copies the laid-out tree in, with `!strip`,
-  `!autodeps` and no tidying so the provisioned libraries ship byte for byte. **makepkg
+  owner. The PKGBUILD is generated and only copies the laid-out tree in, with `!strip` and
+  no tidying so the provisioned libraries ship byte for byte; **don't add `!autodeps`** -
+  the makepkg Arch ships rejects it as unknown - `check_pkginfo` instead fails the build if
+  makepkg's `.PKGINFO` declares other depends than the derived ones, or any `provides`. **makepkg
   refuses root**, and `check_pacman` says so before anything compiles (CI runs the Arch
   build as a `builder` user for that reason). Modes are set explicitly and re-read, because
   this checkout can live on NTFS where everything reads 0777. Both are compressed with xz so

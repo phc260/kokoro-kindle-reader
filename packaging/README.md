@@ -308,9 +308,12 @@ unless it says otherwise:
 - **The Arch PKGBUILD is generated, and only copies.** `build_installer.py` has staged and laid
   out every file before makepkg runs; `package()` copies the tree in, and makepkg contributes
   the metadata (`.PKGINFO`, `.BUILDINFO`, `.MTREE`). `!strip`, `!debug` and no tidying, so the
-  provisioned ONNX Runtime and espeak-ng ship byte for byte; `!autodeps`, because the
-  dependencies are derived above and nothing here is a library for other packages. Every
-  makepkg location points into a temp dir, so the user's `makepkg.conf` decides none of it.
+  provisioned ONNX Runtime and espeak-ng ship byte for byte. The dependencies are derived
+  above and nothing here is a library for other packages, so `check_pkginfo` reads the built
+  package's `.PKGINFO` and fails unless its `depend` entries are exactly the derived ones and
+  it has no `provides`. That replaces `!autodeps`, which the makepkg Arch ships rejects as an
+  unknown option. Every makepkg location points into a temp dir, so the user's `makepkg.conf`
+  decides none of it.
 - **Modes are set, then re-read.** This checkout can live on NTFS, where every file reads
   0777, and both packagers record what they find. So the tree is laid out in a temp dir, set
   to 0755/0644 explicitly and checked; a filesystem that ignored `chmod` fails the build.

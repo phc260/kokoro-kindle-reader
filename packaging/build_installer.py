@@ -30,6 +30,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tarfile
 import tempfile
 from pathlib import Path
 
@@ -695,10 +696,9 @@ url='https://github.com/phc260/kokoro-kindle-reader'
 license=('GPL-3.0-only')
 depends=(%(depends)s)
 # Nothing in the tree is touched after it is laid out: the provisioned ONNX Runtime and
-# espeak-ng libraries ship byte for byte (no strip, no split -debug package, no tidying),
-# and no autodeps - depends is read off the binaries by build_installer.py, and nothing
-# here is a library for other packages to depend on.
-options=('!strip' '!debug' '!autodeps' '!purge' '!zipman' '!staticlibs' '!libtool')
+# espeak-ng libraries ship byte for byte (no strip, no split -debug package, no tidying).
+# depends is read off the binaries by build_installer.py; check_pkginfo holds makepkg to it.
+options=('!strip' '!debug' '!purge' '!zipman' '!staticlibs' '!libtool')
 
 package() {
     cp -a %(root)s/. "$pkgdir"/
@@ -899,6 +899,40 @@ def pacman_depends(root, tools):
     return sorted(owners)
 
 
+def parse_pkginfo(text):
+    """key -> [values] from a .PKGINFO, whose lines are `key = value` and repeat per entry."""
+    fields = {}
+    for line in text.splitlines():
+        key, sep, value = line.partition(" = ")
+        if sep and not line.startswith("#"):
+            fields.setdefault(key, []).append(value)
+    return fields
+
+
+def check_pkginfo(package, depends):
+    """The built package must declare exactly the depends derived here, and provide nothing.
+
+    makepkg writes .PKGINFO itself and can add to it: automatic library dependencies would
+    add `provides` for the shared libraries under /usr/lib - here the private ONNX Runtime
+    and modified espeak-ng, which must never satisfy another package's dependency. The
+    makepkg Arch ships rejects `!autodeps` as an unknown option, so the PKGBUILD cannot opt
+    out by name; this checks what makepkg actually wrote, whatever the feature is called.
+    """
+    try:
+        with tarfile.open(package, mode="r:*") as tar:
+            text = tar.extractfile(".PKGINFO").read().decode("utf-8")
+    except (KeyError, AttributeError, tarfile.TarError) as e:
+        raise Fail("Cannot read .PKGINFO from %s: %s" % (package, e))
+    fields = parse_pkginfo(text)
+    declared = sorted(fields.get("depend", []))
+    if declared != sorted(depends):
+        raise Fail("makepkg declared depends %s, not the derived %s."
+                   % (", ".join(declared) or "none", ", ".join(sorted(depends))))
+    if fields.get("provides"):
+        raise Fail("makepkg declared provides %s; this package provides nothing to others."
+                   % ", ".join(fields["provides"]))
+
+
 def package_pacman(stage, packager):
     version = cargo_version(ROOT / "kokoro-host" / "Cargo.toml")
     # pkgver may not contain a hyphen. An underscore keeps a pre-release ordered before its
@@ -945,6 +979,7 @@ def package_pacman(stage, packager):
         if not built.is_file():
             raise Fail("makepkg produced %s, not %s."
                        % (", ".join(p.name for p in pkgdest.iterdir()) or "nothing", name))
+        check_pkginfo(built, depends)
         if out.exists():
             out.unlink()
         shutil.move(str(built), str(out))

@@ -121,7 +121,9 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
   maintainer script or a pacman install script carrying logic, a hand-written dependency list
   (`Depends:` comes from `dpkg-shlibdeps`; Arch's `depends` from the binaries' `NEEDED` via
   `ldconfig -p` and `pacman -Qqo`), a packager chosen by anything but the os-release family,
-  makepkg options that let it strip or tidy the provisioned libraries, bundled libraries
+  makepkg options that let it strip or tidy the provisioned libraries, a weakened
+  `check_pkginfo` (the built `.PKGINFO` must declare exactly the derived depends and no
+  `provides`; `!autodeps` is not a substitute - Arch's makepkg rejects it), bundled libraries
   placed on the system library path instead of the private `/usr/lib/kokoro-kindle-reader/`,
   or modes copied rather than set (the checkout can be NTFS, where everything reads 0777).
 - **There is ONE provisioning recipe for both platforms: `native-deps/fetch-deps.py` (plus
