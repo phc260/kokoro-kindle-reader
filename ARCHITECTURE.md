@@ -286,7 +286,8 @@ read from the wheel itself rather than assumed: **glibc >= 2.27** and **libstdc+
 sudo apt-get install -y build-essential cmake git curl python3
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
-# 2. One-time: provision the native deps into native-deps/linux/.
+# 2. One-time: provision the native deps into native-deps/<family>/ (debian on
+#    Debian/Ubuntu, arch on Arch - the distribution family, from /etc/os-release).
 #    Downloads the SHA-256-pinned CPU ONNX Runtime wheel and builds the pinned,
 #    modified espeak-ng. Idempotent; --force to re-provision.
 python3 native-deps/fetch-deps.py
@@ -316,7 +317,7 @@ expect it to be split when the panel and desktop integration land.
 
 | Symptom | Cause |
 |---|---|
-| `build.rs` panics naming `native-deps/linux/runtime` | step 2 was skipped, or it failed partway and left the tree unmarked |
+| `build.rs` panics naming `native-deps/<family>/runtime` | step 2 was skipped, or it failed partway and left the tree unmarked |
 | `WARNING: model.onnx not found`, then silence when a page is read | step 3 was skipped; `fetch-model.py --verify-only` says which files are missing |
 | `cannot find -lespeak-ng` at link time | the espeak build produced no `.so` — look for the CMake failure above it |
 | undefined references to `espeak_ng_*` | the FFI in `espeak.rs` disagrees with the library that was actually built |

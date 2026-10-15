@@ -157,7 +157,7 @@ notice = ["licenses/onnxruntime/ORT-LICENSE.txt", "licenses/onnxruntime/ORT-Thir
 platforms = ["linux"]
 provisioned_by = "native-deps/fetch-deps.py"
 staged_by = "packaging/build_installer.py"
-sha256_note = "fixed by the exact wheel SHA-256; native-deps/linux/runtime/ORT-PROVISION.txt records that wheel and prevents cache substitution"
+sha256_note = "fixed by the exact wheel SHA-256; native-deps/<family>/runtime/ORT-PROVISION.txt (debian, arch) records that wheel and prevents cache substitution"
 
 [[component]]
 name = "libonnxruntime_providers_shared.so"
@@ -170,7 +170,7 @@ notice = ["licenses/onnxruntime/ORT-LICENSE.txt", "licenses/onnxruntime/ORT-Thir
 platforms = ["linux"]
 provisioned_by = "native-deps/fetch-deps.py"
 staged_by = "packaging/build_installer.py"
-sha256_note = "fixed by the exact wheel SHA-256; native-deps/linux/runtime/ORT-PROVISION.txt records that wheel and prevents cache substitution"
+sha256_note = "fixed by the exact wheel SHA-256; native-deps/<family>/runtime/ORT-PROVISION.txt (debian, arch) records that wheel and prevents cache substitution"
 
 # --- espeak-ng: MODIFIED GPL component (the whole reason binaries are GPLv3) -------------
 [[component]]

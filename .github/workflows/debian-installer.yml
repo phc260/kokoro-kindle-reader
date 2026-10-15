@@ -93,9 +93,9 @@ jobs:
 
       - name: Show what was provisioned
         run: |
-          ls -l native-deps/linux/runtime/
-          echo '--- ORT provision marker ---'; cat native-deps/linux/runtime/ORT-PROVISION.txt
-          echo '--- espeak provision marker ---'; cat native-deps/linux/runtime/ESPEAK-PROVISION.txt
+          ls -l native-deps/debian/runtime/
+          echo '--- ORT provision marker ---'; cat native-deps/debian/runtime/ORT-PROVISION.txt
+          echo '--- espeak provision marker ---'; cat native-deps/debian/runtime/ESPEAK-PROVISION.txt
 
       # The step Windows cannot do. A link failure here is the espeak FFI disagreeing with
       # the library that was actually built.

@@ -79,9 +79,10 @@ Load the detail on demand:
 # import lib/DLL + espeak-ng-data). Must run before building kokoro-host.
 python native-deps\fetch-deps.py
 
-# Same, for a Linux build (CPU ONNX Runtime + the same modified espeak). Separate tree
-# (native-deps/linux/), separate pins; build.rs branches on the TARGET, so cross-checking
-# a Linux target from Windows needs THIS provision, not the Windows one.
+# Same, for a Linux build (CPU ONNX Runtime + the same modified espeak). Separate tree PER
+# DISTRIBUTION FAMILY (native-deps/debian/, native-deps/arch/), separate pins; build.rs
+# branches on the TARGET, so cross-checking a Linux target from Windows needs one of THESE
+# provisions, not the Windows one.
 # Same script as above - it provisions either platform and branches internally. Python 3
 # is required on both, and must be on PATH: nothing goes looking for an interpreter.
 python3 native-deps/fetch-deps.py
@@ -96,6 +97,8 @@ python3 native-deps/fetch-model.py
 
 # The host builds for two targets. Windows keeps the tray, the pipe and Kindle; Linux is
 # the core plus the loopback endpoint and nothing else. Both must stay warning-clean.
+# Windows has no os-release, so name the Linux family whose provision to check against.
+$env:KKR_BUILD_FAMILY = "debian"
 cargo check --manifest-path kokoro-host\Cargo.toml --target x86_64-unknown-linux-gnu
 
 # Build + run (Rust, x64). Right-click the tray → Settings to open the panel.
@@ -949,9 +952,25 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   against. **Don't reintroduce a second recipe** — platform differences belong in the `WHEELS`
   table and `layout()`, which is where they can be read side by side.
 - **Linux provisions the CPU wheel, Windows the WebGPU one**, into separate trees
-  (`native-deps/linux/` vs `native-deps/windows/`). **A distribution's own libespeak-ng is
+  (`native-deps/<family>/` vs `native-deps/windows/`). **A distribution's own libespeak-ng is
   not a substitute** for the built one: unmodified, probably not 1.52.0, and either
   difference changes the phonemes.
+- **Every build output is keyed by BUILD FAMILY, not platform: `windows`, `debian`, `arch`**
+  (`target_platform.build_family`; a distribution no package is built for gets its os-release
+  `ID`). The provision (`native-deps/<family>/runtime/`), espeak's build dir
+  (`espeak-ng-src/build-<family>/`), the package build's cargo target dir
+  (`kokoro-host/target/<family>/` on Linux; Windows keeps the default) with its
+  `kkr-provenance/<family>/`, and `staging/<family>/`. Two distributions can build one
+  checkout (a dual boot, a distrobox), and with one shared `linux/` key **nothing said whose
+  compiler and glibc produced what was there**: the espeak marker records the recipe, not who
+  ran it, and cargo calls the other distribution's release binary fresh (same triple, same
+  rustc) - so either package could ship the other's libraries. The PLATFORM still decides what
+  ships (`PROFILES`, `components.toml`, the licence reports, the ORT wheel). The family rule
+  lives in `target_platform.py`, which `fetch-deps.py`, `build-espeak.py` and stack-check
+  import; `build.rs` keeps a Rust copy (`LINUX_FAMILIES`) because a build script cannot ask
+  Python, takes `KKR_BUILD_FAMILY` when set (`build_installer.py` always sets it) and reads
+  os-release otherwise. **The old `native-deps/linux/` is never adopted** the way the old
+  Windows tree was moved into place: which distribution built it is the one fact it lacks.
 - **Do not write `printf '\uXXXX'` in a provisioning script.** It needs bash >= 4.2 and was
   observed passing the escape through unexpanded, which makes both of the horse-hoarse
   comparisons false and turns a correct tree into "contains neither sequence". The escapes
@@ -1208,12 +1227,12 @@ that way is still the audible half: Preview in the panel and Read Aloud in Kindl
   source. Otherwise the release would describe or offer source for a different binary.
 - **`--skip-build` cannot mean "trust whatever is in target".** A successful full installer
   build records every tracked source file's SHA-256, both x64 executable hashes, and
-  `rustc --version --verbose` beside the host output, in `target/release/kkr-provenance/<os>/`
-  so a dual-boot checkout's two platforms never overwrite each other's records.
-  `--skip-build` requires all records to
+  `rustc --version --verbose` beside the host output, in
+  `<target dir>/release/kkr-provenance/<family>/` so systems sharing one checkout never
+  overwrite each other's records. `--skip-build` requires all records to
   match, including after a standalone build overwrites an executable. The corresponding-source
-  packager uses records frozen in `staging/windows/provenance/` (each OS stages into its own
-  `staging/<os>/`, so a Linux build cannot wipe them), including espeak's source manifest,
+  packager uses records frozen in `staging/<family>/provenance/` (each family stages into its
+  own, so another system's build cannot wipe them), including espeak's source manifest,
   and independently compares the current tracked tree to the build-time manifest. This
   prevents a clean tagged checkout from pairing stale binaries with different source.
 - **The NSIS 3.12 pin is enforced, not documentary.** `build_installer.py` checks

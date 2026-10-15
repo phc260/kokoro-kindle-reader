@@ -9,17 +9,25 @@ settled a divergence they had already grown --
 the bash side accepted the first LICENSE it found anywhere in the wheel, which is exactly the
 lax check the PowerShell side's comments warned against. Both now use the strict one.
 
-Populates, per platform:
+Populates, per build family (packaging/target_platform.build_family):
 
-  Windows                                   Linux
-  -------                                   -----
-  windows/runtime/onnxruntime.dll (+3)      linux/runtime/libonnxruntime.so (+2)
-  windows/runtime/espeak-ng.dll             linux/runtime/libespeak-ng.so*
-  windows/runtime/espeak-ng-data/           linux/runtime/espeak-ng-data/
-  windows/runtime/notices/                  linux/runtime/notices/
-  windows/runtime/*-PROVISION.txt           linux/runtime/*-PROVISION.txt
+  Windows                                   Linux (<family> = debian, arch, ...)
+  -------                                   ------------------------------------
+  windows/runtime/onnxruntime.dll (+3)      <family>/runtime/libonnxruntime.so (+2)
+  windows/runtime/espeak-ng.dll             <family>/runtime/libespeak-ng.so*
+  windows/runtime/espeak-ng-data/           <family>/runtime/espeak-ng-data/
+  windows/runtime/notices/                  <family>/runtime/notices/
+  windows/runtime/*-PROVISION.txt           <family>/runtime/*-PROVISION.txt
+  espeak-ng-src/build-x64/                  espeak-ng-src/build-<family>/
   espeak-ng-src/  (shared clone)            espeak-ng-src/  (shared clone)
   espeak-ng-notices/  (shared)              espeak-ng-notices/  (shared)
+
+ONE LINUX TREE PER DISTRIBUTION FAMILY, not per platform. espeak-ng is compiled by the
+distribution's own compiler against its own glibc, and two distributions can share this
+checkout (a dual boot, a distrobox). The provision marker records the recipe, not who ran
+it, so one shared linux/ tree let a Debian build pick up an Arch-built libespeak-ng as
+"already provisioned", and the other way round. The ORT wheel is the same bytes for every
+family; it is downloaded per tree anyway, because the tree is what the marker vouches for.
 
 THE TWO WHEELS ARE DIFFERENT PACKAGES, DELIBERATELY. Windows takes onnxruntime-webgpu,
 because the Dawn WebGPU EP is what it runs on. Linux takes plain onnxruntime (CPU): the
@@ -50,6 +58,10 @@ WINDOWS = os.name == "nt"
 # The script's own directory is sys.path[0] when run directly; make that explicit so
 # importing this module from elsewhere (a test, a wrapper) resolves the helper too.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+# The build family - which tree this machine writes - is decided in ONE place, the packaging
+# layer's target_platform, so provisioning and packaging can never disagree about it.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "packaging"))
+import target_platform  # noqa: E402 - needs the path above
 from provision_util import (  # noqa: E402 - needs the path above
     download,
     fail,
@@ -118,7 +130,7 @@ NOTICE_PATTERNS = ("LICENSE", "NOTICE", "ThirdPartyNotices", "Privacy")
 
 
 def layout():
-    """Where this platform's provision lives, and which build dir espeak uses."""
+    """Where this build family's provision lives, and which build dir espeak uses."""
     if WINDOWS:
         return {
             "runtime": HERE / "windows" / "runtime",
@@ -128,9 +140,10 @@ def layout():
             "espeak_lib_dirs": ["src"],
             "espeak_lib_globs": ["espeak-ng.dll"],
         }
+    family = target_platform.build_family()
     return {
-        "runtime": HERE / "linux" / "runtime",
-        "espeak_build": HERE / "espeak-ng-src" / "build-linux",
+        "runtime": HERE / family / "runtime",
+        "espeak_build": HERE / "espeak-ng-src" / ("build-%s" % family),
         # No redirect applies off Windows (a shared library is a LIBRARY target), so the
         # SOVERSION chain lands beside the CMakeLists that declares the target. The second
         # candidate exists only so a future layout change fails loudly rather than silently.
@@ -373,12 +386,15 @@ def source_manifest(src, out):
     manifest that quietly omits a file is the one failure it exists to prevent.
     """
     # Top level only, matching what was excluded before: a build directory at the root, not
-    # every directory anywhere called build.
-    skip = {".git", "build", "build-x64", "build-linux"}
+    # every directory anywhere called build. Every build family's (`build-x64`,
+    # `build-<family>`) by prefix, since the families are not a closed list; espeak-ng tracks
+    # no top-level name starting with `build`. build-espeak.py's is_build_dir and
+    # build_corresponding_source.py's espeak_excluded apply the same rule.
+    is_build = lambda d: d == "build" or d.startswith("build-")
     rows = []
     for dirpath, dirnames, filenames in os.walk(src):
         if Path(dirpath).resolve() == Path(src).resolve():
-            dirnames[:] = [d for d in dirnames if d not in skip]
+            dirnames[:] = [d for d in dirnames if d != ".git" and not is_build(d)]
         for fn in filenames:
             p = Path(dirpath) / fn
             rel = p.relative_to(src).as_posix()
@@ -498,6 +514,17 @@ def adopt_legacy_windows_tree(paths):
     print("==> Moved native-deps/runtime/ -> %s (the Windows tree's new location)" % target)
 
 
+def report_legacy_linux_tree():
+    """native-deps/linux/ was the one Linux tree before each distribution family got its own.
+    Unlike the old Windows tree it is NOT moved into place: which distribution built its
+    libespeak-ng is exactly what nothing in it records, so adopting it under a family's name
+    would be the guess the split exists to stop. Nothing reads it any more."""
+    if (HERE / "linux").is_dir():
+        print("==> native-deps/linux/ is the old shared Linux tree and is no longer read. "
+              "Nothing records which distribution built it, so it is not adopted - delete it, "
+              "and espeak-ng-src/build-linux/ if present, by hand.")
+
+
 def main():
     ap = argparse.ArgumentParser(description="Provision native-deps/ for this platform.")
     ap.add_argument("--ort-version", default=ORT_VERSION)
@@ -511,6 +538,7 @@ def main():
 
     paths = layout()
     adopt_legacy_windows_tree(paths)
+    report_legacy_linux_tree()
     provision_ort(paths, args.force)
     provision_espeak(paths, args.force)
     provision_espeak_notices(HERE / "espeak-ng-src", force=False)
@@ -518,7 +546,8 @@ def main():
     runtime = paths["runtime"]
     notices = runtime / "notices"
     espk_notices = HERE / "espeak-ng-notices"
-    print("==> native-deps provisioned (%s):" % ("windows" if WINDOWS else "linux"))
+    print("==> native-deps provisioned (%s, in %s):"
+          % (target_platform.build_family(), runtime.relative_to(HERE)))
     is_lib = lambda f: f.is_file() and (f.suffix in (".dll", ".so") or ".so." in f.name)
     print("    runtime libraries : %d" % sum(1 for f in runtime.iterdir() if is_lib(f)))
     print("    ORT notices       : %d"

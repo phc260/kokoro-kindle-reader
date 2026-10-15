@@ -29,10 +29,10 @@ EXE_SUFFIX = {"windows": ".exe", "linux": ""}
 # archive that must ship beside it, and nothing else, so the folder IS the release.
 DIST_DIR = Path(__file__).resolve().parent / "dist"
 
-# Where each platform's install tree is assembled before its packager runs - one directory
-# per OS, never shared. A checkout can be built from both OSes (a dual-boot drive), and a
-# single staging/ meant the last build wiped the other platform's tree, including the
-# provenance/ the Windows corresponding-source archive is built from.
+# Where each build family's install tree is assembled before its packager runs - one
+# directory per family (`build_family`), never shared. A checkout can be built from several
+# systems (a dual-boot drive, a distrobox), and a single staging/ meant the last build wiped
+# the other's tree, including the provenance/ its corresponding-source archive is built from.
 STAGING_ROOT = Path(__file__).resolve().parent / "staging"
 
 # Every package format this project builds: the platform whose staged tree it carries, the
@@ -50,22 +50,31 @@ STAGING_ROOT = Path(__file__).resolve().parent / "staging"
 # builds with their own provenance, so each gets its own archive, and the names keep them
 # apart wherever both land - one release, or one dist/. The Windows name predates the others
 # and is unchanged.
+#
+# `family` is the build family that builds the format - see `build_family`. It names every
+# directory that build writes, and it is NOT the platform: the platform decides what ships,
+# the family decides whose compiler and glibc produced it.
 PACKAGE_FORMATS = {
-    "nsis": {"os": "windows", "suffix": ".exe", "glob": "*-setup.exe",
+    "nsis": {"os": "windows", "family": "windows", "suffix": ".exe", "glob": "*-setup.exe",
              "source_zip": "corresponding-source-%s.zip"},
-    "deb": {"os": "linux", "suffix": ".deb", "glob": "kokoro-kindle-reader_*.deb",
+    "deb": {"os": "linux", "family": "debian", "suffix": ".deb",
+            "glob": "kokoro-kindle-reader_*.deb",
             "source_zip": "corresponding-source-%s-debian.zip"},
-    "pacman": {"os": "linux", "suffix": ".pkg.tar.xz",
+    "pacman": {"os": "linux", "family": "arch", "suffix": ".pkg.tar.xz",
                "glob": "kokoro-kindle-reader-*.pkg.tar.xz",
                "source_zip": "corresponding-source-%s-arch.zip"},
 }
 # The platforms some package carries: what components.toml's `platforms` may name.
 PACKAGE_OSES = sorted({f["os"] for f in PACKAGE_FORMATS.values()})
+# The build families some package is built by: the ones that get a staging tree.
+PACKAGE_FAMILIES = sorted({f["family"] for f in PACKAGE_FORMATS.values()})
 
 # Which format a Linux machine builds, by the distribution family os-release puts it in: its
 # ID first, then each ID_LIKE entry (Ubuntu is `ubuntu` like `debian`; Manjaro is `manjaro`
 # like `arch`). A distribution in neither family raises rather than guessing - a package for
-# a package manager the machine may not have is an artifact nobody checked.
+# a package manager the machine may not have is an artifact nobody checked. The keys are also
+# the Linux build families (`build_family`), and kokoro-host/build.rs keeps a copy of them,
+# since a build script cannot ask Python.
 LINUX_FAMILY_FORMAT = {"debian": "deb", "arch": "pacman"}
 # Where os-release lives: /etc first, /usr/lib as the specification's fallback.
 OS_RELEASE = [Path("/etc/os-release"), Path("/usr/lib/os-release")]
@@ -129,8 +138,8 @@ def distro_ids(paths=None):
                 if sep and not key.lstrip().startswith("#"):
                     fields[key.strip()] = value.strip().strip("\"'")
             return [i for i in [fields.get("ID", "")] + fields.get("ID_LIKE", "").split() if i]
-    raise RuntimeError("No os-release file (%s): cannot tell which Linux package format "
-                       "this machine builds." % ", ".join(str(p) for p in paths or OS_RELEASE))
+    raise RuntimeError("No os-release file (%s): cannot tell which Linux distribution this "
+                       "is." % ", ".join(str(p) for p in paths or OS_RELEASE))
 
 
 def package_format(os_name=None, ids=None):
@@ -152,13 +161,50 @@ def package_format(os_name=None, ids=None):
     raise RuntimeError("No release package format defined for %s yet." % os_name)
 
 
-def staging_dir(os_name=None):
-    """`packaging/staging/<os>/`: the install tree for that platform's packages. Per
-    platform, not per format - the .deb and the Arch package stage the same tree."""
+def build_family(os_name=None, ids=None):
+    """Whose build output this machine writes: `windows`, or on Linux the distribution family
+    the package format is chosen by (`debian`, `arch`). It names native-deps/<family>/,
+    espeak's build-<family>/, the package build's cargo target dir and staging/<family>/.
+
+    The platform is not enough on Linux. Two distributions can build one checkout - a dual
+    boot, a distrobox, a container with the tree mounted - and nothing in a shared build
+    directory says whose compiler and glibc produced it: the provision marker records the
+    recipe, and cargo calls the other's binary fresh (same triple, same rustc). So the other
+    distribution's espeak and host would be packaged as if built here.
+
+    A distribution no package is built for still gets a tree of its own, under its os-release
+    ID, so the host can be developed there; only packaging needs a known family, and
+    `package_format` refuses the rest. `ids` is for tests.
+    """
     os_name = os_name or current_os()
-    if os_name not in PACKAGE_OSES:
-        raise RuntimeError("No release package format defined for %s yet." % os_name)
-    return STAGING_ROOT / os_name
+    if os_name == "windows":
+        return "windows"
+    if os_name == "linux":
+        ids = distro_ids() if ids is None else ids
+        for i in ids:
+            if i in LINUX_FAMILY_FORMAT:
+                return i
+        if ids:
+            return ids[0]
+        raise RuntimeError("os-release names no ID: cannot tell which build tree this "
+                           "machine writes.")
+    raise RuntimeError("No build family defined for %s yet." % os_name)
+
+
+def package_family(fmt=None):
+    """The build family that builds a package format; this machine's own when none is named."""
+    return PACKAGE_FORMATS[fmt or package_format()]["family"]
+
+
+def staging_dir(family=None):
+    """`packaging/staging/<family>/`: the install tree one build family assembles for its
+    package. Per family, not per platform: the .deb and the Arch package carry the same
+    Linux tree, but each is staged from its own distribution's build."""
+    family = family or package_family()
+    if family not in PACKAGE_FAMILIES:
+        raise RuntimeError("No package is built by the %r family (%s)."
+                           % (family, ", ".join(PACKAGE_FAMILIES)))
+    return STAGING_ROOT / family
 
 
 def package_glob(fmt=None):

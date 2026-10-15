@@ -126,6 +126,16 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
   `provides`; `!autodeps` is not a substitute - Arch's makepkg rejects it), bundled libraries
   placed on the system library path instead of the private `/usr/lib/kokoro-kindle-reader/`,
   or modes copied rather than set (the checkout can be NTFS, where everything reads 0777).
+- **Build directories are keyed by BUILD FAMILY (`windows`, `debian`, `arch`), never by
+  platform.** Two distributions can build one checkout, and a shared `linux/` directory let
+  either package ship the other's espeak-ng or host (the marker records the recipe, not who
+  ran it; cargo calls the other's binary fresh). Flag a provision, espeak build dir, Linux
+  package-build target dir, `kkr-provenance` folder or staging tree keyed by `os`/`linux`
+  instead of `target_platform.build_family`/`package_family`; a second Python copy of the
+  os-release family rule (`fetch-deps.py`, `build-espeak.py` and stack-check import
+  `target_platform`; only `build.rs`'s `LINUX_FAMILIES` may copy it, and must match
+  `LINUX_FAMILY_FORMAT`); a package build that does not pass `KKR_BUILD_FAMILY`; and any code
+  that adopts the old `native-deps/linux/` tree, whose builder is unknowable.
 - **There is ONE provisioning recipe for both platforms: `native-deps/fetch-deps.py` (plus
   `build-espeak.py`).** Both platforms invoke it directly; there is no wrapper on either
   side. Flag any change that adds a platform-specific wrapper back, or a second
@@ -388,9 +398,9 @@ Full list and rationale in `CLAUDE.md` — these are the ones code changes actua
   tree exactly.
 - **`--skip-build` still proves source identity.** A full installer build records SHA-256s for
   every tracked source file, both x64 executables, and the Rust toolchain beside the host output
-  (`target/release/kkr-provenance/<os>/`, one folder per platform).
+  (`<target dir>/release/kkr-provenance/<family>/`, one folder per build family).
   Reuse requires all to match; corresponding-source packaging uses the records frozen in
-  `staging/windows/provenance/` (including espeak's source manifest) and checks the tracked tree again; never let
+  `staging/<family>/provenance/` (including espeak's source manifest) and checks the tracked tree again; never let
   a clean tag bless arbitrary stale binaries from `target/`.
 - **NSIS is pinned in code as well as CI.** `build_installer.py` rejects `makensis` unless
   `/VERSION` reports 3.12, keeping the stub, its staged `COPYING`, `components.toml`, and the

@@ -26,6 +26,7 @@ from __future__ import annotations
 import ctypes
 import json
 import os
+import sys
 import tempfile
 import time
 import wave
@@ -57,10 +58,14 @@ def app_data_dir() -> Path:
 DEFAULT_MODEL_DIR = app_data_dir() / "onnx-community" / "Kokoro-82M-v1.0-ONNX"
 # repo root = parent of this file's directory (stack-check/)
 REPO_ROOT = Path(__file__).resolve().parent.parent
-# fetch-deps.py keeps one runtime tree per platform: native-deps/windows/runtime/ holds
-# espeak-ng.dll, native-deps/linux/runtime/ libespeak-ng.so*; espeak-ng-data/ sits beside
-# the library in both.
-DEFAULT_ESPEAK_RUNTIME = REPO_ROOT / "native-deps" / ("windows" if WINDOWS else "linux") / "runtime"
+# fetch-deps.py keeps one runtime tree per build family: native-deps/windows/runtime/ holds
+# espeak-ng.dll, native-deps/<family>/runtime/ (debian, arch, ...) libespeak-ng.so*;
+# espeak-ng-data/ sits beside the library in all of them. Which family this machine is, is
+# the packaging layer's decision, so ask it rather than repeat its os-release rule here.
+sys.path.insert(0, str(REPO_ROOT / "packaging"))
+import target_platform  # noqa: E402 - needs the path above
+
+DEFAULT_ESPEAK_RUNTIME = REPO_ROOT / "native-deps" / target_platform.build_family() / "runtime"
 
 
 # --- espeak-ng over ctypes ---------------------------------------------------

@@ -2,9 +2,11 @@
 espeak-ng-src/
 espeak-ng-notices/
 onnxruntime/
-# One runtime tree per platform (fetch-deps.py), kept apart so a machine that cross-builds
-# both never mixes the two sets of libraries.
-windows/
+# One runtime tree per build family (fetch-deps.py): windows/, debian/, arch/, or another
+# distribution's os-release ID. Kept apart so systems sharing this checkout never mix their
+# libraries; matched by shape, since the families are not a closed list.
+/*/runtime/
+# The old shared Linux tree; fetch-deps.py no longer reads it and says so.
 linux/
 # The Windows tree's old location; fetch-deps.py moves it to windows/runtime/ on its next run.
 /runtime/

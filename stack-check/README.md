@@ -64,7 +64,7 @@ This app loads espeak straight out of the platform's provisioned runtime tree, n
 | | Library | Tree |
 |---|---|---|
 | Windows | `espeak-ng.dll` | `native-deps/windows/runtime/` |
-| Linux | `libespeak-ng.so.1.52.0` | `native-deps/linux/runtime/` |
+| Linux | `libespeak-ng.so.1.52.0` | `native-deps/<family>/runtime/` (`debian`, `arch`, ...) |
 
 Build them from source (needs the toolchain from step 0) — the same script on both:
 
@@ -254,7 +254,7 @@ is the GPU/driver `sin`, and that's what this measures. Reference result on the 
 
 | Symptom | Cause / fix |
 |---|---|
-| `FileNotFoundError: espeak-ng.dll not found under …\native-deps\windows\runtime` (Linux: `libespeak-ng not found under …/native-deps/linux/runtime`) | Step A not done — run `python native-deps/fetch-deps.py`. |
+| `FileNotFoundError: espeak-ng.dll not found under …\native-deps\windows\runtime` (Linux: `libespeak-ng not found under …/native-deps/<family>/runtime`) | Step A not done — run `python native-deps/fetch-deps.py`. |
 | `fetch-deps.py` fails on cmake / a compiler | Missing build toolchain — see `doctors\doctor.cmd` / `./doctors/doctor.sh`. |
 | model / voice errors, or `model.onnx` missing | Step B not done — run `python native-deps/fetch-model.py`. |
 | `uv: command not found` after install | uv is at `~/.local/bin` (`%USERPROFILE%\.local\bin`); open a new shell, or add it to PATH. |
@@ -275,7 +275,7 @@ is the GPU/driver `sin`, and that's what this measures. Reference result on the 
 | App source | `stack-check\` | `stack-check/` | (this repo) |
 | Python venv (packages) | `stack-check\.venv\` | `stack-check/.venv/` | `uv run` / `uv sync` (gitignored) |
 | uv-managed CPython 3.12 | `%APPDATA%\uv\python\` | `~/.local/share/uv/python/` | `uv python install` |
-| Modified espeak-ng 1.52.0 lib + data | `native-deps\windows\runtime\` | `native-deps/linux/runtime/` | `native-deps/fetch-deps.py` |
+| Modified espeak-ng 1.52.0 lib + data | `native-deps\windows\runtime\` | `native-deps/<family>/runtime/` | `native-deps/fetch-deps.py` |
 | Kokoro model + `af_heart` voice | `%APPDATA%\com.phc260.kokoro-kindle-reader\onnx-community\Kokoro-82M-v1.0-ONNX\` | `~/.local/share/kokoro-kindle-reader/onnx-community/Kokoro-82M-v1.0-ONNX/` | the panel (Windows) or `native-deps/fetch-model.py` |
 
 Defaults are set in `kokoro_min.py` (`DEFAULT_MODEL_DIR` via `app_data_dir()`, mirroring

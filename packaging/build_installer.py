@@ -16,8 +16,14 @@ those differ per platform. Which packager turns the staging tree into an install
 differs per DISTRIBUTION on Linux, so it is not a profile field: `target_platform.
 package_format()` picks it, and the .deb and the Arch package wrap the same Linux tree. The
 order of operations, the provenance contract, the notice staging and every fail-closed check
-do not differ at all. Every platform stages the same flat app directory, each into its own
-staging/<os>/; only the last step differs, and that is the `PACKAGERS` dispatch at the bottom.
+do not differ at all. Every platform stages the same flat app directory; only the last step
+differs, and that is the `PACKAGERS` dispatch at the bottom.
+
+**Where a build writes is keyed by build FAMILY, not platform** (`target_platform.
+build_family`): windows, debian, arch. The provisioned runtime (native-deps/<family>/), the
+host's release build and its --skip-build records, and staging/<family>/ are all per family,
+because two distributions can build one checkout and nothing in a shared directory says
+whose compiler and glibc produced it.
 """
 
 import argparse
@@ -43,8 +49,8 @@ import target_platform  # noqa: E402
 # --- platform facts ----------------------------------------------------------------------
 
 WINDOWS = {
-    # Provisioned native runtime: where fetch-deps puts it, and what must be in it.
-    "runtime_dir": ROOT / "native-deps" / "windows" / "runtime",
+    # What must be in the provisioned native runtime, native-deps/<family>/runtime/ - see
+    # `profile`, which takes the family from the package format.
     "runtime_libs": ["onnxruntime.dll", "onnxruntime_providers_shared.dll",
                      "dxcompiler.dll", "dxil.dll", "espeak-ng.dll"],
     # The x64 crates release-built here (each is its crate's own binary, by the crate's
@@ -65,10 +71,13 @@ WINDOWS = {
     "app_files": {"icon.ico": ROOT / "icons" / "icon.ico"},
     # legal.html: the About page the tray and Settings open (legal.rs).
     "legal_page": True,
+    # Whether the release build gets a cargo target dir of its own family's (see
+    # `cargo_target_dir`). Windows is one family, so it keeps cargo's default - the one
+    # `cargo build` and every Windows instruction use.
+    "target_dir_per_family": False,
 }
 
 LINUX = {
-    "runtime_dir": ROOT / "native-deps" / "linux" / "runtime",
     # What the host opens at run time, by exactly these names - which is not everything
     # the provision holds. `native_synth::init_ort` opens `libonnxruntime.so` by path; ORT
     # dlopens `libonnxruntime_providers_shared.so` by name; espeak IS linked, so the loader
@@ -96,6 +105,10 @@ LINUX = {
     # content, so it is left out rather than edited; verify_installer_notices.OMITTED
     # records the same decision on the checking side.
     "legal_page": False,
+    # Two families build this platform's tree, and cargo cannot tell their outputs apart: the
+    # triple and the rustc are the same, so a release binary one distribution linked is
+    # "fresh" to the other and would be packaged as if built there.
+    "target_dir_per_family": True,
 }
 
 PROFILES = {"windows": WINDOWS, "linux": LINUX}
@@ -129,7 +142,18 @@ def profile():
         raise Fail(str(e))
     if target_platform.PACKAGE_FORMATS[fmt]["os"] != os_name:
         raise Fail("Package format %s does not carry the %s tree." % (fmt, os_name))
-    return dict(p, os=os_name, packager=fmt)
+    family = target_platform.package_family(fmt)
+    # fetch-deps.py provisions into native-deps/<build_family()>/; for any machine that
+    # builds a package that is this same family, by the same os-release rule.
+    return dict(p, os=os_name, packager=fmt, family=family,
+                runtime_dir=ROOT / "native-deps" / family / "runtime")
+
+
+def cargo_target_dir(crate, prof):
+    """Where `crate`'s release build lands: cargo's default, or target/<family>/ for a
+    platform two families build (see `target_dir_per_family`)."""
+    base = ROOT / crate / "target"
+    return base / prof["family"] if prof["target_dir_per_family"] else base
 
 
 def ort_provision_expected(os_name):
@@ -164,8 +188,8 @@ def spawn(cmd, **kwargs):
                    % cmd[0]) from None
 
 
-def run(cmd, cwd=None, what=None):
-    rc = spawn(cmd, cwd=str(cwd) if cwd else None).returncode
+def run(cmd, cwd=None, what=None, env=None):
+    rc = spawn(cmd, cwd=str(cwd) if cwd else None, env=env).returncode
     if rc:
         raise Fail(what or ("%s failed" % cmd[0]))
 
@@ -413,29 +437,35 @@ def main(argv=None):
     print("==> Building on %s" % target_platform.describe())
     packager, espeak_expected, espeak_source_manifest, espeak_data = preflight(prof)
 
-    binaries = [ROOT / crate / "target" / "release" / target_platform.exe_name(crate)
+    binaries = [cargo_target_dir(crate, prof) / "release" / target_platform.exe_name(crate)
                 for crate in prof["binaries"]]
 
     clients = build_clients(prof)
 
     # Release-build the shipped Rust crates (each stages its own runtime next to the exe).
+    # KKR_BUILD_FAMILY tells kokoro-host's build.rs which native-deps/<family>/ to link,
+    # rather than letting it re-derive the family: this build decided it once, above.
     if not args.skip_build:
+        env = dict(os.environ, KKR_BUILD_FAMILY=prof["family"])
         for crate in prof["binaries"]:
-            print("==> cargo build --release (%s)" % crate)
-            run(["cargo", "build", "--release"], cwd=ROOT / crate,
-                what="%s build failed" % crate)
+            target_dir = cargo_target_dir(crate, prof)
+            print("==> cargo build --release (%s, into %s)"
+                  % (crate, target_dir.relative_to(ROOT)))
+            run(["cargo", "build", "--release", "--target-dir", target_dir], cwd=ROOT / crate,
+                what="%s build failed" % crate, env=env)
 
     # `--skip-build` is safe only when the reusable host/panel outputs were built from this
     # exact tracked tree and Rust toolchain. Without these records, a clean release checkout
     # could pair old target/ binaries with newer corresponding source while every Git check
     # still passed.
     #
-    # They live beside the host's output, in a folder per OS: target/ is shared by both
-    # platforms when one checkout is built from each side of a dual boot, and one set of
+    # They live beside the host's output, in a folder per build family: Windows and Linux
+    # share target/ when one checkout is built from each side of a dual boot, and one set of
     # names meant a Linux build overwrote the Windows records - so Windows's --skip-build
     # refused over binaries nobody had touched. The file names stay fixed; the frozen copies
-    # in staging/<os>/provenance/ are read by those names.
-    records = ROOT / "kokoro-host" / "target" / "release" / "kkr-provenance" / prof["os"]
+    # in staging/<family>/provenance/ are read by those names.
+    records = (cargo_target_dir("kokoro-host", prof) / "release" / "kkr-provenance"
+               / prof["family"])
     project_record = records / "kkr-project-source.SHA256SUMS.txt"
     rustc_record = records / "kkr-build-rustc.txt"
     output_record = records / "kkr-build-outputs.SHA256SUMS.txt"
@@ -466,8 +496,8 @@ def main(argv=None):
         write_record(output_record, current_outputs)
 
     # --- stage ---------------------------------------------------------------------------
-    # Per OS, so a build on one platform never wipes the other's tree or its provenance/.
-    stage = target_platform.staging_dir(prof["os"])
+    # Per build family, so a build on one system never wipes another's tree or provenance/.
+    stage = target_platform.staging_dir(prof["family"])
     shutil.rmtree(stage, ignore_errors=True)
     stage.mkdir(parents=True)
 

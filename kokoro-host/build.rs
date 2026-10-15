@@ -114,13 +114,85 @@ fn windows_deps(tp: &Path, profile_dir: &Path) {
     }
 }
 
+/// The Linux build families a package is built by: the keys of
+/// `packaging/target_platform.py`'s `LINUX_FAMILY_FORMAT`. A copy, because a build script
+/// cannot ask Python - keep the two in step.
+const LINUX_FAMILIES: [&str; 2] = ["debian", "arch"];
+
+/// Which Linux build family's provision to link: `native-deps/<family>/runtime`. One tree per
+/// distribution family, because its libespeak-ng is that distribution's compiler and glibc
+/// talking, and two distributions can share this checkout (see `target_platform.build_family`).
+///
+/// `KKR_BUILD_FAMILY` when set: `packaging/build_installer.py` sets it on every package build,
+/// so a package never links another distribution's tree. Otherwise the host's os-release, by
+/// the same rule as `build_family`. A host with no os-release - a cross-check from Windows -
+/// has to name the family with the variable; guessing would pass the check against a tree
+/// nobody chose.
+///
+/// `rerun-if-changed` only notices an os-release NEWER than the last run, so two
+/// distributions alternating in one *development* target dir are not kept apart by this.
+/// The package build is: it also gets a cargo target dir per family.
+fn linux_family() -> String {
+    println!("cargo:rerun-if-env-changed=KKR_BUILD_FAMILY");
+    if let Ok(family) = env::var("KKR_BUILD_FAMILY") {
+        let ok = !family.is_empty()
+            && family
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || "._-".contains(c));
+        if !ok {
+            panic!(
+                "kokoro-host: KKR_BUILD_FAMILY={family:?} is not a build family \
+                 (debian, arch, or a distribution's os-release ID)"
+            );
+        }
+        return family;
+    }
+    for path in ["/etc/os-release", "/usr/lib/os-release"] {
+        if let Ok(text) = std::fs::read_to_string(path) {
+            println!("cargo:rerun-if-changed={path}");
+            return family_from_os_release(&text).unwrap_or_else(|| {
+                panic!(
+                    "kokoro-host: {path} names no ID or ID_LIKE - set KKR_BUILD_FAMILY to the \
+                     family whose native-deps/<family>/runtime to link"
+                )
+            });
+        }
+    }
+    panic!(
+        "kokoro-host: this host has no os-release, so the Linux build family cannot be read off \
+         it. Set KKR_BUILD_FAMILY to the family whose native-deps/<family>/runtime is \
+         provisioned ({}).",
+        LINUX_FAMILIES.join(" or ")
+    );
+}
+
+/// `target_platform.build_family`'s rule over one os-release: its ID, then each ID_LIKE entry;
+/// the first that is a known family, else the most specific name there is.
+fn family_from_os_release(text: &str) -> Option<String> {
+    let field = |key: &str| {
+        text.lines().find_map(|line| {
+            let (k, v) = line.split_once('=')?;
+            (k.trim() == key).then(|| v.trim().trim_matches(['"', '\'']).to_string())
+        })
+    };
+    let (id, like) = (field("ID").unwrap_or_default(), field("ID_LIKE").unwrap_or_default());
+    let ids: Vec<&str> = std::iter::once(id.as_str())
+        .chain(like.split_whitespace())
+        .filter(|i| !i.is_empty())
+        .collect();
+    ids.iter()
+        .find(|i| LINUX_FAMILIES.contains(i))
+        .or(ids.first())
+        .map(|i| i.to_string())
+}
+
 /// Linux: the CPU ORT runtime + the espeak shared library, staged beside the exe and found
 /// there at run time via an `$ORIGIN` rpath.
 ///
 /// There is no hook, no injector and no `resources\` here: those are Kindle for PC's, and
 /// the Linux host's only client is the browser extension over the loopback endpoint.
 fn linux_deps(tp: &Path, profile_dir: &Path) {
-    let runtime = tp.join("linux").join("runtime");
+    let runtime = tp.join(linux_family()).join("runtime");
     let espk_data = runtime.join("espeak-ng-data");
 
     // Everything comes from the ONE provisioned tree, unlike the Windows branch, which also

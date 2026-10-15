@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Kokoro Kindle Reader - developer toolchain check (Linux). Reports which build tools are
-# missing, all in one pass. Tools only: whether native-deps/linux/ is provisioned is checked
-# by fetch-deps.py and build.rs, not here.
+# missing, all in one pass. Tools only: whether native-deps/<family>/ (debian, arch, ...) is
+# provisioned is checked by fetch-deps.py and build.rs, not here.
 #
 #   ./doctors/doctor.sh
 #

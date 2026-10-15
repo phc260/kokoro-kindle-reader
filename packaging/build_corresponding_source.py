@@ -56,10 +56,15 @@ from build_installer import (  # noqa: E402
 
 ESPEAK_DIR_NAME = "espeak-ng-modified-1.52.0"
 ESPEAK_BASE_COMMIT = "4870adfa25b1a32b4361592f1be8a40337c58d6c"
-# Excluded from the copied espeak tree. Matches native-deps/fetch-deps.py's own skip set, so
-# the tree hashed here is the tree that manifest describes - both platforms' build dirs
-# included, since one clone can serve both: the two lists disagreeing is how they drift.
-ESPEAK_EXCLUDE = {".git", "build", "build-x64", "build-linux"}
+
+
+def espeak_excluded(name):
+    """Excluded from the copied espeak tree: .git and every build family's build dir, by the
+    same rule as native-deps/fetch-deps.py's source manifest, so the tree hashed here is the
+    tree that manifest describes - the two rules disagreeing is how they drift. By prefix,
+    since one clone serves every family (build-x64, build-debian, build-arch, ...)."""
+    return name == ".git" or name == "build" or name.startswith("build-")
+
 
 NSIS_SOURCE_URL = "https://downloads.sourceforge.net/nsis/nsis-3.12-src.tar.bz2"
 NSIS_SOURCE_SHA256 = "f3ed7a8e4aa2cf4e8cf47d3b563a02559e0cb4934db2662b2f9661b824e2b186"
@@ -120,10 +125,10 @@ def write_manifest(path, lines):
     path.write_bytes(("\n".join(lines) + "\n").encode("utf-8"))
 
 
-def copy_children(src, dest, exclude=()):
+def copy_children(src, dest, exclude=lambda name: False):
     dest.mkdir(parents=True, exist_ok=True)
     for item in sorted(Path(src).iterdir()):
-        if item.name in exclude:
+        if exclude(item.name):
             continue
         target = dest / item.name
         if item.is_dir():
@@ -177,7 +182,7 @@ def check_release_integrity(version, allow_uncommitted):
     return commit, release_clean, expected_tag
 
 
-def check_rust_toolchain(os_name):
+def check_rust_toolchain(family):
     """The toolchain whose precompiled standard library is linked into every Rust output.
 
     cargo-about enumerates Cargo packages only; rust-src is the corresponding source for
@@ -200,7 +205,7 @@ def check_rust_toolchain(os_name):
         raise Fail("Could not read the immutable Rust commit from rustc --version --verbose.")
     commit = m.group(1)
 
-    recorded = target_platform.staging_dir(os_name) / "licenses" / "rust" / "TOOLCHAIN.txt"
+    recorded = target_platform.staging_dir(family) / "licenses" / "rust" / "TOOLCHAIN.txt"
     if not recorded.is_file():
         raise Fail("The package build toolchain record is missing. Run the package build "
                    "before creating its corresponding-source archive.")
@@ -220,9 +225,9 @@ def check_rust_toolchain(os_name):
     return info, release, commit, library, notice
 
 
-def check_package_provenance(os_name):
+def check_package_provenance(os_name, family):
     """The package must have been built from this tree, and still be the one staged."""
-    staging = target_platform.staging_dir(os_name)
+    staging = target_platform.staging_dir(family)
     provenance = staging / "provenance"
     project_record = provenance / "kkr-project-source.SHA256SUMS.txt"
     if not project_record.is_file():
@@ -254,13 +259,15 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     # The archive describes the package THIS machine builds, from THIS machine's staging
-    # tree and provenance - never another platform's, which a dual-boot checkout may also
-    # hold and which would pass every check while describing different binaries.
+    # tree and provenance - never another build family's, which a checkout shared by several
+    # systems may also hold and which would pass every check while describing different
+    # binaries.
     os_name = target_platform.current_os()
     try:
         fmt = target_platform.package_format()
     except RuntimeError as e:
         raise Fail(str(e))
+    family = target_platform.package_family(fmt)
     platform = PLATFORMS[os_name]
 
     version = resolve_version(args.version, os_name)
@@ -269,9 +276,9 @@ def main(argv=None):
     print("==> Source commit: %s%s"
           % (commit, " (clean, tagged %s)" % expected_tag if release_clean else " (DEV/dirty)"))
 
-    rustc_info, rust_release, rust_commit, rust_library, rust_notice = check_rust_toolchain(os_name)
+    rustc_info, rust_release, rust_commit, rust_library, rust_notice = check_rust_toolchain(family)
     print("==> Rust standard library: %s (%s)" % (rust_release, rust_commit))
-    provenance = check_package_provenance(os_name)
+    provenance = check_package_provenance(os_name, family)
 
     stage = HERE / ("corresponding-source-%s" % version)
     out = target_platform.DIST_DIR / (target_platform.PACKAGE_FORMATS[fmt]["source_zip"] % version)
@@ -327,7 +334,7 @@ def main(argv=None):
 
     print("==> Copying modified espeak-ng source (excluding .git and build output)")
     espeak_dest = stage / ESPEAK_DIR_NAME
-    copy_children(espeak_src, espeak_dest, ESPEAK_EXCLUDE)
+    copy_children(espeak_src, espeak_dest, espeak_excluded)
 
     print("==> Hashing espeak-ng source tree")
     manifest_path = stage / ("%s.SHA256SUMS.txt" % ESPEAK_DIR_NAME)

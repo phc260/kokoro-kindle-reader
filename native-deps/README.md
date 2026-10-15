@@ -53,13 +53,23 @@ them by running them, never by what they look like on disk.
 
 Both, by a second script: the **Cloud Reader OCR models** (`ocr/`).
 
-### One runtime tree per platform, side by side
+### One runtime tree per build family, side by side
 
 Windows provisions into `native-deps/windows/runtime/`, Linux into
-`native-deps/linux/runtime/`; the root holds only what both share (`espeak-ng-src/`,
-`espeak-ng-notices/`). They are separate trees so a machine that cross-builds both never mixes
-the two sets of libraries. The espeak build dirs (`build-x64` / `build-linux`) carry the
-platform in their name instead, since they live inside the shared clone.
+`native-deps/<family>/runtime/` - `debian` on Debian/Ubuntu, `arch` on Arch, by the
+distribution family in `/etc/os-release` (`packaging/target_platform.build_family`; a
+distribution no package is built for gets its own os-release ID). The root holds only what
+all of them share (`espeak-ng-src/`, `espeak-ng-notices/`). They are separate trees so systems
+sharing this checkout never mix their libraries. That is a real hazard between two Linux
+distributions too: espeak-ng is compiled by each one's own compiler against its own glibc, and
+the provision marker records the recipe, not who ran it - so one shared `linux/` tree let a
+Debian build accept an Arch-built library as already provisioned. The espeak build dirs
+(`build-x64` / `build-<family>`) carry the family in their name instead, since they live
+inside the shared clone.
+
+The old shared `native-deps/linux/` is not read any more and is never moved into place:
+nothing in it says which distribution built it. `fetch-deps.py` says so on every run until it
+is deleted.
 
 The Windows tree used to be the root-level `native-deps/runtime/`, a leftover from before the
 Linux port. `fetch-deps.py` moves an existing one to `windows/runtime/` on its next run, since

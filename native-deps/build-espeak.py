@@ -42,6 +42,9 @@ SRC = HERE / "espeak-ng-src"
 # importing this module from elsewhere (a test, a wrapper) resolves the helper too.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from provision_util import rmtree_force  # noqa: E402 - needs the path above
+# The build family, decided in one place for provisioning and packaging alike.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "packaging"))
+import target_platform  # noqa: E402 - needs the path above
 
 WINDOWS = os.name == "nt"
 
@@ -60,10 +63,19 @@ REVERTED = "o\u02d0"       # close-mid back rounded + length mark (pre-merger)
 # not merely a tree where that one block also happens to look right.
 EXPECTED_PATCHED_SHA256 = "ffa5cbde9ec07c8c76ac9e37e505861cbf1c7582e1c72ec90e1d21f9fa0bea23"
 
-# Build directories are per-platform so one clone can serve both without either clobbering
-# the other's objects. Both are tolerated as untracked by the clean-tree check below.
-BUILD_DIR_NAME = "build-x64" if WINDOWS else "build-linux"
-ALLOWED_UNTRACKED = {"build-x64", "build-linux", "build"}
+# Build directories are per build family so one clone can serve Windows and every Linux
+# distribution building this checkout without any clobbering another's objects - each
+# family's compiler and glibc produce a different library (see fetch-deps.py). Must match
+# fetch-deps.py's layout(), which reads the library back out of it.
+BUILD_DIR_NAME = "build-x64" if WINDOWS else "build-%s" % target_platform.build_family()
+
+
+def is_build_dir(name):
+    """Every family's build dir, and the plain `build` of a hand build, tolerated as untracked
+    by the clean-tree check below. By prefix, since the families are not a closed list;
+    fetch-deps.py's source manifest and build_corresponding_source.py's espeak_excluded skip
+    the same names."""
+    return name == "build" or name.startswith("build-")
 
 
 def fail(msg):
@@ -147,7 +159,7 @@ def assert_tree_is_only_the_documented_change():
         l for l in git("ls-files", "--others", "--directory",
                        "--no-empty-directory").splitlines() if l
     ]
-    unexpected = [u for u in untracked if u.split("/", 1)[0] not in ALLOWED_UNTRACKED]
+    unexpected = [u for u in untracked if not is_build_dir(u.split("/", 1)[0])]
 
     if tracked != ["phsource/ph_english_us"] or staged or unexpected:
         fail("espeak-ng has modifications beyond the documented ph_english_us revert: "
