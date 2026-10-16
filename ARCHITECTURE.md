@@ -263,9 +263,9 @@ pairs the installer with corresponding source; only a tag also drafts a release 
 from a separate job that alone holds write access. The `windows-sapi.yml` workflow builds the DLL + runs the COM smoke test on engine changes
 but does not distribute that bare DLL, and `windows-hook.yml` compile-checks the x86 hook + injector.
 `debian-installer.yml` provisions the Linux native dependencies and builds, tests and starts the host on
-Ubuntu — the only place that build is linked and run — then builds the `.deb` and verifies its
-notices. `arch-installer.yml` builds and verifies the Arch package the same way, natively in
-an Arch container. Each uploads its package only together with that package's own
+Ubuntu, then builds the `.deb`, verifies its notices, installs it and starts the installed host.
+`arch-installer.yml` does the same for the Arch package, natively in an Arch container, without
+repeating the tests. Each uploads its package only together with that package's own
 corresponding-source archive.
 
 ### Building on Ubuntu

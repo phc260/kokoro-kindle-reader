@@ -13,7 +13,8 @@ name: debian installer (Linux host build + tests + .deb)
 # model, no network and no host.
 #
 # It then builds the .deb with the same build_installer.py a local Linux build runs,
-# verifies the notice tree inside it, and builds its corresponding-source archive. The .deb
+# verifies the notice tree inside it, installs it and probes the INSTALLED host, and builds
+# its corresponding-source archive. The .deb
 # links modified espeak-ng (GPL), so it leaves CI only TOGETHER with that archive - one
 # artifact holding both, the way windows-installer.yml pairs the installer with its own.
 
@@ -183,6 +184,56 @@ jobs:
           deb="$(ls packaging/dist/*.deb)"
           dpkg-deb --info "$deb"
           dpkg-deb --contents "$deb"
+
+      # The .deb as a user gets it: installed by apt, started through /usr/bin. Everything
+      # above ran the build tree's host; this is the only run of the INSTALLED one, and so the
+      # only thing that can say whether the /usr/bin link reaches the bundled libraries. A
+      # clean start does not settle that. init_ort only LOGS a failure to load ONNX Runtime,
+      # and a system libespeak-ng (unmodified, wrong phonemes) would start just as cleanly as
+      # the bundled one. `ldd /usr/bin/kokoro-host` is no evidence either: it takes $ORIGIN
+      # from the link's directory, where a real exec takes it from /proc/self/exe
+      # (packaging/README.md). So the step reads the RUNNING host's /proc/<pid>/maps and
+      # requires both libraries at their installed paths.
+      - name: Install the .deb and probe the installed host
+        run: |
+          # The build tree's host was started on this port above. If anything still answers,
+          # a reply below could be ITS reply rather than the installed host's.
+          if [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/status || true)" != "000" ]; then
+            echo 'FAIL: something already answers on 8787, so the probe cannot tell whose reply it gets' >&2
+            exit 1
+          fi
+          sudo apt-get install -y ./packaging/dist/*.deb
+          /usr/bin/kokoro-host &
+          host_pid=$!
+          code=000
+          for _ in $(seq 1 30); do
+            code="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/status || true)"
+            if [ "$code" != "000" ]; then break; fi
+            if ! kill -0 "$host_pid" 2>/dev/null; then
+              echo 'FAIL: the installed host exited before the endpoint answered' >&2
+              exit 1
+            fi
+            sleep 1
+          done
+          echo "unauthenticated /status -> $code"
+          if [ "$code" = "200" ]; then
+            echo 'FAIL: /status answered without a token' >&2
+            exit 1
+          fi
+          if [ "$code" = "000" ]; then
+            echo 'FAIL: nothing is listening on 8787' >&2
+            exit 1
+          fi
+          libs="$(awk 'NF >= 6 && $6 ~ /\.so/ { print $6 }' "/proc/$host_pid/maps" | sort -u)"
+          echo '--- shared libraries the installed host has mapped ---'
+          echo "$libs"
+          for lib in libespeak-ng.so.1 libonnxruntime.so; do
+            if ! printf '%s\n' "$libs" | grep -qx "/usr/lib/kokoro-kindle-reader/$lib"; then
+              echo "FAIL: the installed host did not load /usr/lib/kokoro-kindle-reader/$lib" >&2
+              exit 1
+            fi
+          done
+          kill "$host_pid" 2>/dev/null || true
 
       # Complete corresponding source (GPLv3 section 6) for the .deb, from this job's own
       # build and provenance. A run on a v* tag must pass the strict clean+matching-tag proof;

@@ -292,7 +292,7 @@ Recorded here rather than left implicit.
 `windows-installer.yml` (builds the package on a `v*` tag, a push to main touching its inputs, or manual dispatch), `license-check.yml`
 (runs the Cargo licence gate plus component/notice integrity checks), `windows-sapi.yml` (builds the
 x86 DLL and runs the COM smoke test), and `windows-hook.yml` (compile-checks the x86 hook and
-injector) and `arch-installer.yml` (builds and verifies the Arch package) run none of the 246
+injector) and `arch-installer.yml` (builds, verifies, installs and starts the Arch package) run none of the 246
 tests above. `debian-installer.yml` is the exception: as a side effect of
 proving the Ubuntu build actually links and runs, it runs `cargo test --manifest-path
 kokoro-host/Cargo.toml` and `cargo test --manifest-path kokoro-ocr/Cargo.toml` on every push

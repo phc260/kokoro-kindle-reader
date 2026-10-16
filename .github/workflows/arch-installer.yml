@@ -6,8 +6,9 @@ name: arch installer (Linux host build + .pkg.tar.xz)
 # makepkg is an Arch tool, and building on the distribution the package is for is what pins
 # its glibc floor to Arch's rather than to whatever the Ubuntu runner happened to have.
 #
-# The host's unit tests and the start-and-probe check live in debian-installer.yml and are not
-# repeated: the source is the same, and this job's question is whether the PACKAGE builds.
+# The host's unit tests and the build tree's start-and-probe check live in debian-installer.yml
+# and are not repeated: the source is the same, and this job's question is the PACKAGE's -
+# whether it builds, and whether the host it installs starts and loads its bundled libraries.
 #
 # It then builds the package's own corresponding-source archive and uploads the two together:
 # the package links modified espeak-ng (GPL), so it never leaves CI without that source.
@@ -109,6 +110,52 @@ jobs:
           pkg="$(ls packaging/dist/*.pkg.tar.xz)"
           pacman -Qip "$pkg"
           pacman -Qlp "$pkg"
+
+      # The package as a user gets it: installed by pacman, started through /usr/bin, run as an
+      # ordinary user. Why it reads /proc/<pid>/maps instead of trusting a clean start is in
+      # debian-installer.yml's step of the same name. Two differences, both from running the
+      # host as builder: runuser forks, so $! is runuser (alive exactly as long as the host)
+      # and the host itself is found with pgrep; and the maps are read AS builder, because a
+      # container's root has no CAP_SYS_PTRACE and cannot open another user's.
+      - name: Install the package and probe the installed host
+        run: |
+          pacman -U --noconfirm packaging/dist/*.pkg.tar.xz
+          as-builder /usr/bin/kokoro-host &
+          runuser_pid=$!
+          code=000
+          for _ in $(seq 1 30); do
+            code="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/status || true)"
+            if [ "$code" != "000" ]; then break; fi
+            if ! kill -0 "$runuser_pid" 2>/dev/null; then
+              echo 'FAIL: the installed host exited before the endpoint answered' >&2
+              exit 1
+            fi
+            sleep 1
+          done
+          echo "unauthenticated /status -> $code"
+          if [ "$code" = "200" ]; then
+            echo 'FAIL: /status answered without a token' >&2
+            exit 1
+          fi
+          if [ "$code" = "000" ]; then
+            echo 'FAIL: nothing is listening on 8787' >&2
+            exit 1
+          fi
+          host_pid="$(pgrep -u builder -x kokoro-host || true)"
+          if [ -z "$host_pid" ]; then
+            echo 'FAIL: the installed host answered and then exited' >&2
+            exit 1
+          fi
+          libs="$(as-builder awk 'NF >= 6 && $6 ~ /\.so/ { print $6 }' "/proc/$host_pid/maps" | sort -u)"
+          echo '--- shared libraries the installed host has mapped ---'
+          echo "$libs"
+          for lib in libespeak-ng.so.1 libonnxruntime.so; do
+            if ! printf '%s\n' "$libs" | grep -qx "/usr/lib/kokoro-kindle-reader/$lib"; then
+              echo "FAIL: the installed host did not load /usr/lib/kokoro-kindle-reader/$lib" >&2
+              exit 1
+            fi
+          done
+          kill "$runuser_pid" 2>/dev/null || true
 
       # Complete corresponding source (GPLv3 section 6) for this package, from this job's own
       # build and provenance - the strict release proof on a v* tag, a NON-RELEASE-stamped

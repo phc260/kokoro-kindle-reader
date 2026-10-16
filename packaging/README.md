@@ -290,7 +290,9 @@ sets, never on the system library path. The distribution may already have its ow
 phonemes with no error. A real `exec` resolves `$ORIGIN` through `/proc/self/exe`, so the `/usr/bin` link finds the bundled copy.
 **`ldd /usr/bin/kokoro-host` does not**: it takes `$ORIGIN` from the link's own directory and
 reports the system copy. That is `ldd` misleading you, not the loader — check
-`/proc/<pid>/maps` of a running host, or `ldd` the real path in the app dir.
+`/proc/<pid>/maps` of a running host, or `ldd` the real path in the app dir. Both package
+workflows do the first after installing their package, and fail unless both libraries are
+mapped from `/usr/lib/kokoro-kindle-reader/`.
 
 Differences from the Windows package, each deliberate, and the same for both Linux packages
 unless it says otherwise:
